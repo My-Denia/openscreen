@@ -21,4 +21,5 @@ export {
 	VALID_GIF_FRAME_RATES,
 } from "./types";
 export { VideoFileDecoder } from "./videoDecoder";
+export { calculateMp4ExportDimensions } from "./videoDimensions";
 export { VideoExporter } from "./videoExporter";

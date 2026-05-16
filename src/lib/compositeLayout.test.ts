@@ -128,6 +128,21 @@ describe("computeCompositeLayout", () => {
 		expect(aboveMax!.webcamRect!.height).toBe(atMax!.webcamRect!.height);
 	});
 
+	it("snaps rounding-only source aspect gaps to the full canvas", () => {
+		const layout = computeCompositeLayout({
+			canvasSize: { width: 319, height: 199 },
+			maxContentSize: { width: 319, height: 199 },
+			screenSize: { width: 1680, height: 1050 },
+		});
+
+		expect(layout?.screenRect).toEqual({
+			x: 0,
+			y: 0,
+			width: 319,
+			height: 199,
+		});
+	});
+
 	it("centers the combined screen and webcam stack in vertical stack mode", () => {
 		const layout = computeCompositeLayout({
 			canvasSize: { width: 1920, height: 1080 },
