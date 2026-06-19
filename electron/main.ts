@@ -92,6 +92,10 @@ const defaultTrayIcon = getTrayIcon("openscreen.png", trayIconSize);
 const recordingTrayIcon = getTrayIcon("rec-button.png", trayIconSize);
 
 function createWindow() {
+	if (mainWindow && !mainWindow.isDestroyed()) {
+		return;
+	}
+
 	mainWindow = createHudOverlayWindow();
 }
 
