@@ -368,10 +368,12 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 
 		const logPreviewVideoEvent = useCallback(
 			(event: React.SyntheticEvent<HTMLVideoElement>) => {
-				console.info(`[VideoPlayback] preview video ${event.type}`, {
-					videoPath,
-					diagnostics: getVideoElementDiagnostics(event.currentTarget),
-				});
+				console.info(
+					`[VideoPlayback] preview video ${event.type} ${JSON.stringify({
+						videoPath,
+						diagnostics: getVideoElementDiagnostics(event.currentTarget),
+					})}`,
+				);
 			},
 			[videoPath],
 		);

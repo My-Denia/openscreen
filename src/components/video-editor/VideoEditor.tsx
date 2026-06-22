@@ -1881,29 +1881,31 @@ export default function VideoEditor() {
 			setExportedFilePath(null);
 
 			const previewBeforeExport = getPreviewVideoDiagnostics(video);
-			console.info("[VideoEditor] export started", {
-				format: settings.format,
-				sourcePath: videoSourcePath ?? videoPath,
-				videoPath,
-				webcamVideoPath,
-				preview: previewBeforeExport,
-				settings: {
-					exportQuality: settings.quality || exportQuality,
-					aspectRatio,
-					padding,
-					borderRadius,
-					shadowIntensity,
-					showBlur,
-					motionBlurAmount,
-					cropRegion,
-					zoomRegions: zoomRegions.length,
-					trimRegions: trimRegions.length,
-					speedRegions: speedRegions.length,
-					annotations: annotationRegions.length,
-					effectiveShowCursor,
-					cursorSize,
-				},
-			});
+			console.info(
+				`[VideoEditor] export started ${JSON.stringify({
+					format: settings.format,
+					sourcePath: videoSourcePath ?? videoPath,
+					videoPath,
+					webcamVideoPath,
+					preview: previewBeforeExport,
+					settings: {
+						exportQuality: settings.quality || exportQuality,
+						aspectRatio,
+						padding,
+						borderRadius,
+						shadowIntensity,
+						showBlur,
+						motionBlurAmount,
+						cropRegion,
+						zoomRegions: zoomRegions.length,
+						trimRegions: trimRegions.length,
+						speedRegions: speedRegions.length,
+						annotations: annotationRegions.length,
+						effectiveShowCursor,
+						cursorSize,
+					},
+				})}`,
+			);
 
 			try {
 				const wasPlaying = isPlaying;
@@ -2130,12 +2132,14 @@ export default function VideoEditor() {
 					toast.error(t("errors.exportFailedWithError", { error: message }));
 				}
 			} finally {
-				console.info("[VideoEditor] export finished", {
-					sourcePath: videoSourcePath ?? videoPath,
-					videoPath,
-					previewBefore: previewBeforeExport,
-					previewAfter: getPreviewVideoDiagnostics(videoPlaybackRef.current?.video ?? null),
-				});
+				console.info(
+					`[VideoEditor] export finished ${JSON.stringify({
+						sourcePath: videoSourcePath ?? videoPath,
+						videoPath,
+						previewBefore: previewBeforeExport,
+						previewAfter: getPreviewVideoDiagnostics(videoPlaybackRef.current?.video ?? null),
+					})}`,
+				);
 				setIsExporting(false);
 				exporterRef.current = null;
 				// Reset so the next export can reopen the dialog (second export
