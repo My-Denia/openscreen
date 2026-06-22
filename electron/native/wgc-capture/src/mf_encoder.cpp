@@ -199,17 +199,14 @@ bool MFEncoder::initialize(
     device_ = device;
     context_ = context;
 
-    // Pre-flight H.264 encoder check (issue #15): the MP4 sink writer fails
-    // with hr=0x80070003 (ERROR_PATH_NOT_FOUND) when no H.264 encoder MFT is
-    // registered on the system. Fail fast with an actionable message instead
-    // of letting the sink writer crash with HRESULT noise. This must run
-    // before MFStartup so that a missing Media Feature Pack is reported with
-    // a clear error rather than a confusing MFStartup failure.
-    const UINT32 h264EncoderCount = countRegisteredH264VideoEncoders();
-    if (h264EncoderCount == 0) {
-        logMissingH264EncoderError();
-        return false;
-    }
+    // No H.264 encoder pre-flight check here. MFTEnumEx and
+    // MFCreateSinkWriterFromURL can disagree about which H.264 encoders are
+    // "available" in non-interactive / Session 0 contexts (NVENC et al. are
+    // registered but their COM server may not fully activate from a service
+    // session). A pre-flight that fails fast on a zero MFTEnumEx count would
+    // therefore break a recording that the sink writer can complete
+    // successfully. The diagnostic dump below runs only on the failure path,
+    // so a healthy MFTEnumEx result never blocks a working recording.
 
     if (!succeeded(MFStartup(MF_VERSION), "MFStartup")) {
         return false;
@@ -227,20 +224,19 @@ bool MFEncoder::initialize(
     setFrameRate(outputType.Get(), static_cast<UINT32>(fps_));
     setPixelAspectRatio(outputType.Get());
 
-    // AAC count is only useful if the caller wants audio; compute it lazily
-    // so a screen-only recording does not pay for an enumeration it does not
-    // need. Used purely for diagnostics on the sink-writer failure path.
-    const UINT32 aacEncoderCount = (audioFormat != nullptr)
-        ? countRegisteredAacAudioEncoders()
-        : 0;
-
     HRESULT sinkWriterHr = MFCreateSinkWriterFromURL(
         outputPath.c_str(), nullptr, nullptr, &sinkWriter_);
     if (FAILED(sinkWriterHr)) {
         // The HRESULT alone is not actionable. Tell the user whether an H.264
         // encoder is registered at all (no H.264 == the MFP missing-MFT path),
         // whether AAC is registered (only when audio is requested), and the
-        // hex HRESULT so the exact failure is greppable.
+        // hex HRESULT so the exact failure is greppable. Encoder counts are
+        // computed lazily here, only on the failure path, so a healthy
+        // recording does not pay for an MFTEnumEx call.
+        const UINT32 h264EncoderCount = countRegisteredH264VideoEncoders();
+        const UINT32 aacEncoderCount = (audioFormat != nullptr)
+            ? countRegisteredAacAudioEncoders()
+            : 0;
         std::cerr << "ERROR: MFCreateSinkWriterFromURL failed (hr=0x"
                   << std::hex << sinkWriterHr << std::dec << ")" << std::endl;
         std::cerr << "  Registered H.264 video encoder MFTs: " << h264EncoderCount
@@ -249,7 +245,9 @@ bool MFEncoder::initialize(
             std::cerr << "  Registered AAC audio encoder MFTs: " << aacEncoderCount
                       << std::endl;
         }
-        if (h264EncoderCount > 0) {
+        if (h264EncoderCount == 0) {
+            logMissingH264EncoderError();
+        } else {
             std::cerr
                 << "  An H.264 encoder MFT is registered but the sink writer "
                 << "still failed. Possible causes: invalid output path or "
