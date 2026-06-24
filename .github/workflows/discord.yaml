@@ -715,25 +715,24 @@ jobs:
               return;
             }
 
-            // 6. Pin the message (idempotent: pinning an already-pinned message is a no-op).
-            // Only needed after a fresh POST — edits preserve pin state.
-            if (didPost) {
-              try {
-                const pinRes = await fetch(`https://discord.com/api/v10/channels/${channelId}/pins/${messageId}`, {
-                  method: "PUT",
-                  headers: {
-                    "Authorization": `Bot ${botToken}`,
-                  },
-                });
-                if (pinRes.status === 204 || pinRes.ok) {
-                  core.info(`Message ${messageId} pinned.`);
-                } else if (pinRes.status === 403) {
-                  core.warning(`Cannot pin message: bot lacks 'Manage Messages' on the channel. Add it via Discord channel permissions.`);
-                } else {
-                  const txt = await pinRes.text();
-                  core.warning(`Pin failed ${pinRes.status}: ${txt}`);
-                }
-              } catch (err) {
-                core.warning(`Pin threw: ${err && err.message ? err.message : err}`);
+            // 6. Pin the message (idempotent: PUT on an already-pinned message returns 204).
+            // Self-healing: always attempt, so a transient 403 or a manual unpin by a
+            // moderator will get fixed on the next sync without manual intervention.
+            try {
+              const pinRes = await fetch(`https://discord.com/api/v10/channels/${channelId}/pins/${messageId}`, {
+                method: "PUT",
+                headers: {
+                  "Authorization": `Bot ${botToken}`,
+                },
+              });
+              if (pinRes.status === 204 || pinRes.ok) {
+                core.info(`Message ${messageId} pinned.`);
+              } else if (pinRes.status === 403) {
+                core.warning(`Cannot pin message: bot lacks 'Manage Messages' on the channel. Add it via Discord channel permissions.`);
+              } else {
+                const txt = await pinRes.text();
+                core.warning(`Pin failed ${pinRes.status}: ${txt}`);
               }
+            } catch (err) {
+              core.warning(`Pin threw: ${err && err.message ? err.message : err}`);
             }
