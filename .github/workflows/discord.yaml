@@ -563,7 +563,6 @@ jobs:
         with:
           script: |
             const ROADMAP_PATTERN = /(^|\/)ROADMAP\.md$|(^|\/)docs\/roadmap\.md$/i;
-            const EMBED_DESCRIPTION_LIMIT = 4000; // Discord limit is 4096; safety margin
 
             const botToken = (process.env.DISCORD_BOT_TOKEN || "").trim();
             const channelId = (process.env.DISCORD_ROADMAP_CHANNEL_ID || "").trim();
@@ -634,10 +633,13 @@ jobs:
 
             // 3. Truncate if it exceeds Discord's embed description limit.
             const rawUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/blob/main/ROADMAP.md`;
+            const truncationNote = `\n\n… *(truncated, see [full file on GitHub](${rawUrl}))*`;
+            // The truncation note itself consumes characters, so slice content to leave room.
+            const maxContentLength = 4096 - truncationNote.length;
             let description = content;
             let truncated = false;
-            if (content.length > EMBED_DESCRIPTION_LIMIT) {
-              description = content.slice(0, EMBED_DESCRIPTION_LIMIT) + `\n\n… *(truncated, see [full file on GitHub](${rawUrl}))*`;
+            if (content.length > maxContentLength) {
+              description = content.slice(0, maxContentLength) + truncationNote;
               truncated = true;
             }
 
