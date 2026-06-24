@@ -527,16 +527,20 @@ jobs:
   # file's current content. The Discord channel is a read-only mirror of
   # the file; the file is the source of truth.
   #
-  # On the first run (no DISCORD_ROADMAP_MESSAGE_ID set), the bot posts a
-  # new message, pins it, and logs the message id. The maintainer then
-  # sets DISCORD_ROADMAP_MESSAGE_ID as a repo variable so subsequent runs
-  # PATCH the same message instead of creating duplicates.
+  # The bot uses the channel's pin as the persistent state: it lists the
+  # pinned messages, finds the one whose embed title matches
+  # "🗺️ OpenScreen Roadmap", and PATCHes it. If none is found, it POSTs a
+  # new message and pins it. No external variable is required — the pin
+  # IS the state. Self-healing: if a moderator unpins, the next sync
+  # re-pins automatically.
   #
   # Required:
   #   DISCORD_BOT_TOKEN — bot token of the openscreen_etienne app (secret)
   #   DISCORD_ROADMAP_CHANNEL_ID — channel id of #🗺️・roadmap (var)
-  #   DISCORD_ROADMAP_MESSAGE_ID — id of the pinned roadmap message (var,
-  #     optional on first run; the workflow will tell you to set it)
+  #
+  # Optional escape hatch:
+  #   DISCORD_ROADMAP_MESSAGE_ID — force a specific message id instead of
+  #     looking it up via pins (e.g. after a manual unpin recovery).
   #
   # Per-channel permissions required on the Discord side:
   #   The bot's role must have "Send Messages", "Embed Links", and
@@ -563,10 +567,11 @@ jobs:
         with:
           script: |
             const ROADMAP_PATTERN = /(^|\/)ROADMAP\.md$|(^|\/)docs\/roadmap\.md$/i;
+            const ROADMAP_EMBED_TITLE = "🗺️ OpenScreen Roadmap";
 
             const botToken = (process.env.DISCORD_BOT_TOKEN || "").trim();
             const channelId = (process.env.DISCORD_ROADMAP_CHANNEL_ID || "").trim();
-            let existingMessageId = (process.env.DISCORD_ROADMAP_MESSAGE_ID || "").trim();
+            const overrideMessageId = (process.env.DISCORD_ROADMAP_MESSAGE_ID || "").trim();
 
             if (!botToken || !channelId) {
               core.info(
@@ -574,6 +579,34 @@ jobs:
                 "Configure both as repo secret / variable to enable #🗺️・roadmap auto-sync."
               );
               return;
+            }
+
+            // 0. Resolve the message id to update. The pin is the persistent
+            //    state: list the channel's pinned messages and find the one
+            //    whose embed title matches. The DISCORD_ROADMAP_MESSAGE_ID
+            //    var is an escape hatch (overrides the pin lookup).
+            let existingMessageId = overrideMessageId;
+            if (!existingMessageId) {
+              try {
+                const pinRes = await fetch(`https://discord.com/api/v10/channels/${channelId}/pins`, {
+                  headers: { "Authorization": `Bot ${botToken}` },
+                });
+                if (pinRes.ok) {
+                  const pins = await pinRes.json();
+                  const existing = pins.find(m => m.embeds?.[0]?.title === ROADMAP_EMBED_TITLE);
+                  if (existing) {
+                    existingMessageId = existing.id;
+                    core.info(`Found existing pinned roadmap message ${existingMessageId}.`);
+                  } else {
+                    core.info("No existing pinned roadmap message found; will create one.");
+                  }
+                } else {
+                  const txt = await pinRes.text();
+                  core.warning(`Failed to fetch pins (${pinRes.status}): ${txt}; falling back to POST.`);
+                }
+              } catch (err) {
+                core.warning(`Pin lookup threw: ${err && err.message ? err.message : err}; falling back to POST.`);
+              }
             }
 
             // 1. Detect which files changed in this event.
@@ -648,7 +681,7 @@ jobs:
             const payload = {
               embeds: [
                 {
-                  title: "🗺️ OpenScreen Roadmap",
+                  title: ROADMAP_EMBED_TITLE,
                   url: rawUrl,
                   description,
                   color: 1998671,
