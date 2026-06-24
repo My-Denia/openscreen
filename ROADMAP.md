@@ -56,3 +56,4 @@ Anything not on this list yet? Open an issue and tag it `roadmap` — we'll tria
 - **2026-06-24** — third smoke test: verify PATCH path (not POST) now that the message id is tracked.
 - **2026-06-24** — fourth smoke test: pin-as-state refactor (variable no longer required).
 - **2026-06-24** — fifth smoke test: pin permission granted, verify self-healing pin works.
+- **2026-06-24** — sixth smoke test: DISCORD_ROADMAP_MESSAGE_ID variable removed; verify the bot finds the message via pin lookup alone.
