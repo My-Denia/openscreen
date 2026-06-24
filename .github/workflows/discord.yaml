@@ -594,7 +594,7 @@ jobs:
                 });
                 changedFiles = res.data;
               } else if (context.eventName === "push") {
-                const sha = github.event.head_commit?.id || github.sha;
+                const sha = context.payload.after || context.payload.head_commit?.id || context.sha;
                 const res = await github.rest.repos.getCommit({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
