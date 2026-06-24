@@ -53,3 +53,4 @@ Anything not on this list yet? Open an issue and tag it `roadmap` — we'll tria
 - **2026-06-24** — initial draft. Stability items pulled from open issues / PRs on getopenscreen/openscreen. AI section presented as opt-in / off by default. Whisper entry updated to reflect existing caption feature.
 - **2026-06-24** — roadmap sync smoke test: discord-pinned-message mechanism goes live.
 - **2026-06-24** — second smoke test after fixing embed truncation math.
+- **2026-06-24** — third smoke test: verify PATCH path (not POST) now that the message id is tracked.
