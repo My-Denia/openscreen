@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useLayoutEffect, useState } from "react";
 
 export function NotesWindow() {
 	const [notes, setNotes] = useState("");
@@ -8,7 +8,7 @@ export function NotesWindow() {
 		setNotes(e.target.value);
 	};
 
-	useEffect(() => {
+	useLayoutEffect(() => {
 		setNotes(localStorage.getItem("notes") ?? "");
 	}, []);
 
