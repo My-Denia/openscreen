@@ -1,4 +1,4 @@
-﻿import { warning } from "@actions/core";
+import { warning } from "@actions/core";
 
 const API_BASE = "https://discord.com/api/v10";
 
@@ -15,7 +15,9 @@ async function callDiscord(botToken, method, path, body) {
 	if (res.status === 429) {
 		const txt = await res.text();
 		warning(`Discord rate-limited (429) on ${method} ${path}: ${txt}`);
-		throw new Error(`Discord rate-limited (429) on ${method} ${path}`);
+		const err = new Error(`Discord rate-limited (429)`);
+		err.rateLimited = true;
+		throw err;
 	}
 
 	if (!res.ok) {
