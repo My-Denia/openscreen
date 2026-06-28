@@ -9,51 +9,53 @@
     /* ─────────────────────────────────────────────────────────────────
      * OpenScreen Design System — light + dark.
      *
-     * Light: white page canvas, dark panels per spec, mint for brand
-     *        states, red for danger (REC, skips, trim, transcript hl),
-     *        amber for warnings.
+     * Light: cool off-white canvas (slate-tinted), tiered slate surfaces,
+     *        cool ink text (slate, never pure black), soft slate elevation.
+     *        Mint #10b981 is the single chromatic accent.
      * Dark:  deep near-black canvas, tiered surfaces with subtle radial
      *        elevation, off-white text, softer semantic colors tuned
      *        for AA contrast on dark.
      *
      * Mint (#10b981) stays as the single brand accent in both themes.
+     * Neutres cool-only : pas de beige / cream / terracotta — ils entrent
+     * en tension chromatique avec mint et cassent la profondeur "tech".
      * ──────────────────────────────────────────────────────────────── */
     :root {
-      /* ── light theme ── proper light editor: warm off-white canvas,
-         tiered light surfaces (no dark insets), slate text with no pure
-         black, soft elevation. Mint stays the brand accent. */
-      --bg:           #fafbfc;
-      --bg-grad:      radial-gradient(ellipse 1200px 800px at 50% -200px, #ffffff 0%, #fafbfc 70%);
-      --surface:      #ffffff;          /* main panels — light, raised */
-      --surface-1:    #f7f8fa;          /* raised card on canvas */
-      --surface-2:    #f3f5f8;          /* raised on panel */
-      --surface-3:    #eef0f3;          /* hover/active state */
+      /* ── light theme ── cool off-white editor: slate-tinted canvas,
+         tiered slate surfaces (visible step contrast), slate text, soft
+         elevation. Mint stays the sole chromatic accent. */
+      --bg:           #f8fafc;          /* slate-50 canvas — slight cool tint */
+      --bg-grad:      radial-gradient(ellipse 1200px 800px at 50% -200px, #ffffff 0%, #f1f5f9 80%);
+      --surface:      #ffffff;          /* main panels — pure white, raised */
+      --surface-1:    #f1f5f9;          /* raised card on canvas — slate-100 */
+      --surface-2:    #e2e8f0;          /* raised on panel — slate-200 */
+      --surface-3:    #cbd5e1;          /* hover/active state — slate-300 */
       --surface-hi:   #ffffff;          /* highest — modal/popover */
-      --surface-warm: #f5f7fa;          /* subtle accent panel */
+      --surface-warm: #f1f5f9;          /* accent panel — matches surface-1 */
 
-      /* lines — softer than spec, palette-based */
-      --border:       #e7e9ee;
-      --border-soft:  #f1f2f5;
-      --border-hi:    #d1d5db;
-      --border-dark:  #16171d;
+      /* lines — slate hairlines, cool */
+      --border:       #e2e8f0;          /* slate-200 */
+      --border-soft:  #f1f5f9;          /* slate-100 */
+      --border-hi:    #cbd5e1;          /* slate-300 */
+      --border-dark:  #0f172a;          /* slate-900 — dark border on light */
 
-      /* foreground — slate, not pure black */
-      --fg:           #1f2937;
-      --fg-2:         #1f2937;
-      --fg-emphasis:  #111827;
+      /* foreground — cool slate ink, never pure black */
+      --fg:           #0f172a;          /* primary text — slate-900 */
+      --fg-2:         #334155;          /* secondary text — slate-700 (real step) */
+      --fg-emphasis:  #020617;          /* strongest emphasis — slate-950 */
       --fg-on-surface: #ffffff;
-      --muted:        #6b7280;
-      --muted-soft:   #9ca3af;
-      --meta:         #9ca3af;
-      --dim:          #eaebed;
+      --muted:        #64748b;          /* slate-500 */
+      --muted-soft:   #94a3b8;          /* slate-400 */
+      --meta:         #94a3b8;
+      --dim:          #cbd5e1;          /* slate-300 */
 
-      /* mint brand — active button bg, focus ring, toggle on, brand mark */
+      /* mint brand — single chromatic accent in both themes */
       --brand:        #10b981;
       --brand-lo:     #059669;
       --brand-glow:   rgba(16, 185, 129, 0.35);
       --brand-soft:   rgba(16, 185, 129, 0.10);
       --accent:       #10b981;
-      --accent-on:    #ffffff;
+      --accent-on:    #04221a;          /* dark text on mint button — AA contrast */
       --accent-soft:  rgba(16, 185, 129, 0.10);
       --accent-wash:  rgba(16, 185, 129, 0.06);
 
@@ -1495,22 +1497,20 @@
       box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--brand), transparent 60%);
     }
 
-    /* ─── bottombar — timeline (full width, properties removed) ──── */
+    /* ─── bottombar — timeline (single track, from-scratch redo) ───── */
     .bottombar {
       display: grid;
       grid-template-columns: 1fr;
       min-height: 0;
       background: var(--bg);
     }
-    .timeline-wrap { min-width: 0; display: grid; grid-template-rows: auto 1fr; }
-    .properties-wrap {
+    .timeline-wrap {
       min-width: 0;
-      display: grid; grid-template-rows: auto 1fr;
-      border-left: 1px solid var(--border-soft);
-      background: var(--bg);
+      display: grid;
+      grid-template-rows: auto 1fr auto;
     }
 
-    /* ─── timeline — header, ruler, skip strip, clip blocks ───────── */
+    /* ─── timeline head ───────────────────────────────────────────── */
     .timeline-head {
       display: flex; align-items: center; gap: var(--sp-3);
       padding: var(--sp-2) var(--sp-4);
@@ -1531,9 +1531,9 @@
       color: var(--muted);
       letter-spacing: 0.02em;
     }
+    .timeline-head .stats strong { color: var(--fg); font-weight: 500; }
     .timeline-head .stats .sep { margin: 0 6px; color: var(--dim); }
-    .timeline-head .stats strong { color: var(--fg-2); font-weight: 500; }
-    .timeline-head .right { margin-left: auto; display: inline-flex; gap: var(--sp-3); align-items: center; }
+    .timeline-head .right { margin-left: auto; }
     .timeline-head .stamp {
       font-family: var(--font-mono);
       font-size: 11px;
@@ -1541,197 +1541,385 @@
       letter-spacing: 0.02em;
     }
     .timeline-head .stamp strong { color: var(--fg); font-weight: 500; }
-    .timeline-head .pill {
-      display: inline-flex; align-items: center; gap: 6px;
-      padding: 3px 8px;
-      border-radius: var(--r-pill);
-      background: var(--surface-2);
-      color: var(--muted);
-      font-family: var(--font-mono);
-      font-size: 10.5px;
-      letter-spacing: 0.02em;
-    }
-    .timeline-head .pill .d { width: 5px; height: 5px; border-radius: 50%; background: var(--success); }
 
+    /* ─── timeline body — ruler + skip-strip + clips-row + playhead ── */
     .timeline-body {
       position: relative;
-      padding: var(--sp-2) var(--sp-4) var(--sp-3);
+      padding: var(--sp-3) var(--sp-4) 0;
       overflow-x: auto;
-      overflow-y: scroll;
-      scrollbar-gutter: stable;
+      overflow-y: hidden;
     }
-    .timeline-body::-webkit-scrollbar { height: 8px; width: 8px; }
+    .timeline-body::-webkit-scrollbar { height: 8px; }
     .timeline-body::-webkit-scrollbar-track { background: transparent; }
     .timeline-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
     .timeline-body { scrollbar-color: var(--border) transparent; scrollbar-width: thin; }
 
+    /* timeline container — ruler + tracks-wrapper + bottom bar, reference layout */
+    .timeline-container {
+      position: relative;
+      min-width: 1200px;
+      user-select: none;
+      padding: 0 var(--sp-4);
+    }
+
+    /* ruler — major ticks every 30s, half-ticks at midpoints, labels above */
     .ruler {
+      display: flex;
+      justify-content: space-between;
       position: relative;
-      height: 24px;
-      margin-bottom: 6px;
-      font-family: var(--font-mono);
-      font-size: 10px;
-      color: var(--muted);
-      letter-spacing: 0.02em;
+      height: 30px;
+      padding-left: 5px;
+      padding-right: 5px;
+      margin-bottom: 5px;
     }
-    .ruler .tick {
-      position: absolute; top: 0; bottom: 0;
-      border-left: 1px solid var(--border-soft);
-    }
-    .ruler .tick.major { border-left-color: var(--border-hi); }
-    .ruler .tick .label {
-      position: absolute; top: 4px;
-      transform: translateX(2px);
-    }
-
-    .skip-strip {
+    .ruler-tick {
       position: relative;
-      height: 14px;
-      margin-bottom: var(--sp-2);
-      border-radius: var(--r-xs);
-      background: var(--surface-1);
-      border: 1px solid var(--border-soft);
-      overflow: hidden;
-    }
-    /* hatching — repeated red diagonal stripes mark auto-detected
-       filler/silence regions to be cut */
-    .skip {
-      position: absolute; top: 0; bottom: 0;
-      background-color: var(--danger-wash);
-      background-image: repeating-linear-gradient(
-        -45deg,
-        var(--danger-hatch) 0,
-        var(--danger-hatch) 3px,
-        transparent 3px,
-        transparent 7px
-      );
-    }
-
-    .tracks {
-      display: flex; flex-direction: column; gap: 6px;
-      position: relative;
-    }
-    .track-row {
-      display: flex; align-items: stretch; gap: 6px;
-    }
-    .track-head {
-      flex-shrink: 0;
-      width: 72px;
-      display: flex; align-items: center; gap: 6px;
-      padding-left: 4px;
-      font-size: 11px;
-      color: var(--muted);
-      font-family: var(--font-mono);
-      letter-spacing: 0.02em;
-    }
-    .track-head svg { color: var(--meta); }
-    .track-body {
       flex: 1;
-      position: relative;
-      min-height: 56px;
-    }
-    .pill {
-      position: absolute;
-      top: 50%; transform: translateY(-50%);
-      height: 26px;
-      padding: 0 10px;
-      display: inline-flex; align-items: center; gap: 5px;
-      border-radius: 999px;
+      font-family: var(--font-mono);
       font-size: 11px;
+      color: var(--muted);
       font-weight: 500;
-      font-family: var(--font-body);
-      color: #ffffff;
-      white-space: nowrap;
-      cursor: pointer;
-      box-shadow: inset 0 -1px 0 rgba(22,23,29,0.18), 0 1px 2px rgba(22,23,29,0.12);
+      letter-spacing: 0.02em;
     }
-    .pill.zoom { background: var(--success); }
-    .pill.speed { background: var(--warn); }
-    .pill.anno { background: var(--warn); opacity: 0.92; }
-    .pill svg { flex-shrink: 0; }
-    .clip {
+    .ruler-tick::before {
+      content: "";
       position: absolute;
-      top: 0; bottom: 0;
-      border-radius: var(--r-sm);
-      background: var(--bg);
-      border: 1px solid var(--border);
-      padding: 6px 10px 6px 28px;
-      display: flex; flex-direction: column;
-      justify-content: center;
-      gap: 2px;
-      cursor: pointer;
-      transition: border-color var(--motion-fast) var(--ease), box-shadow var(--motion-fast) var(--ease);
-      overflow: hidden;
+      left: 0;
+      bottom: 0;
+      width: 2px;
+      height: 4px;
+      background: var(--border-hi);
     }
-    .clip:hover { border-color: var(--border-hi); }
-    .clip.is-selected {
+    .ruler-tick::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      bottom: 0;
+      width: 2px;
+      height: 3px;
+      background: var(--border);
+    }
+
+    /* playhead — vertical mint line with single diamond on top, spans ruler + tracks */
+.playhead {
+      position: absolute;
+      top: 0;
+      left: 120px;
+      width: 2px;
+      bottom: 24px;
+      background-color: var(--accent);
+      z-index: 10;
+    }
+    .playhead::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: -3px;
+      width: 8px;
+      height: 8px;
+      background: var(--accent);
+      transform: rotate(45deg);
+    }
+
+    /* tracks wrapper — two track-blocks side-by-side, sized by clip duration */
+    .tracks-wrapper {
+      display: flex;
+      gap: 4px;
+      position: relative;
+    }
+    .track-block {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      cursor: pointer;
+      box-shadow: var(--elev-card-soft);
+      transition: border-color var(--motion-fast) var(--ease),
+                  box-shadow var(--motion-fast) var(--ease);
+    }
+    .track-block.block-1 { flex: 36.5; }
+    .track-block.block-2 { flex: 63.5; }
+    .track-block:hover { border-color: var(--border-hi); }
+    .track-block.is-selected {
       border-color: var(--accent);
       box-shadow: 0 0 0 1px var(--accent), 0 4px 12px -4px var(--accent-soft);
     }
-    .clip .attach {
-      position: absolute;
-      left: 8px; top: 50%;
-      transform: translateY(-50%);
-      color: var(--meta);
+
+    /* visual timeline strip — hatched cut regions + transparent keep regions */
+    .track-visual-timeline {
+      height: 28px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      background: var(--surface);
     }
-    .clip .name {
-      font-size: 12px;
+    .segment {
+      height: 100%;
+    }
+    .segment.keep {
+      background: transparent;
+    }
+    .segment.cut {
+      background-color: var(--accent-wash);
+      background-image: repeating-linear-gradient(
+        45deg,
+        color-mix(in oklch, var(--accent) 32%, transparent) 0,
+        color-mix(in oklch, var(--accent) 32%, transparent) 8px,
+        transparent 8px,
+        transparent 16px
+      );
+    }
+
+    /* track info — icon + title + meta */
+    .track-info-content {
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .edit-icon-wrapper {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r-sm);
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--fg);
+      flex: 0 0 auto;
+      box-shadow: var(--elev-card-soft);
+      cursor: pointer;
+      transition: border-color var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
+    }
+    .edit-icon-wrapper:hover { border-color: var(--accent); color: var(--accent); }
+    .track-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+    .track-title {
+      font-size: 13px;
       font-weight: 500;
       color: var(--fg);
+      margin: 0;
       letter-spacing: -0.005em;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .clip .meta {
+    .track-subtitle {
       font-family: var(--font-mono);
       font-size: 10.5px;
       color: var(--muted);
+      margin: 0;
       letter-spacing: 0.02em;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    /* handles — small grip squares on each clip edge for trim */
-    .clip .handle {
-      position: absolute; top: 0; bottom: 0;
-      width: 4px;
-      background: var(--border-hi);
-      opacity: 0;
-      transition: opacity var(--motion-fast) var(--ease);
+    .track-subtitle span {
+      margin: 0 4px;
+      color: var(--dim);
     }
-    .clip .handle.l { left: 0; border-radius: var(--r-sm) 0 0 var(--r-sm); }
-    .clip .handle.r { right: 0; border-radius: 0 var(--r-sm) var(--r-sm) 0; }
-    .clip:hover .handle { opacity: 1; }
 
-    /* playhead — vertical line spanning skip-strip + tracks */
-    .playhead {
+    /* ─── zoom handling bar (full-width mint, replaces red progress bar) */
+    .zoombar {
+      padding: 4px 0 0;
+      background: var(--bg);
+      position: sticky;
+      bottom: 0;
+      z-index: 5;
+    }
+    .zoombar .zoom-track {
+      position: relative;
+      height: 18px;
+      width: 100%;
+    }
+    .zoombar .zoom-fill {
       position: absolute;
-      top: 24px; bottom: 0;
-      left: 72px;  /* align with track bodies, past the track-head col */
-      width: 1px;
+      top: 50%;
+      transform: translateY(-50%);
+      left: 0;
+      width: 100%;
+      height: 6px;
       background: var(--accent);
+      border-radius: 3px;
       pointer-events: none;
-      z-index: 4;
     }
-    .playhead::before {
-      content: "";
+    .zoombar .zoom-handle {
       position: absolute;
-      top: -3px; left: -4px;
-      width: 9px; height: 9px;
-      border-radius: 50%;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 14px;
+      height: 14px;
       background: var(--accent);
-      box-shadow: 0 0 8px var(--accent-hatch);
+      border: 1px solid var(--bg);
+      border-radius: 3px;
+      cursor: ew-resize;
+      padding: 0;
+      z-index: 2;
+      transition: background var(--motion-fast) var(--ease), box-shadow var(--motion-fast) var(--ease);
     }
-    .playhead::after {
-      content: "";
+    .zoombar .zoom-handle:hover {
+      box-shadow: 0 0 0 4px color-mix(in oklch, var(--accent) 22%, transparent);
+    }
+    .zoombar .zoom-handle-l { left: 0; }
+    .zoombar .zoom-handle-r { left: calc(100% - 14px); }
+
+    /* tracks scroll — vertical scroll for the zoom-track-row + track-blocks.
+       ruler above and zoombar below stay fixed; only the middle scrolls. */
+    .tracks-scroll {
+      max-height: 224px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding-right: 6px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border-hi) transparent;
+    }
+    .tracks-scroll::-webkit-scrollbar { width: 8px; }
+    .tracks-scroll::-webkit-scrollbar-track { background: transparent; }
+    .tracks-scroll::-webkit-scrollbar-thumb {
+      background: var(--border-hi);
+      border-radius: 4px;
+      border: 2px solid var(--bg);
+    }
+    .tracks-scroll::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+    .tracks-wrapper + .tracks-wrapper { margin-top: 4px; }
+
+    /* zoom track row — sits above the video tracks, holds mint zoom pills */
+    .zoom-track-row {
+      position: relative;
+      height: 36px;
+      margin-bottom: 4px;
+    }
+    .zoom-pill {
       position: absolute;
-      bottom: -3px; left: -4px;
-      width: 9px; height: 9px;
-      border-radius: 50%;
+      top: 50%;
+      transform: translateY(-50%);
+      height: 24px;
+      min-width: 96px;
+      padding: 0 10px;
       background: var(--accent);
-      box-shadow: 0 0 8px var(--accent-hatch);
+      color: var(--bg);
+      border-radius: var(--r-md);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-family: var(--font-display);
+      font-size: 11.5px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      white-space: nowrap;
+      pointer-events: none;
+      box-shadow: 0 0 0 1px var(--accent-soft), 0 4px 12px -4px var(--accent-soft);
     }
+    .zoom-pill svg { width: 12px; height: 12px; opacity: 0.95; }
+
+    /* speeds track row — sits above the zoom track, holds mint speed pills.
+       Each pill: speedometer icon + speed value + time range. */
+    .speed-track-row {
+      position: relative;
+      height: 48px;
+      margin-bottom: 4px;
+    }
+    .speed-pill {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      min-width: 138px;
+      padding: 5px 12px 6px;
+      background: var(--accent);
+      color: var(--bg);
+      border-radius: var(--r-md);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--font-display);
+      white-space: nowrap;
+      pointer-events: none;
+      box-shadow: 0 0 0 1px var(--accent-soft), 0 4px 12px -4px var(--accent-soft);
+    }
+    .speed-pill-icon {
+      flex-shrink: 0;
+      width: 16px;
+      height: 16px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .speed-pill-icon svg { width: 16px; height: 16px; }
+    .speed-pill-text {
+      display: inline-flex;
+      flex-direction: column;
+      gap: 0;
+      line-height: 1.05;
+    }
+    .speed-pill-value {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.005em;
+      font-variant-numeric: tabular-nums;
+    }
+    .speed-pill-range {
+      font-size: 10.5px;
+      font-weight: 500;
+      letter-spacing: 0.01em;
+      opacity: 0.78;
+      font-family: var(--font-mono);
+    }
+
+    /* annotations track row — sits above the zoom track, holds pinned annotations.
+       Each pin: short label above + small mint flag pointing down to its timestamp. */
+    .annotation-track-row {
+      position: relative;
+      height: 32px;
+      margin-bottom: 4px;
+    }
+    .annotation-pin {
+      position: absolute;
+      bottom: 0;
+      display: inline-flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+      padding: 0;
+      background: transparent;
+      border: 0;
+      cursor: pointer;
+      font-family: var(--font-display);
+      white-space: nowrap;
+    }
+    .annotation-label {
+      font-size: 10.5px;
+      font-weight: 500;
+      color: var(--fg-2);
+      padding: 1px 6px;
+      border-radius: var(--r-xs);
+      background: var(--accent-soft);
+      line-height: 1.3;
+      letter-spacing: 0.005em;
+    }
+    .annotation-pin:hover .annotation-label {
+      color: var(--fg-emphasis);
+      background: color-mix(in oklch, var(--accent) 22%, transparent);
+    }
+    .annotation-flag {
+      display: inline-block;
+      width: 10px;
+      height: 14px;
+      background: var(--accent);
+      clip-path: polygon(0 0, 100% 0, 100% 65%, 50% 100%, 0 65%);
+      flex-shrink: 0;
+    }
+    .annotation-pin:hover .annotation-flag { filter: brightness(1.05); }
+
+    /* full-width track variants (audio, fx) — single block per row */
+    .track-block.track-audio,
+    .track-block.track-fx { flex: 1; }
 
     /* ─── properties — selected clip detail panel ───────────────── */
     .properties-head {
@@ -2233,6 +2421,163 @@
     .regen-btn { width: 38px; height: 38px; border-radius: var(--r-md); border: 1px solid var(--border); background: var(--surface); color: var(--fg); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
     .regen-btn:hover { background: var(--surface-warm); border-color: var(--accent); color: var(--accent); }
     pre.transcript-body { margin: 0; padding: 14px 16px; border-radius: var(--r-md); border: 1px solid var(--border); background: var(--surface-warm); font-family: var(--font-mono); font-size: 12px; line-height: 1.55; color: var(--fg); white-space: pre; overflow: auto; max-height: 38vh; }
+
+    /* ─── Edit Clip modal (opened from pencil button on track-info) ─ */
+    .modal-card-editclip { width: min(880px, 94vw); max-height: 90vh; }
+    .modal-body-editclip { padding: 0 22px 18px; gap: 16px; overflow: auto; }
+    .edit-clip-stage {
+      position: relative;
+      aspect-ratio: 16 / 9;
+      border-radius: var(--r-md);
+      border: 1px solid var(--border);
+      background:
+        linear-gradient(135deg, var(--surface-2) 0%, var(--surface) 100%);
+      overflow: hidden;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .edit-clip-stage .puffin-bg {
+      position: absolute; left: 8%; top: 14%; transform: scale(3.6); transform-origin: left top;
+    }
+    .edit-clip-stage .pip-cam {
+      position: absolute; right: 14px; bottom: 14px;
+      width: 110px; height: 82px;
+      border-radius: 6px; overflow: hidden;
+      border: 1px solid var(--border);
+      box-shadow: 0 6px 18px rgba(22,23,29,.55);
+      background: linear-gradient(160deg, var(--surface-2), var(--surface));
+      display: flex; align-items: center; justify-content: center;
+      color: var(--muted);
+    }
+    .edit-clip-toolbar {
+      position: absolute; left: 0; right: 0; bottom: 0;
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 14px;
+      background: linear-gradient(180deg, transparent, rgba(22,23,29,.7));
+      color: #fff;
+    }
+    .edit-clip-toolbar .t-icon {
+      background: transparent; border: 0; color: inherit; cursor: pointer;
+      padding: 4px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center;
+    }
+    .edit-clip-toolbar .t-icon:hover { background: rgba(255,255,255,.12); }
+    .edit-clip-toolbar .t-tc {
+      font-family: var(--font-mono); font-size: 12px; color: #fff;
+      margin-left: 8px; display: inline-flex; align-items: baseline; gap: 4px;
+    }
+    .edit-clip-toolbar .t-tc strong { font-weight: 600; }
+    .edit-clip-toolbar .t-tc i { font-style: normal; opacity: .55; margin: 0 2px; }
+    .edit-clip-toolbar .t-dot {
+      margin-left: auto; width: 8px; height: 8px; border-radius: 50%;
+      background: var(--danger); box-shadow: 0 0 0 3px var(--danger-wash);
+    }
+    .edit-clip-controls {
+      display: flex; align-items: center; gap: 14px;
+      padding: 4px 2px 2px;
+    }
+    .edit-clip-controls .ctrl-btn {
+      width: 28px; height: 28px; border-radius: var(--r-sm);
+      background: transparent; border: 1px solid transparent;
+      color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    }
+    .edit-clip-controls .ctrl-btn:hover { color: var(--fg); background: var(--surface-2); border-color: var(--border); }
+    .edit-clip-controls .ctrl-tc {
+      font-family: var(--font-mono); font-size: 13px; color: var(--fg);
+      display: inline-flex; align-items: baseline; gap: 4px;
+      margin-left: 4px;
+    }
+    .edit-clip-controls .ctrl-tc em { font-style: normal; color: var(--muted); margin: 0 4px; }
+    .edit-clip-controls .ctrl-dot {
+      width: 10px; height: 10px; border-radius: 50%; background: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+      margin-left: auto;
+    }
+    .edit-clip-stats {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
+    }
+    .edit-clip-stat {
+      padding: 12px 14px;
+      border-radius: var(--r-md);
+      border: 1px solid var(--border);
+      background: var(--accent-wash);
+      display: flex; flex-direction: column; gap: 2px; min-width: 0;
+    }
+    .edit-clip-stat .num {
+      font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+      font-size: 16px; font-weight: 600; color: var(--fg);
+    }
+    .edit-clip-stat .lbl {
+      font-size: 11.5px; color: var(--muted); letter-spacing: .01em;
+    }
+    .edit-clip-range-wrap { display: flex; flex-direction: column; gap: 6px; }
+    .edit-clip-range-endpoints {
+      display: flex; justify-content: space-between;
+      font-family: var(--font-mono); font-size: 11px; color: var(--muted);
+    }
+    .edit-clip-range {
+      position: relative; height: 28px;
+      border-radius: var(--r-sm);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      overflow: hidden;
+    }
+    .edit-clip-range-track {
+      position: absolute; left: 14px; right: 14px; top: 50%;
+      transform: translateY(-50%); height: 4px;
+      background: var(--border);
+      border-radius: 999px;
+    }
+    .edit-clip-range-fill {
+      position: absolute; left: 0; right: 0; top: 0; bottom: 0;
+      border-radius: 4px;
+      background: var(--accent-soft);
+      border: 1px solid var(--accent);
+      display: flex; align-items: center; justify-content: center;
+      color: var(--accent);
+      font-family: var(--font-mono); font-size: 11.5px;
+    }
+    .edit-clip-range-fill .range-handle {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 8px; height: 18px;
+      background: var(--accent);
+      border: 1px solid var(--bg);
+      border-radius: 2px;
+      cursor: ew-resize;
+      padding: 0;
+      z-index: 2;
+      transition: background var(--motion-fast) var(--ease), box-shadow var(--motion-fast) var(--ease);
+    }
+    .edit-clip-range-fill .range-handle:hover {
+      box-shadow: 0 0 0 4px color-mix(in oklch, var(--accent) 22%, transparent);
+    }
+    .edit-clip-range-fill .range-handle-l { left: -1px; }
+    .edit-clip-range-fill .range-handle-r { right: -1px; }
+    .edit-clip-foot {
+      display: flex; align-items: center; justify-content: flex-end;
+      gap: 8px; padding-top: 4px;
+    }
+    .edit-clip-foot .text-btn {
+      background: transparent; border: 0; color: var(--muted);
+      font: 500 13px var(--font-display); cursor: pointer;
+      padding: 8px 12px; border-radius: var(--r-sm);
+    }
+    .edit-clip-foot .text-btn:hover { color: var(--fg); }
+    .edit-clip-foot .btn-primary, .edit-clip-foot .btn-secondary {
+      font: 500 13px var(--font-display);
+      padding: 8px 16px; border-radius: var(--r-md);
+      cursor: pointer; transition: background var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease);
+    }
+    .edit-clip-foot .btn-secondary {
+      background: var(--surface); color: var(--fg);
+      border: 1px solid var(--border);
+    }
+    .edit-clip-foot .btn-secondary:hover { background: var(--surface-2); border-color: var(--accent); }
+    .edit-clip-foot .btn-primary {
+      background: var(--accent); color: #fff;
+      border: 1px solid var(--accent);
+    }
+    .edit-clip-foot .btn-primary:hover { background: color-mix(in oklch, var(--accent) 88%, white); border-color: color-mix(in oklch, var(--accent) 88%, white); }
 
     /* ─── project modals — open + create ─────────────────────── */
     .proj-search {
@@ -3188,110 +3533,203 @@
         <header class="timeline-head">
           <h2>Timeline</h2>
           <span class="stats">
-            <strong>2 clips</strong><span class="sep">·</span><strong>24 sauts</strong><span class="sep">·</span><strong>7:03.6</strong> total
+            <strong>2 clips</strong><span class="sep">·</span><strong>7:03.6</strong> total
           </span>
           <span class="right">
-            
             <span class="stamp"><strong>0:00.0</strong> · Clip <strong>1</strong>/2</span>
           </span>
         </header>
 
         <div class="timeline-body" id="timeline-body">
-          <!-- ruler — major ticks every 60s, minor every 30s -->
-          <div class="ruler" id="ruler" style="padding-left: 72px;"></div>
+          <div class="timeline-container">
 
-          <!-- skip strip — hatched red regions mark auto-detected cuts -->
-          <div class="skip-strip" id="skip-strip" style="margin-left: 72px;">
-            <span class="skip" style="left: 2%; width: 1.6%;"></span>
-            <span class="skip" style="left: 5%; width: 1.2%;"></span>
-            <span class="skip" style="left: 8%; width: 2.0%;"></span>
-            <span class="skip" style="left: 12%; width: 0.8%;"></span>
-            <span class="skip" style="left: 18%; width: 1.4%;"></span>
-            <span class="skip" style="left: 22%; width: 1.0%;"></span>
-            <span class="skip" style="left: 27%; width: 1.8%;"></span>
-            <span class="skip" style="left: 31%; width: 1.2%;"></span>
-            <span class="skip" style="left: 36%; width: 1.6%;"></span>
-            <span class="skip" style="left: 40%; width: 0.9%;"></span>
-            <span class="skip" style="left: 45%; width: 1.5%;"></span>
-            <span class="skip" style="left: 50%; width: 1.1%;"></span>
-            <span class="skip" style="left: 55%; width: 1.7%;"></span>
-            <span class="skip" style="left: 59%; width: 0.8%;"></span>
-            <span class="skip" style="left: 63%; width: 1.3%;"></span>
-            <span class="skip" style="left: 68%; width: 1.0%;"></span>
-            <span class="skip" style="left: 72%; width: 1.8%;"></span>
-            <span class="skip" style="left: 77%; width: 1.2%;"></span>
-            <span class="skip" style="left: 81%; width: 0.9%;"></span>
-            <span class="skip" style="left: 85%; width: 1.5%;"></span>
-            <span class="skip" style="left: 89%; width: 1.1%;"></span>
-            <span class="skip" style="left: 92%; width: 1.4%;"></span>
-            <span class="skip" style="left: 95%; width: 1.0%;"></span>
-            <span class="skip" style="left: 97%; width: 1.6%;"></span>
-          </div>
+            <div class="playhead" aria-hidden="true"></div>
 
-          <div class="tracks">
-            <div class="track-row">
-              <span class="track-head">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
-                V1
-              </span>
-              <div class="track-body" id="track-v1">
-                <div class="clip is-selected" data-clip="1" style="left: 0%; width: 36.5%;">
-                  <span class="attach" aria-hidden="true">
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            <div class="ruler">
+              <div class="ruler-tick">0:00.0</div>
+              <div class="ruler-tick">0:30.0</div>
+              <div class="ruler-tick">1:00.0</div>
+              <div class="ruler-tick">1:30.0</div>
+              <div class="ruler-tick">2:00.0</div>
+              <div class="ruler-tick">2:30.0</div>
+              <div class="ruler-tick">3:00.0</div>
+              <div class="ruler-tick">3:30.0</div>
+              <div class="ruler-tick">4:00.0</div>
+              <div class="ruler-tick">4:30.0</div>
+              <div class="ruler-tick">5:00.0</div>
+              <div class="ruler-tick">5:30.0</div>
+              <div class="ruler-tick">6:00.0</div>
+              <div class="ruler-tick">6:30.0</div>
+              <div class="ruler-tick" style="flex: 0;">7:00.0</div>
+            </div>
+
+            <div class="tracks-scroll">
+
+              <div class="annotation-track-row" aria-label="Annotations">
+                <button class="annotation-pin" type="button" style="left: 5%;" aria-label="Annotation: Fix intro hook">
+                  <span class="annotation-label">Fix intro hook</span>
+                  <span class="annotation-flag" aria-hidden="true"></span>
+                </button>
+                <button class="annotation-pin" type="button" style="left: 27%;" aria-label="Annotation: B-roll gap">
+                  <span class="annotation-label">B-roll gap</span>
+                  <span class="annotation-flag" aria-hidden="true"></span>
+                </button>
+                <button class="annotation-pin" type="button" style="left: 50%;" aria-label="Annotation: Lower BGM">
+                  <span class="annotation-label">Lower BGM</span>
+                  <span class="annotation-flag" aria-hidden="true"></span>
+                </button>
+                <button class="annotation-pin" type="button" style="left: 74%;" aria-label="Annotation: CTA moment">
+                  <span class="annotation-label">CTA moment</span>
+                  <span class="annotation-flag" aria-hidden="true"></span>
+                </button>
+              </div>
+
+              <div class="speed-track-row" aria-hidden="true">
+                <span class="speed-pill" style="left: 12%;">
+                  <span class="speed-pill-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 14a8.5 8.5 0 0 1 17 0"/><path d="M12 14l4-3.5"/><circle cx="12" cy="14" r="1.1" fill="currentColor" stroke="none"/></svg>
                   </span>
-                  <span class="name">demo-n8n-as-code-1.mp4</span>
-                  <span class="meta">0:00.0 → 2:34.7 · source 0:00.0–2:34.7</span>
-                  <span class="handle l" aria-hidden="true"></span>
-                  <span class="handle r" aria-hidden="true"></span>
-                </div>
-                <div class="clip" data-clip="2" style="left: 36.5%; width: 63.5%;">
-                  <span class="attach" aria-hidden="true">
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                  <span class="speed-pill-text">
+                    <span class="speed-pill-value">1.5×</span>
+                    <span class="speed-pill-range">3.2s – 6.8s</span>
                   </span>
-                  <span class="name">2026-03-10 09-10-39.mp4</span>
-                  <span class="meta">2:34.7 → 7:03.6 · source 0:00.0–4:28.9</span>
-                  <span class="handle l" aria-hidden="true"></span>
-                  <span class="handle r" aria-hidden="true"></span>
+                </span>
+                <span class="speed-pill" style="left: 72%;">
+                  <span class="speed-pill-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 14a8.5 8.5 0 0 1 17 0"/><path d="M12 14l4-3.5"/><circle cx="12" cy="14" r="1.1" fill="currentColor" stroke="none"/></svg>
+                  </span>
+                  <span class="speed-pill-text">
+                    <span class="speed-pill-value">0.6×</span>
+                    <span class="speed-pill-range">5.4s – 7.0s</span>
+                  </span>
+                </span>
+              </div>
+
+              <div class="zoom-track-row" aria-hidden="true">
+                <span class="zoom-pill" style="left: 7%;">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                  1.5×
+                </span>
+                <span class="zoom-pill" style="left: 56%;">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                  1.8×
+                </span>
+              </div>
+
+              <div class="tracks-wrapper">
+
+                <div class="track-block block-1 is-selected" data-clip="1">
+                  <div class="track-visual-timeline">
+                    <div class="segment cut"  style="flex: 5;"></div>
+                    <div class="segment keep" style="flex: 30;"></div>
+                    <div class="segment cut"  style="flex: 4;"></div>
+                    <div class="segment keep" style="flex: 8;"></div>
+                    <div class="segment cut"  style="flex: 3;"></div>
+                    <div class="segment keep" style="flex: 25;"></div>
+                    <div class="segment cut"  style="flex: 2;"></div>
+                    <div class="segment keep" style="flex: 15;"></div>
+                    <div class="segment cut"  style="flex: 5;"></div>
+                    <div class="segment keep" style="flex: 3;"></div>
+                  </div>
+                  <div class="track-info-content">
+                    <div class="edit-icon-wrapper" data-action="open-modal" data-modal="edit-clip" aria-label="Edit clip">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                    </div>
+                    <div class="track-text">
+                      <h3 class="track-title">demo-n8n-as-code-1.mp4</h3>
+                      <p class="track-subtitle">0:00.0 — 2:34.7 <span>•</span> source 0:00.0–2:34.7</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="track-block block-2" data-clip="2">
+                  <div class="track-visual-timeline">
+                    <div class="segment cut"  style="flex: 3;"></div>
+                    <div class="segment keep" style="flex: 4;"></div>
+                    <div class="segment cut"  style="flex: 2;"></div>
+                    <div class="segment keep" style="flex: 5;"></div>
+                    <div class="segment cut"  style="flex: 2;"></div>
+                    <div class="segment keep" style="flex: 6;"></div>
+                    <div class="segment cut"  style="flex: 2;"></div>
+                    <div class="segment keep" style="flex: 4;"></div>
+                    <div class="segment cut"  style="flex: 3;"></div>
+                    <div class="segment keep" style="flex: 3;"></div>
+                    <div class="segment cut"  style="flex: 25;"></div>
+                    <div class="segment keep" style="flex: 3;"></div>
+                    <div class="segment cut"  style="flex: 18;"></div>
+                    <div class="segment keep" style="flex: 4;"></div>
+                    <div class="segment cut"  style="flex: 12;"></div>
+                    <div class="segment keep" style="flex: 2;"></div>
+                    <div class="segment cut"  style="flex: 5;"></div>
+                  </div>
+                  <div class="track-info-content">
+                    <div class="edit-icon-wrapper" data-action="open-modal" data-modal="edit-clip" aria-label="Edit clip">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                    </div>
+                    <div class="track-text">
+                      <h3 class="track-title">2026-03-10 09-10-39.mp4</h3>
+                      <p class="track-subtitle">2:34.7 — 7:03.6 <span>•</span> source 0:00.0–4:28.9</p>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+
+              <div class="tracks-wrapper">
+                <div class="track-block track-audio" data-clip="3">
+                  <div class="track-visual-timeline">
+                    <div class="segment keep" style="flex: 28;"></div>
+                    <div class="segment cut"  style="flex: 2;"></div>
+                    <div class="segment keep" style="flex: 35;"></div>
+                    <div class="segment cut"  style="flex: 3;"></div>
+                    <div class="segment keep" style="flex: 32;"></div>
+                  </div>
+                  <div class="track-info-content">
+                    <div class="edit-icon-wrapper" data-action="open-modal" data-modal="edit-clip" aria-label="Edit clip">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                    </div>
+                    <div class="track-text">
+                      <h3 class="track-title">voice-over-take-3.wav</h3>
+                      <p class="track-subtitle">0:00.0 — 1:45.2 <span>•</span> source 0:00.0–1:45.2</p>
+                    </div>
+                  </div>
                 </div>
               </div>
+
+              <div class="tracks-wrapper">
+                <div class="track-block track-fx" data-clip="4">
+                  <div class="track-visual-timeline">
+                    <div class="segment keep" style="flex: 2;"></div>
+                    <div class="segment cut"  style="flex: 98;"></div>
+                  </div>
+                  <div class="track-info-content">
+                    <div class="edit-icon-wrapper" data-action="open-modal" data-modal="edit-clip" aria-label="Edit clip">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                    </div>
+                    <div class="track-text">
+                      <h3 class="track-title">intro-animation.mp4</h3>
+                      <p class="track-subtitle">0:00.0 — 0:08.5 <span>•</span> source 0:00.0–0:08.5</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
             </div>
-            <div class="track-row">
-              <span class="track-head">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
-                Z
-              </span>
-              <div class="track-body">
-                <div class="pill zoom" style="left: 4%;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>1.8×</div>
-                <div class="pill zoom" style="left: 14%;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>1.8×</div>
-                <div class="pill zoom" style="left: 23%;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>1.8×</div>
-                <div class="pill zoom" style="left: 34%;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>1.8×</div>
-                <div class="pill zoom" style="left: 45%;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>1.8×</div>
-                <div class="pill zoom" style="left: 56%;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>1.8×</div>
-                <div class="pill zoom" style="left: 67%;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>1.8×</div>
-                <div class="pill zoom" style="left: 80%;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>1.8×</div>
+
+            
+
+            <div class="zoombar" role="group" aria-label="Zoom range">
+              <div class="zoom-track">
+                <div class="zoom-fill" aria-hidden="true"></div>
+                <button class="zoom-handle zoom-handle-l" type="button" aria-label="Zoom out"></button>
+                <button class="zoom-handle zoom-handle-r" type="button" aria-label="Zoom in"></button>
               </div>
             </div>
-            <div class="track-row">
-              <span class="track-head">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h10"/></svg>
-                T
-              </span>
-              <div class="track-body">
-                <div class="pill anno" style="left: 5%;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h10"/></svg>Enter text…</div>
-              </div>
-            </div>
-            <div class="track-row">
-              <span class="track-head">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg>
-                S
-              </span>
-              <div class="track-body">
-                <div class="pill speed" style="left: 35%;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg>1.5×</div>
-              </div>
-            </div>
+
           </div>
         </div>
-      </section>
+
+        </section>
 
       </footer>
   </div>
@@ -3368,6 +3806,81 @@ WORD id=w000015 segment=s0001 start=6.180 end=7.080 text="so"
 WORD id=w000016 segment=s0001 start=7.080 end=7.180 text="you"
 WORD id=w000017 segment=s0001 start=7.180 end=7.480 text="will"
 SEGMENT</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Edit Clip modal (opened from pencil icon on each track-block) ── -->
+  <div class="modal" data-modal-name="edit-clip" role="dialog" aria-modal="true" aria-labelledby="edit-clip-title">
+    <div class="modal-backdrop" aria-hidden="true"></div>
+    <div class="modal-card modal-card-editclip">
+      <header class="modal-head">
+        <div>
+          <h2 id="edit-clip-title">Edit clip</h2>
+          <p>demo-n8n-as-code-1.mp4</p>
+        </div>
+        <button class="icon-btn" data-modal-close title="Close" aria-label="Close">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </header>
+      <div class="modal-body modal-body-editclip">
+        <div class="edit-clip-stage" aria-hidden="true">
+          <svg class="puffin-bg" viewBox="0 0 64 48" width="64" height="48"><rect width="64" height="48" rx="6" fill="#16171d"/><path d="M14 22c-4-3-4-9 0-12s10-1 12 3c1-3 5-3 6 0 2-1 5-1 7 1 3 3 3 8 0 11-2 2-5 2-7 1-1 3-5 3-6 0-2 4-9 5-12 0z" fill="#eaebed"/><path d="M30 14l8-3 3 5-7 4z" fill="#10b981"/><path d="M27 17c2-1 6-1 8 1 2 3-1 5-4 4-2-1-4-3-4-5z" fill="#bcc0c6"/><circle cx="36" cy="20" r="1.2" fill="#16171d"/></svg>
+          <div class="pip-cam" aria-hidden="true">
+            <svg viewBox="0 0 48 36" width="48" height="36"><rect width="48" height="36" rx="4" fill="#16171d"/><circle cx="18" cy="14" r="5" fill="#eaebed"/><path d="M8 36c0-8 6-13 14-13s14 5 14 13z" fill="#6b7280"/></svg>
+          </div>
+          
+        </div>
+
+        <div class="edit-clip-controls">
+          <button class="ctrl-btn" type="button" title="Play" aria-label="Play">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+          </button>
+          <button class="ctrl-btn" type="button" title="Restart" aria-label="Restart">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+          </button>
+          <button class="ctrl-btn" type="button" title="Fullscreen" aria-label="Fullscreen">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+          </button>
+          <span class="ctrl-tc"><strong>0:00.0</strong><em>/</em>2:34.7</span>
+          <span class="ctrl-dot" aria-hidden="true"></span>
+        </div>
+
+        <div class="edit-clip-stats">
+          <div class="edit-clip-stat">
+            <span class="num">0:00.0</span>
+            <span class="lbl">Start</span>
+          </div>
+          <div class="edit-clip-stat">
+            <span class="num">2:34.7</span>
+            <span class="lbl">End</span>
+          </div>
+          <div class="edit-clip-stat">
+            <span class="num">2:34.7</span>
+            <span class="lbl">Duration</span>
+          </div>
+        </div>
+
+        <div class="edit-clip-range-wrap">
+          <div class="edit-clip-range-endpoints">
+            <span>0:00.0</span>
+            <span>2:34.7</span>
+          </div>
+          <div class="edit-clip-range">
+            <div class="edit-clip-range-track" aria-hidden="true"></div>
+            <div class="edit-clip-range-fill">
+              <span class="range-handle range-handle-l" aria-label="Trim start"></span>
+              <span class="range-handle range-handle-r" aria-label="Trim end"></span>
+              0:00.0–2:34.7
+            </div>
+          </div>
+        </div>
+
+        <div class="edit-clip-foot">
+          <button class="text-btn" type="button" data-modal-close>Reset</button>
+          <button class="btn-secondary" type="button" data-modal-close>Cancel</button>
+          <button class="btn-primary" type="button" data-modal-close>Apply</button>
+        </div>
       </div>
     </div>
   </div>
@@ -3598,38 +4111,11 @@ SEGMENT</pre>
   </div>
 
   <script>
-    /* ─── ruler — generate ticks from 0 to 7:00 every 30s ───────── */
-    (function ruler() {
-      const r = document.getElementById('ruler');
-      if (!r) return;
-      const totalSec = 7 * 60 + 3.6; // 7:03.6
-      const step = 30;               // 30s minor, 60s major
-      const fmt = function (sec) {
-        const m = Math.floor(sec / 60);
-        const s = sec % 60;
-        return (s === 0 ? m + ':00' : m + ':' + (s < 10 ? '0' + s : s) + '.0');
-      };
-      for (let s = 0; s <= totalSec; s += step) {
-        const pct = (s / totalSec) * 100;
-        const major = (s % 60) === 0;
-        const t = document.createElement('span');
-        t.className = 'tick' + (major ? ' major' : '');
-        t.style.left = 'calc(' + pct + '% - 0px)';
-        if (major) {
-          const lbl = document.createElement('span');
-          lbl.className = 'label';
-          lbl.textContent = fmt(s);
-          t.appendChild(lbl);
-        }
-        r.appendChild(t);
-      }
-    })();
-
-    /* ─── clip selection ─────────────────────────────────────────── */
+    /* ─── track-block selection ──────────────────────────────────── */
     (function clips() {
-      document.querySelectorAll('.clip').forEach(function (c) {
+      document.querySelectorAll('.track-block').forEach(function (c) {
         c.addEventListener('click', function () {
-          document.querySelectorAll('.clip').forEach(function (x) { x.classList.remove('is-selected'); });
+          document.querySelectorAll('.track-block').forEach(function (x) { x.classList.remove('is-selected'); });
           c.classList.add('is-selected');
         });
       });
