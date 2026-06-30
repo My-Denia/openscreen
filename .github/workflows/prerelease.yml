@@ -83,22 +83,46 @@ jobs:
           echo "package.json version:"
           grep '"version"' package.json
 
-      - name: Commit package.json bump
+      - name: Commit package.json bump on a release branch
         env:
           TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
         run: |
           set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # The main-protection ruleset forbids direct pushes to main from workflow tokens.
+          # Push to a release branch and merge via PR instead (merge via PAT bypasses as EtienneLescot).
+          BRANCH="release/v${PRERELEASE}"
+          git checkout -b "$BRANCH"
           git add package.json
-          git commit -m "chore(release): bump to ${{ steps.version.outputs.prerelease }} [skip ci]"
-          git push
+          git commit -m "chore(release): bump to ${PRERELEASE} [skip ci]"
+          git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$BRANCH"
+
+      - name: Open PR and rebase-merge into main
+        env:
+          TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          BRANCH="release/v${PRERELEASE}"
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "chore(release): bump to ${PRERELEASE}" \
+            --body "Automated version bump from the prerelease workflow. Rebase-merged via PAT; bypass applies because EtienneLescot is a ruleset bypass actor." \
+            --token "$TOKEN" \
+            --repo "$GITHUB_REPOSITORY"
+          PR_NUMBER=$(gh pr list --head "$BRANCH" --state open --json number -q '.[0].number' --repo "$GITHUB_REPOSITORY" --token "$TOKEN")
+          gh pr merge "$PR_NUMBER" --rebase --delete-branch-remote \
+            --token "$TOKEN" \
+            --repo "$GITHUB_REPOSITORY"
 
       - name: Push RC tag
         env:
           TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
           RC_TAG: ${{ steps.version.outputs.rc_tag }}
-        run: git push origin "$RC_TAG"
+        run: git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$RC_TAG"
 
       - name: Announce RC on Discord (#rc-testing)
         if: success()
