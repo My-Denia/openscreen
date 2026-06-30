@@ -104,11 +104,9 @@ jobs:
 
       - name: Open PR and rebase-merge into main
         env:
-          # GITHUB_TOKEN for PR creation (it has pull_requests: write by default).
-          # OPENSCREEN_RELEASE_TOKEN (PAT bound to EtienneLescot) for the merge, so the
-          # ruleset bypass applies.
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_MERGE_TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
+          # Org policy blocks GITHUB_TOKEN write, so we use the PAT for both PR create and merge.
+          # PAT (EtienneLescot) is a ruleset bypass actor -> the merge doesn't need approval.
+          GH_TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
           PRERELEASE: ${{ steps.version.outputs.prerelease }}
         run: |
           set -euo pipefail
@@ -120,7 +118,7 @@ jobs:
             --body "Automated version bump from the prerelease workflow. Rebase-merged via PAT; bypass applies because EtienneLescot is a ruleset bypass actor." \
             --repo "$GITHUB_REPOSITORY"
           PR_NUMBER=$(gh pr list --head "$BRANCH" --state open --json number -q '.[0].number' --repo "$GITHUB_REPOSITORY")
-          GH_TOKEN="$PR_MERGE_TOKEN" gh pr merge "$PR_NUMBER" --rebase --delete-branch-remote \
+          gh pr merge "$PR_NUMBER" --rebase --delete-branch-remote \
             --repo "$GITHUB_REPOSITORY"
 
       - name: Push RC tag
