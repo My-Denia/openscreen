@@ -101,7 +101,7 @@ jobs:
 
       - name: Open PR and rebase-merge into main
         env:
-          TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
           PRERELEASE: ${{ steps.version.outputs.prerelease }}
         run: |
           set -euo pipefail
@@ -111,11 +111,9 @@ jobs:
             --head "$BRANCH" \
             --title "chore(release): bump to ${PRERELEASE}" \
             --body "Automated version bump from the prerelease workflow. Rebase-merged via PAT; bypass applies because EtienneLescot is a ruleset bypass actor." \
-            --token "$TOKEN" \
             --repo "$GITHUB_REPOSITORY"
-          PR_NUMBER=$(gh pr list --head "$BRANCH" --state open --json number -q '.[0].number' --repo "$GITHUB_REPOSITORY" --token "$TOKEN")
+          PR_NUMBER=$(gh pr list --head "$BRANCH" --state open --json number -q '.[0].number' --repo "$GITHUB_REPOSITORY")
           gh pr merge "$PR_NUMBER" --rebase --delete-branch-remote \
-            --token "$TOKEN" \
             --repo "$GITHUB_REPOSITORY"
 
       - name: Push RC tag
