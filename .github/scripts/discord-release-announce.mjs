@@ -1,19 +1,10 @@
 import { info, warning } from "@actions/core";
 import { context, getOctokit } from "@actions/github";
 
-const WEBHOOK_USERNAME = (process.env.DISCORD_WEBHOOK_USERNAME || "OpenScreen").trim();
-const WEBHOOK_AVATAR = (process.env.DISCORD_WEBHOOK_AVATAR_URL || "").trim();
-
 const botToken = (process.env.DISCORD_BOT_TOKEN || "").trim();
 const channelId = (
 	process.env.DISCORD_RC_TESTING_CHANNEL_ID ||
 	process.env.DISCORD_RELEASE_CHANNEL_ID ||
-	""
-).trim();
-const webhookUrl = (
-	process.env.DISCORD_RC_TESTING_WEBHOOK_URL ||
-	process.env.DISCORD_RELEASE_WEBHOOK_URL ||
-	process.env.DISCORD_WEBHOOK_URL ||
 	""
 ).trim();
 
@@ -26,11 +17,8 @@ if (!stableTag) {
 	warning("STABLE_TAG missing; skipping.");
 	process.exit(0);
 }
-if (!webhookUrl && (!botToken || !channelId)) {
-	info(
-		"Discord announce skipped: set either a webhook URL (preferred) or both " +
-			"DISCORD_BOT_TOKEN and a channel id.",
-	);
+if (!botToken || !channelId) {
+	info("Discord announce skipped: set DISCORD_BOT_TOKEN and a channel id variable.");
 	process.exit(0);
 }
 
@@ -70,9 +58,10 @@ if (process.env.GITHUB_TOKEN) {
 }
 
 const isRc = kind === "rc";
-const title = isRc
+const embedTitle = isRc
 	? `🧪 ${stableTag} release candidate ready for testing`
 	: `🚀 ${stableTag} released`;
+const threadName = isRc ? `${stableTag} RC — testing` : `${stableTag} released`;
 const color = isRc ? 15844367 : 5814783;
 
 const description = [
@@ -84,60 +73,87 @@ const description = [
 	.filter(Boolean)
 	.join("\n");
 
-const payload = {
-	embeds: [
-		{
-			title,
-			url: releaseUrl,
-			description,
-			color,
-			timestamp: new Date().toISOString(),
-		},
-	],
-	allowed_mentions: { parse: [] },
-};
-
-async function postViaWebhook() {
-	const endpoint = new URL(webhookUrl);
-	endpoint.searchParams.set("wait", "true");
-	const res = await fetch(endpoint.toString(), {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({
-			username: WEBHOOK_USERNAME,
-			avatar_url: WEBHOOK_AVATAR || undefined,
-			...payload,
-		}),
+async function fetchChannelType() {
+	const res = await fetch(`https://discord.com/api/v10/channels/${channelId}`, {
+		headers: { Authorization: `Bot ${botToken}` },
 	});
 	if (!res.ok) {
 		const txt = await res.text();
-		warning(`Discord webhook POST failed ${res.status}: ${txt}`);
+		warning(`Discord channel fetch failed ${res.status}: ${txt}`);
+		return null;
+	}
+	return res.json();
+}
+
+async function postToForum() {
+	// Forum channel (type 15): create a thread, the first message is the announcement.
+	const body = {
+		name: threadName.slice(0, 100),
+		message: {
+			embeds: [
+				{
+					title: embedTitle,
+					url: releaseUrl,
+					description,
+					color,
+					timestamp: new Date().toISOString(),
+				},
+			],
+			allowed_mentions: { parse: [] },
+		},
+	};
+	const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/threads`, {
+		method: "POST",
+		headers: { Authorization: `Bot ${botToken}`, "Content-Type": "application/json" },
+		body: JSON.stringify(body),
+	});
+	if (!res.ok) {
+		const txt = await res.text();
+		warning(`Discord forum thread create failed ${res.status}: ${txt}`);
 		return false;
 	}
-	info(`📣 ${kind} announcement posted for ${stableTag} via webhook.`);
+	const data = await res.json();
+	info(`📣 ${kind} announcement posted to forum thread ${data.id}.`);
 	return true;
 }
 
-async function postViaBot() {
+async function postToText() {
+	const body = {
+		embeds: [
+			{
+				title: embedTitle,
+				url: releaseUrl,
+				description,
+				color,
+				timestamp: new Date().toISOString(),
+			},
+		],
+		allowed_mentions: { parse: [] },
+	};
 	const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
 		method: "POST",
-		headers: {
-			Authorization: `Bot ${botToken}`,
-			"Content-Type": "application/json",
-		},
-		body: JSON.stringify(payload),
+		headers: { Authorization: `Bot ${botToken}`, "Content-Type": "application/json" },
+		body: JSON.stringify(body),
 	});
 	if (!res.ok) {
 		const txt = await res.text();
-		warning(`Discord bot POST failed ${res.status}: ${txt}`);
+		warning(`Discord message POST failed ${res.status}: ${txt}`);
 		return false;
 	}
-	info(`📣 ${kind} announcement posted for ${stableTag} via bot.`);
+	info(`📣 ${kind} announcement posted to text channel.`);
 	return true;
 }
 
-if (webhookUrl) {
-	await postViaWebhook();
+// Discord channel types that require a thread wrapper (no top-level messages).
+const FORUM_LIKE_TYPES = new Set([15, 16]); // 15 = GUILD_FORUM, 16 = GUILD_MEDIA
+
+const channel = await fetchChannelType();
+if (!channel) {
+	process.exit(0);
+}
+
+if (FORUM_LIKE_TYPES.has(channel.type)) {
+	await postToForum();
 } else {
-	await postViaBot();
+	await postToText();
 }

@@ -143,9 +143,6 @@ jobs:
       - name: Announce RC on Discord (#rc-testing)
         if: success()
         env:
-          # Webhook is preferred over bot+channel because #rc-testing is a forum channel,
-          # which only accepts posts via webhook (the bot can't create messages there directly).
-          DISCORD_RC_TESTING_WEBHOOK_URL: ${{ vars.DISCORD_RC_TESTING_WEBHOOK_URL }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_RC_TESTING_CHANNEL_ID: ${{ vars.DISCORD_RC_TESTING_CHANNEL_ID }}
           GITHUB_TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
