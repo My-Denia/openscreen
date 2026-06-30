@@ -25,6 +25,8 @@ Most of the repo's workflows (CI, build, Tier 3 publishers, Discord sync) only n
    - `Contents`: Read and write
    - `Issues`: Read and write
    - `Pull requests`: Read and write (the release pipeline opens a PR to bump `package.json` and rebase-merges it into `main` because the org-level workflow permissions block `GITHUB_TOKEN` from creating PRs)
+   - `Actions`: Read and write (the release pipeline triggers `build.yml` via `gh workflow run`; GITHUB_TOKEN tag pushes don't fire downstream workflows in this org)
+   - `Workflows`: Read and write (the release branch contains the workflow files; creating it requires writing to `.github/workflows/`)
    - `Metadata`: Read-only (auto-selected)
 5. **Expiration**: 1 year. Set a calendar reminder to rotate.
 6. Generate the token, copy it once, then add it as a repository secret. The `gh` CLI does **not** accept the value as a positional argument — use `--body` or stdin:
