@@ -79,48 +79,67 @@ export function VirtualPreview({
 	// without a separate <video onTimeUpdate> event firing at ~4 Hz.
 	const sourceTimeSecRef = useRef(0);
 	sourceTimeSecRef.current = sourceTimeSec;
+	// ponytail: the rAF closure captured the props at mount time. The
+	// auto-created clip arrives a tick after the source swaps, so reads
+	// from the closure would forever see `clips: []` and the rAF would
+	// bail at the `clips.length === 0` guard — leaving the scrub thumb
+	// stuck at 0% and the drag range at `max=1`. The refs let the rAF
+	// always see the latest values without re-creating on every clip
+	// mutation.
+	const clipsRef = useRef(clips);
+	clipsRef.current = clips;
+	const videoSourcesRef = useRef(videoSources);
+	videoSourcesRef.current = videoSources;
+	const sourceIndexRef = useRef(sourceIndex);
+	sourceIndexRef.current = sourceIndex;
+	const virtualTimeSecRef = useRef(virtualTimeSec);
+	virtualTimeSecRef.current = virtualTimeSec;
+	const virtualDurationSecRef = useRef(virtualDurationSec);
+	virtualDurationSecRef.current = virtualDurationSec;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: re-create the rAF when the active source swaps.
 	useEffect(() => {
 		let raf = 0;
 		const tick = () => {
 			raf = window.requestAnimationFrame(tick);
 			const v = videoRef.current;
-			if (!v || clips.length === 0 || !Number.isFinite(v.currentTime)) {
+			if (!v || clipsRef.current.length === 0 || !Number.isFinite(v.currentTime)) {
 				return;
 			}
-			const activeSourceId = videoSources[sourceIndex]?.id;
+			const activeSourceId = videoSourcesRef.current[sourceIndexRef.current]?.id;
 			if (isProgrammaticSeekRef.current) {
 				isProgrammaticSeekRef.current = false;
-				const pos = locateSourcePosition(clips, v.currentTime, activeSourceId);
-				if (pos) updateVirtualTime(clampVirtualTime(clips, pos.virtualTimeSec));
+				const pos = locateSourcePosition(clipsRef.current, v.currentTime, activeSourceId);
+				if (pos) updateVirtualTime(clampVirtualTime(clipsRef.current, pos.virtualTimeSec));
 				return;
 			}
-			const position = locateSourcePosition(clips, v.currentTime, activeSourceId);
+			const position = locateSourcePosition(clipsRef.current, v.currentTime, activeSourceId);
 			if (!position) {
 				// ponytail: fall back to timeline order so cross-asset / reordered
 				// clips don't keep playing unmapped media.
-				const nextClip = clips.find((clip) => clip.timelineStartSec > virtualTimeSec + 0.001);
+				const nextClip = clipsRef.current.find(
+					(clip) => clip.timelineStartSec > virtualTimeSecRef.current + 0.001,
+				);
 				if (nextClip) seekToVirtualTime(nextClip.timelineStartSec, true);
 				else {
 					v.pause();
-					updateVirtualTime(virtualDurationSec);
+					updateVirtualTime(virtualDurationSecRef.current);
 					setIsPlaying(false);
 				}
 				return;
 			}
 			const reachedClipEnd = v.currentTime >= (position.clip.sourceEndSec ?? Infinity) - 0.04;
 			if (reachedClipEnd) {
-				const nextClip = clips[position.clipIndex + 1];
+				const nextClip = clipsRef.current[position.clipIndex + 1];
 				if (!nextClip) {
 					v.pause();
-					updateVirtualTime(virtualDurationSec);
+					updateVirtualTime(virtualDurationSecRef.current);
 					setIsPlaying(false);
 					return;
 				}
 				seekToVirtualTime(nextClip.timelineStartSec, true);
 				return;
 			}
-			updateVirtualTime(clampVirtualTime(clips, position.virtualTimeSec));
+			updateVirtualTime(clampVirtualTime(clipsRef.current, position.virtualTimeSec));
 		};
 		raf = window.requestAnimationFrame(tick);
 		return () => window.cancelAnimationFrame(raf);
