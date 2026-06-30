@@ -58,6 +58,7 @@ describe.each(happyCases)("$name", ({ call, args, expectUrl, expectMethod, expec
 		expect(init.method).toBe(expectMethod);
 		expect(init.headers.Authorization).toBe(`Bot ${botToken}`);
 		expect(JSON.parse(init.body)).toEqual(expectBody);
+		expect(init.signal).toBeDefined();
 	});
 
 	it("throws on 429 with rate-limit message", async () => {
@@ -68,5 +69,27 @@ describe.each(happyCases)("$name", ({ call, args, expectUrl, expectMethod, expec
 	it("throws on non-ok responses with status in message", async () => {
 		mockResponse({ status: 403, body: { message: "Missing Permissions" } });
 		await expect(call({ ...args, botToken })).rejects.toThrow(/failed 403/);
+	});
+});
+
+describe("callDiscord timeout", () => {
+	it("aborts the request after timeoutMs when the fetch hangs", async () => {
+		// fetch that never resolves until aborted
+		vi.mocked(fetch).mockImplementation(
+			(_url, init) =>
+				new Promise((_resolve, reject) => {
+					init.signal?.addEventListener("abort", () => {
+						reject(new DOMException("aborted", "AbortError"));
+					});
+				}),
+		);
+		await expect(
+			postChannelMessage({
+				botToken,
+				channelId: "x",
+				payload: {},
+				timeoutMs: 10,
+			}),
+		).rejects.toThrow();
 	});
 });

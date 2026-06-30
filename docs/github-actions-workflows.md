@@ -192,7 +192,7 @@ Triggered by `pull_request_target` (opened, reopened, synchronize, edited, label
 
 Runs `node .github/scripts/discord-pr-sync.mjs`, which creates or updates a Discord forum thread for each PR. Thread state is persisted via an HTML comment (`<!-- discord-thread-id:... -->`) in the PR body. Tag updates (draft, ready, changes requested, approved, merged, closed) are applied via the Discord API. The job is marked `continue-on-error: true` so that Discord failures never block the PR workflow.
 
-All Discord traffic goes through a single bot (`DISCORD_BOT_TOKEN`, secret). The script creates the forum thread via `POST /channels/{forumChannelId}/threads` and posts review/comment updates into the existing thread via `POST /channels/{threadId}/messages`. Required bot permissions on the PR forum channel: View Channel, Send Messages, Embed Links, Create Public Threads, Manage Threads (for tag/archive/lock). Optional failure alerts can be sent to a separate channel via `DISCORD_ALERT_CHANNEL_ID` (variable); unset to silence.
+All Discord traffic goes through a single bot (`DISCORD_BOT_TOKEN`, secret). The script creates the forum thread via `POST /channels/{forumChannelId}/threads` and posts review/comment updates into the existing thread via `POST /channels/{threadId}/messages`. Required bot permissions on the PR forum channel: View Channel, Send Messages, Embed Links, **Create Public Threads** (initial thread), **Send Messages in Threads** (subsequent updates), Manage Threads (for tag/archive/lock). Optional failure alerts can be sent to a separate channel via `DISCORD_ALERT_CHANNEL_ID` (variable); unset to silence.
 
 ### discord-roadmap-sync.yml
 
