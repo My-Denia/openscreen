@@ -46,6 +46,24 @@ Old token and new token both work in parallel until the old one expires or is re
 
 There's no need to coordinate a rotation window — the release pipeline runs at most a few times per month.
 
+## Required repo ruleset bypass
+
+The `main` branch is protected by the repository ruleset `main-protection` (id `18060803` on this repo), which requires changes to be made through a pull request. The release pipeline (`prerelease.yml` and `promote.yml`) commits `package.json` directly to `main` because the version bump has to land before the tag is pushed and the build runs.
+
+To allow that direct push, the ruleset has two bypass actors:
+
+- **`EtienneLescot`** (id `215859519`) — so manual pushes from the maintainer's local checkout work.
+- **`github-actions[bot]`** (id `41898282`) — so the workflow's `GITHUB_TOKEN` push (the default `actions/checkout@v4` auth) is also accepted.
+
+> **Why not just use the PAT?** Fine-grained PATs are deliberately excluded from ruleset bypasses by GitHub as a security measure (a leaked PAT must not bypass repo rules). Pushing with the PAT would still be rejected with `GH013`. Adding the bot user to the bypass list is the canonical fix.
+
+If the bypass actors are ever reset (e.g. after a ruleset recreation), re-add them via:
+
+```bash
+gh api /repos/getopenscreen/openscreen/rulesets/18060803 --jq '.bypass_actors'
+# Confirm both 215859519 and 41898282 are present with bypass_mode "always".
+```
+
 ## Required for Discord announcements
 
 ### `DISCORD_BOT_TOKEN`
