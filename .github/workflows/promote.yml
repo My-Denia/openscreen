@@ -115,6 +115,9 @@ jobs:
           git fetch origin main
           git checkout main
           git reset --hard origin/main
+          # Delete remote tag first (idempotent on rerun) and any local tag.
+          git push origin ":${STABLE_TAG}" 2>/dev/null || true
+          git tag -d "$STABLE_TAG" 2>/dev/null || true
           git tag "$STABLE_TAG"
           git push origin "$STABLE_TAG"
 
