@@ -11,7 +11,7 @@ import type { AxcutClip } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useUndoRedoShortcuts } from "@/lib/ai-edition/store/undo";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
-import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
+import { PLACEHOLDER_DURATION_SEC, useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { nativeBridgeClient } from "@/native";
 import type { AiEditionProjectSummary } from "@/native/contracts";
 import { Bottombar } from "./Bottombar";
@@ -255,12 +255,11 @@ export function NewEditorShell() {
 			// array index (the previous behavior) clobbered clip[0]'s duration
 			// whenever a *different* asset's video element loaded, e.g. right
 			// after dropping a second clip onto the timeline.
-			const PLACEHOLDER_END_SEC = 60;
 			const isPlaceholder = (c: (typeof doc.timeline.clips)[number]) =>
 				c.assetId === assetId &&
 				c.sourceStartSec === 0 &&
-				Math.abs((c.sourceEndSec ?? 0) - PLACEHOLDER_END_SEC) < 0.01;
-			if (Math.abs(known - PLACEHOLDER_END_SEC) < 0.01) return;
+				Math.abs((c.sourceEndSec ?? 0) - PLACEHOLDER_DURATION_SEC) < 0.01;
+			if (Math.abs(known - PLACEHOLDER_DURATION_SEC) < 0.01) return;
 			if (!doc.timeline.clips.some(isPlaceholder)) return;
 
 			let shiftSec = 0;
@@ -270,7 +269,7 @@ export function NewEditorShell() {
 					shifted.timelineEndSec = c.timelineEndSec + shiftSec;
 					return shifted;
 				}
-				const delta = known - PLACEHOLDER_END_SEC;
+				const delta = known - PLACEHOLDER_DURATION_SEC;
 				shifted.sourceEndSec = known;
 				shifted.timelineEndSec = shifted.timelineStartSec + known;
 				shiftSec += delta;
