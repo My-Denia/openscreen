@@ -752,6 +752,11 @@ export function TimelinePane({
 	// startClipReorder.
 	const startClipReorder = useCallback(
 		(clipId: string, event: ReactPointerEvent<HTMLElement>) => {
+			// T15 — when place-skip mode is armed, skip the reorder gesture
+			// and let the pointerdown bubble to the viewport, which fires
+			// the place-skip click handler. Stops grab-cursor + reorder
+			// from hijacking the user's intent.
+			if (pendingCutPlacement) return;
 			if (event.button !== 0) return;
 			event.preventDefault();
 			event.stopPropagation();
@@ -809,7 +814,15 @@ export function TimelinePane({
 				},
 			});
 		},
-		[insertionIndexFromClipCenter, isReorderNoop, onMoveClip, onSelectClip, orderedClips, pxPerSec],
+		[
+			insertionIndexFromClipCenter,
+			isReorderNoop,
+			onMoveClip,
+			onSelectClip,
+			orderedClips,
+			pendingCutPlacement,
+			pxPerSec,
+		],
 	);
 
 	// Skip chevron pointerdown → resize the cut's start or end.

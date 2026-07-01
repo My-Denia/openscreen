@@ -57,6 +57,22 @@ body.timeline-placing-cut,
 body.timeline-placing-cut * {
 	cursor: crosshair !important;
 }
+/* T15 — explicit overrides for the cursor states that other modules'
+   rules set on trackBlock and the skip chevrons. The body.* rule
+   above should already cover them via specificity (0,1,1)+!important
+   vs (0,1,0), but CSS modules' handling of `body *` can vary, so we
+   re-assert the placing-cut cursor on the specific elements that
+   otherwise stick at grab / ew-resize. */
+body.timeline-placing-cut .trackBlock,
+body.timeline-placing-cut .trackBlock:active,
+body.timeline-placing-cut .skipControlBtn,
+body.timeline-placing-cut .editIcon,
+body.timeline-placing-cut .clipDelete,
+body.timeline-placing-cut .trackBlock .segment,
+body.timeline-placing-cut .reorderMarker,
+body.timeline-placing-cut .dropMarker {
+	cursor: crosshair !important;
+}
 
 .canvas {
 	position: relative;
