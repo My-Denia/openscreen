@@ -20,7 +20,6 @@ import { LeftPanel, LeftRail, type LeftTab } from "./LeftPanel";
 import {
 	AutoCaptionsModal,
 	CropModal,
-	InsertSourceModal,
 	NewProjectModal,
 	OpenProjectModal,
 	UnsavedChangesModal,
@@ -89,7 +88,6 @@ export function NewEditorShell() {
 	const [captionsOpen, setCaptionsOpen] = useState(false);
 	const [captionsMinW, setCaptionsMinW] = useState(2);
 	const [captionsMaxW, setCaptionsMaxW] = useState(7);
-	const [insertAssetId, setInsertAssetId] = useState<string | null>(null);
 	const [projectSummaries, setProjectSummaries] = useState<AiEditionProjectSummary[]>([]);
 	const seekSeqRef = useRef(0);
 	const initRef = useRef(false);
@@ -291,13 +289,6 @@ export function NewEditorShell() {
 		[setCurrentTime],
 	);
 
-	const handleReplaceTimeline = useCallback(
-		(intervals: Array<{ startSec: number; endSec: number }>, reason: string) => {
-			void replaceTimeline(intervals, reason);
-		},
-		[replaceTimeline],
-	);
-
 	const handleTranscribe = useCallback(async () => {
 		if (!document || !document.project.primaryAssetId) return;
 		const assetId = document.project.primaryAssetId;
@@ -495,10 +486,6 @@ export function NewEditorShell() {
 		setExportOpen(true);
 	}, [hasAsset]);
 
-	const handlePreviewSource = useCallback((sec: number) => {
-		setSeekTarget({ timeSec: sec, isSource: true, requestId: ++seekSeqRef.current });
-	}, []);
-
 	const handleOpenSettings = useCallback(() => {
 		openShortcutsConfig();
 	}, [openShortcutsConfig]);
@@ -563,30 +550,6 @@ export function NewEditorShell() {
 			toast.success("Region copied");
 		}
 	}, [tl]);
-
-	const handleDropOnTimeline = useCallback((e: React.DragEvent) => {
-		e.preventDefault();
-		const assetId = e.dataTransfer.getData("application/x-axcut-asset");
-		if (assetId) setInsertAssetId(assetId);
-	}, []);
-
-	const handleInsertBefore = useCallback(async () => {
-		if (!insertAssetId) return;
-		setInsertAssetId(null);
-		await tl.addClipBefore(insertAssetId);
-	}, [insertAssetId, tl]);
-
-	const handleInsertAfter = useCallback(async () => {
-		if (!insertAssetId) return;
-		setInsertAssetId(null);
-		await tl.addClipAfter(insertAssetId);
-	}, [insertAssetId, tl]);
-
-	const handleInsertSplit = useCallback(async () => {
-		if (!insertAssetId) return;
-		setInsertAssetId(null);
-		await tl.splitAndInsert(insertAssetId, currentTimeSec);
-	}, [insertAssetId, currentTimeSec, tl]);
 
 	const handleCaptions = useCallback(() => {
 		if (!document?.project.primaryAssetId) {
@@ -803,14 +766,7 @@ export function NewEditorShell() {
 				}}
 			/>
 
-			<main
-				className={styles.workbench}
-				onDragOver={(e) => {
-					e.preventDefault();
-					e.dataTransfer.dropEffect = "copy";
-				}}
-				onDrop={handleDropOnTimeline}
-			>
+			<main className={styles.workbench}>
 				{/* Left rail */}
 				<LeftRail active={leftTab} onChange={setLeftTab} />
 
@@ -887,8 +843,7 @@ export function NewEditorShell() {
 					clips={clips}
 					currentTimeSec={currentTimeSec}
 					sourceDurationSec={sourceDurationSec}
-					onPreviewSource={handlePreviewSource}
-					onReplaceTimeline={handleReplaceTimeline}
+					onSeek={handleSeek}
 					zoomRegions={tl.zoomRegions}
 					skipRanges={tl.skipRanges}
 					annotationRegions={tl.annotationRegions}
@@ -943,17 +898,6 @@ export function NewEditorShell() {
 				onMinWords={setCaptionsMinW}
 				onMaxWords={setCaptionsMaxW}
 				onGenerate={handleGenerateCaptions}
-			/>
-			<InsertSourceModal
-				open={insertAssetId !== null}
-				onClose={() => setInsertAssetId(null)}
-				assetLabel={document?.assets.find((a) => a.id === insertAssetId)?.label ?? ""}
-				canAddBefore
-				canAddAfter
-				canSplit={document !== null}
-				onAddBefore={() => void handleInsertBefore()}
-				onAddAfter={() => void handleInsertAfter()}
-				onSplit={() => void handleInsertSplit()}
 			/>
 		</div>
 	);

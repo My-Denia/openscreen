@@ -1,242 +1,243 @@
+/* Multi-clip track view — mirrors design/openscreen-editor.html .tracks-wrapper.
+   Each clip is a flex-grown block sized by its timeline duration. */
+
 .pane {
-	display: grid;
-	grid-template-rows: 1fr auto;
-	gap: 4px;
-	padding: 4px 0 0;
-	background: var(--bg);
-	border-top: 1px solid var(--border);
-	min-height: 0;
-	height: 100%;
-	overflow: hidden;
 	position: relative;
-}
-
-.viewport {
-	position: relative;
-	overflow-x: auto;
-	overflow-y: hidden;
-	min-height: 0;
-	cursor: crosshair;
-	user-select: none;
-	border-bottom: 1px solid var(--border-soft);
-}
-.viewport.panning {
-	cursor: grabbing;
-}
-.viewport.scrubbing {
-	cursor: grabbing;
-}
-
-.canvas {
-	position: relative;
-	min-height: 100%;
-}
-
-.ruler {
-	position: relative;
-	border-bottom: 1px solid var(--border);
-	overflow: hidden;
-	height: 22px;
-}
-
-.tick {
-	position: absolute;
-	top: 0;
-	bottom: 0;
-	width: 1px;
-	background: var(--border);
-}
-.tickMajor {
-	background: var(--muted-foreground);
-}
-.tickMajor span {
-	position: absolute;
-	top: 4px;
-	left: 4px;
-	font-size: 0.625rem;
-	color: var(--muted-foreground);
-	white-space: nowrap;
-}
-
-.trackLane {
-	position: relative;
-	height: 36px;
-	padding: 4px 0;
-	margin-top: 2px;
-}
-
-.segment {
-	position: absolute;
-	top: 0;
-	bottom: 0;
-	border-radius: 0.25rem;
-	display: flex;
-	align-items: center;
-	overflow: hidden;
-}
-.kept {
-	background: hsl(var(--accent) / 0.25);
-	border: 1px solid hsl(var(--accent) / 0.4);
-}
-.kept.active {
-	background: hsl(var(--accent) / 0.45);
-	border-color: hsl(var(--accent) / 0.7);
-}
-.cut {
-	background: hsl(var(--danger) / 0.16);
-	border: 1px dashed hsl(var(--danger) / 0.5);
-}
-.cut.active {
-	background: hsl(var(--danger) / 0.3);
-}
-
-.segmentLabel {
 	display: flex;
 	flex-direction: column;
-	gap: 0.125rem;
-	padding: 0 0.5rem;
-	font-size: 0.625rem;
-	color: var(--card-foreground);
-	white-space: nowrap;
-	overflow: hidden;
-}
-.segmentLabel small {
-	color: var(--muted-foreground);
+	min-height: 0;
+	height: 100%;
+	gap: 6px;
 }
 
-.cutHandle {
+/* ── ruler ─────────────────────────────────────────────────────────── */
+.ruler {
+	position: relative;
+	flex: 0 0 auto;
+	height: 22px;
+	user-select: none;
+	cursor: text;
+}
+.rulerTick {
 	position: absolute;
 	top: 0;
-	bottom: 0;
-	width: 8px;
-	background: var(--destructive);
-	opacity: 0.6;
-	border: none;
-	cursor: ew-resize;
+	transform: translateX(-1px);
+	font-family: var(--font-mono);
+	font-size: 11px;
+	font-weight: 500;
+	letter-spacing: 0.02em;
+	color: var(--muted);
+	white-space: nowrap;
 }
-.cutHandle:hover {
-	opacity: 1;
-}
-.handleStart {
+.rulerTick::before {
+	content: "";
+	position: absolute;
 	left: 0;
-	border-radius: 0.25rem 0 0 0.25rem;
-}
-.handleEnd {
-	right: 0;
-	border-radius: 0 0.25rem 0.25rem 0;
+	bottom: -4px;
+	width: 2px;
+	height: 4px;
+	background: var(--border-hi);
 }
 
-.cutDelete {
-	position: absolute;
-	top: 2px;
-	right: 12px;
+/* ── tracks ────────────────────────────────────────────────────────── */
+.tracksWrapper {
+	position: relative;
+	display: flex;
+	gap: 4px;
+	flex: 1;
+	min-height: 0;
+	align-items: stretch;
+}
+
+.trackBlock {
+	position: relative;
+	flex-basis: 0;
+	flex-shrink: 1;
+	min-width: 68px;
+	display: flex;
+	flex-direction: column;
+	background: var(--surface-2);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	box-shadow: var(--elev-card-soft);
+	cursor: grab;
+	overflow: hidden;
+	transition:
+		border-color var(--motion-fast) var(--ease),
+		box-shadow var(--motion-fast) var(--ease);
+}
+.trackBlock:hover {
+	border-color: var(--border-hi);
+}
+.trackBlock:active {
+	cursor: grabbing;
+}
+.trackBlock.selected {
+	border-color: var(--accent);
+	box-shadow: 0 0 0 1px var(--accent), 0 4px 12px -4px var(--accent-soft);
+}
+
+.trackVisual {
+	flex: 0 0 auto;
+	height: 26px;
+	display: flex;
+	overflow: hidden;
+	background: var(--surface);
+	border-bottom: 1px solid var(--border);
+}
+.segment {
+	height: 100%;
+	flex-basis: 0;
+}
+.segment.keep {
+	background: transparent;
+}
+.segment.cut {
+	background-color: var(--accent-wash);
+	background-image: repeating-linear-gradient(
+		45deg,
+		color-mix(in srgb, var(--accent) 32%, transparent) 0,
+		color-mix(in srgb, var(--accent) 32%, transparent) 8px,
+		transparent 8px,
+		transparent 16px
+	);
+}
+
+.trackInfo {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px 12px;
+	overflow: hidden;
+}
+.editIcon {
+	flex: 0 0 auto;
+	width: 30px;
+	height: 30px;
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	width: 18px;
-	height: 18px;
-	border-radius: 0.25rem;
-	border: none;
-	background: var(--destructive);
-	color: white;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	color: var(--fg);
+	box-shadow: var(--elev-card-soft);
 	cursor: pointer;
-	opacity: 0.7;
+	transition:
+		border-color var(--motion-fast) var(--ease),
+		color var(--motion-fast) var(--ease);
 }
-.cutDelete:hover {
+.editIcon:hover {
+	border-color: var(--accent);
+	color: var(--accent);
+}
+.trackText {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+	flex: 1;
+}
+.trackTitle {
+	margin: 0;
+	font-size: 13px;
+	font-weight: 500;
+	letter-spacing: -0.005em;
+	color: var(--fg);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.trackSubtitle {
+	margin: 0;
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	letter-spacing: 0.02em;
+	color: var(--muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.trackSubtitle span {
+	margin: 0 4px;
+	color: var(--dim);
+}
+.clipDelete {
+	flex: 0 0 auto;
+	width: 26px;
+	height: 26px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: transparent;
+	border: 0;
+	border-radius: var(--r-sm);
+	color: var(--muted);
+	cursor: pointer;
+	opacity: 0;
+	transition:
+		background var(--motion-fast) var(--ease),
+		color var(--motion-fast) var(--ease),
+		opacity var(--motion-fast) var(--ease);
+}
+.trackBlock:hover .clipDelete,
+.trackBlock.selected .clipDelete {
 	opacity: 1;
+}
+.clipDelete:hover {
+	background: var(--danger-soft);
+	color: var(--danger);
+}
+
+/* ── drop marker + playhead ────────────────────────────────────────── */
+.dropMarker {
+	flex: 0 0 2px;
+	align-self: stretch;
+	background: var(--accent);
+	border-radius: 2px;
+	box-shadow: 0 0 6px var(--accent-soft);
 }
 
 .playhead {
 	position: absolute;
-	top: 0;
+	top: -6px;
 	bottom: 0;
 	width: 2px;
-	background: hsl(var(--accent));
+	background: var(--accent);
 	z-index: 10;
 	pointer-events: none;
 }
+.playhead::before {
+	content: "";
+	position: absolute;
+	top: 0;
+	left: -3px;
+	width: 8px;
+	height: 8px;
+	background: var(--accent);
+	transform: rotate(45deg);
+}
 
+/* ── empty state ───────────────────────────────────────────────────── */
 .empty {
+	flex: 1;
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	height: 100%;
-	color: var(--muted-foreground);
-	font-size: 0.8125rem;
+	border: 1.5px dashed var(--border-hi);
+	border-radius: var(--r-md);
+	color: var(--muted);
+	font-size: 12.5px;
+	text-align: center;
+	padding: 16px;
+	transition:
+		border-color var(--motion-fast) var(--ease),
+		color var(--motion-fast) var(--ease);
 }
-
-/* Bottom row inside TimelinePane: navigator + fit button. */
-.fitButton {
-	position: absolute;
-	right: 8px;
-	bottom: 4px;
-	padding: 2px 8px;
-	border-radius: var(--r-xs);
-	border: 1px solid var(--border);
-	background: var(--bg);
-	color: var(--muted-foreground, var(--muted));
-	font-size: 0.6875rem;
-	cursor: pointer;
-	z-index: 3;
-}
-.fitButton:disabled {
-	opacity: 0.5;
-	cursor: not-allowed;
-}
-
-.navigator {
-	position: relative;
-	height: 18px;
-	margin: 0 8px 4px 8px;
-	border-radius: var(--r-xs);
-	background: var(--bg);
-	border: 1px solid var(--border);
-	overflow: hidden;
-	cursor: pointer;
-}
-.navigator.navigating {
-	cursor: grabbing;
-}
-
-.navigatorContent {
-	position: absolute;
-	inset: 0;
-}
-
-.navigatorCut {
-	position: absolute;
-	top: 3px;
-	bottom: 3px;
-	background: hsl(var(--danger) / 0.5);
-	opacity: 0.5;
-	border-radius: 2px;
-}
-
-.navigatorWindow {
-	position: absolute;
-	top: 0;
-	bottom: 0;
-	background: hsl(var(--accent) / 0.3);
-	border: 1px solid hsl(var(--accent));
-	border-radius: 2px;
-	cursor: grab;
-}
-.navigatorWindow:active {
-	cursor: grabbing;
-}
-
-.navigatorHandle {
-	position: absolute;
-	top: 0;
-	bottom: 0;
-	width: 4px;
-	background: hsl(var(--accent));
-	border-radius: 1px;
-	cursor: ew-resize;
-}
-.navigatorHandle.start {
-	left: -2px;
-}
-.navigatorHandle.end {
-	right: -2px;
+.empty[data-drop-active="true"] {
+	border-color: var(--accent);
+	color: var(--accent);
+	background: var(--accent-wash);
 }

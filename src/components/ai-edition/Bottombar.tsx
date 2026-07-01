@@ -31,11 +31,7 @@ interface BottombarProps {
 	clips: AxcutClip[];
 	currentTimeSec: number;
 	sourceDurationSec: number;
-	onPreviewSource: (sec: number) => void;
-	onReplaceTimeline: (
-		intervals: Array<{ startSec: number; endSec: number }>,
-		reason: string,
-	) => void;
+	onSeek: (timelineSec: number) => void;
 	zoomRegions: AxcutDocument["zoomRanges"];
 	skipRanges: AxcutDocument["timeline"]["skipRanges"];
 	annotationRegions: AnnotationRegion[];
@@ -75,9 +71,9 @@ export function Bottombar({
 	clips,
 	currentTimeSec,
 	sourceDurationSec,
-	onPreviewSource,
-	onReplaceTimeline,
+	onSeek,
 	zoomRegions,
+	skipRanges,
 	annotationRegions,
 	speedRegions,
 	selection,
@@ -97,8 +93,8 @@ export function Bottombar({
 	const [editClipTarget, setEditClipTarget] = useState<AxcutClip | null>(null);
 	const safeDuration = Math.max(sourceDurationSec, 0.001);
 	const firstClip = clips[0] ?? null;
-	const firstClipAsset = firstClip
-		? (tl.assets.find((a) => a.id === firstClip.assetId) ?? null)
+	const editClipAsset = editClipTarget
+		? (tl.assets.find((a) => a.id === editClipTarget.assetId) ?? null)
 		: null;
 	return (
 		<footer className={styles.bottombar} aria-label="Timeline and properties">
@@ -292,10 +288,16 @@ export function Bottombar({
 					<div className="timelinePaneWrap" style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
 						<TimelinePane
 							clips={clips}
+							assets={tl.assets}
+							skipRanges={skipRanges}
 							currentTimeSec={currentTimeSec}
-							sourceDurationSec={sourceDurationSec}
-							onPreviewSource={onPreviewSource}
-							onReplaceTimeline={onReplaceTimeline}
+							selectedClipId={tl.clipSelection}
+							onSelectClip={tl.selectClip}
+							onSeek={onSeek}
+							onInsertAsset={(assetId, index) => void tl.insertClipAt(assetId, index)}
+							onMoveClip={(clipId, toIndex) => void tl.moveClip(clipId, toIndex)}
+							onEditClip={(clip) => setEditClipTarget(clip)}
+							onRemoveClip={(clipId) => void tl.removeClip(clipId)}
 						/>
 					</div>
 				</div>
@@ -323,8 +325,8 @@ export function Bottombar({
 				onClose={() => setEditClipTarget(null)}
 				clip={editClipTarget}
 				assetMeta={
-					firstClipAsset
-						? { label: firstClipAsset.label, durationSec: firstClipAsset.durationSec }
+					editClipAsset
+						? { label: editClipAsset.label, durationSec: editClipAsset.durationSec }
 						: null
 				}
 				onSave={(patch: EditClipPatch) => {

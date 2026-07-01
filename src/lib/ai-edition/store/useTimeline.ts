@@ -16,12 +16,30 @@ interface RegionHandle {
 	id: string;
 }
 
+type Clip = AxcutDocument["timeline"]["clips"][number];
+
+// Lay clips back-to-back from t=0, preserving each clip's own length. Called
+// after any structural change (insert / move / remove) so the timeline never
+// has gaps or overlaps between clips.
+function resequenceClips(clips: Clip[]): Clip[] {
+	let cursor = 0;
+	return clips.map((c) => {
+		const timelineLen = c.timelineEndSec - c.timelineStartSec;
+		const sourceLen = (c.sourceEndSec ?? 0) - c.sourceStartSec;
+		const len = Math.max(0.001, timelineLen > 0 ? timelineLen : sourceLen);
+		const next = { ...c, timelineStartSec: cursor, timelineEndSec: cursor + len };
+		cursor += len;
+		return next;
+	});
+}
+
 export function useTimeline() {
 	const document = useProjectStore((s) => s.document);
 	const projectId = useProjectStore((s) => s.projectId);
 	const currentTimeSec = useProjectStore((s) => s.currentTimeSec);
 	const saveDocument = useProjectStore((s) => s.saveDocument);
 	const [selection, setSelection] = useState<RegionHandle | null>(null);
+	const [clipSelection, setClipSelection] = useState<string | null>(null);
 
 	const hasDoc = document !== null && projectId !== null;
 
@@ -342,6 +360,74 @@ export function useTimeline() {
 		[document, saveDocument, addClipAfter],
 	);
 
+	// Insert a new full-duration clip for `assetId` at position `index`
+	// (0 = before all, clips.length = after all), then resequence.
+	const insertClipAt = useCallback(
+		async (assetId: string, index: number) => {
+			if (!document) return;
+			const asset = document.assets.find((a) => a.id === assetId);
+			if (!asset) return;
+			const duration = asset.durationSec ?? 30;
+			const newClip: Clip = {
+				id: createId("clip"),
+				assetId,
+				sourceStartSec: 0,
+				sourceEndSec: duration,
+				timelineStartSec: 0,
+				timelineEndSec: duration,
+				wordRefs: [],
+				origin: "user",
+				reason: "Inserted from media panel",
+			};
+			const arr = [...document.timeline.clips];
+			const at = Math.max(0, Math.min(arr.length, index));
+			arr.splice(at, 0, newClip);
+			const next: AxcutDocument = {
+				...document,
+				timeline: { ...document.timeline, clips: resequenceClips(arr) },
+			};
+			await saveDocument(next);
+			setClipSelection(newClip.id);
+		},
+		[document, saveDocument],
+	);
+
+	// Reorder a clip to a new index, then resequence timeline positions.
+	const moveClip = useCallback(
+		async (clipId: string, toIndex: number) => {
+			if (!document) return;
+			const arr = [...document.timeline.clips];
+			const from = arr.findIndex((c) => c.id === clipId);
+			if (from === -1) return;
+			const [moved] = arr.splice(from, 1);
+			const at = Math.max(0, Math.min(arr.length, toIndex));
+			arr.splice(at, 0, moved);
+			const next: AxcutDocument = {
+				...document,
+				timeline: { ...document.timeline, clips: resequenceClips(arr) },
+			};
+			await saveDocument(next);
+		},
+		[document, saveDocument],
+	);
+
+	const removeClip = useCallback(
+		async (clipId: string) => {
+			if (!document) return;
+			const arr = document.timeline.clips.filter((c) => c.id !== clipId);
+			const next: AxcutDocument = {
+				...document,
+				timeline: { ...document.timeline, clips: resequenceClips(arr) },
+			};
+			await saveDocument(next);
+			if (clipSelection === clipId) setClipSelection(null);
+		},
+		[document, clipSelection, saveDocument],
+	);
+
+	const selectClip = useCallback((id: string) => setClipSelection(id), []);
+	const clearClipSelection = useCallback(() => setClipSelection(null), []);
+
 	const speedRegions = hasDoc
 		? (((document.legacyEditor as Record<string, unknown> | null)?.speedRegions as Array<{
 				id: string;
@@ -356,9 +442,11 @@ export function useTimeline() {
 		skipRanges: document?.timeline.skipRanges ?? [],
 		annotationRegions: (document?.annotations ?? []) as unknown as AnnotationRegion[],
 		speedRegions,
+		clips: document?.timeline.clips ?? [],
 		assets: document?.assets ?? [],
 		hasDoc,
 		selection,
+		clipSelection,
 		addZoom,
 		addSkip,
 		addAnnotation,
@@ -370,5 +458,10 @@ export function useTimeline() {
 		addClipAfter,
 		editClip,
 		splitAndInsert,
+		insertClipAt,
+		moveClip,
+		removeClip,
+		selectClip,
+		clearClipSelection,
 	};
 }
