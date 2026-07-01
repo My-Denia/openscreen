@@ -313,6 +313,76 @@
 	z-index: 30;
 }
 
+/* T15 — Place-skip preview marker: 1s-wide red-tinted strip at the
+   cursor's source time. Indicates where the next click would land. */
+.placementMarker {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 12px;
+	margin-left: -6px;
+	background: color-mix(in oklch, var(--danger) 50%, transparent);
+	border-left: 2px solid var(--danger);
+	border-right: 2px solid var(--danger);
+	box-shadow: 0 0 8px color-mix(in oklch, var(--danger) 50%, transparent);
+	pointer-events: none;
+	z-index: 12;
+}
+
+/* T14 — Header row above the viewport: clip/skip/total readouts +
+   Place-skip toggle + current timecode. */
+.timelineHeader {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px var(--sp-3) 6px var(--sp-3);
+	border-bottom: 1px solid var(--border-soft);
+	font: 500 11px/1 var(--font-mono);
+	color: var(--muted);
+	flex-shrink: 0;
+}
+.headerStat {
+	letter-spacing: 0.02em;
+}
+.headerDivider {
+	color: var(--dim);
+}
+.headerSpacer {
+	flex: 1 1 auto;
+}
+.headerButton {
+	height: 22px;
+	padding: 0 10px;
+	border: 1px solid var(--border-soft);
+	border-radius: var(--r-sm);
+	background: var(--surface-2);
+	color: var(--fg-2);
+	font: 500 11px/1 var(--font-body);
+	cursor: pointer;
+	transition:
+		background var(--motion-fast) var(--ease),
+		border-color var(--motion-fast) var(--ease);
+}
+.headerButton:hover {
+	background: var(--surface-3);
+	border-color: var(--border-hi);
+}
+.headerButton:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+.headerButtonActive {
+	background: var(--accent-wash);
+	border-color: var(--accent);
+	color: var(--accent);
+}
+.headerTime {
+	font-variant-numeric: tabular-nums;
+	color: var(--fg);
+	min-width: 5ch;
+	text-align: right;
+}
+
 .playhead {
 	position: absolute;
 	top: -6px;

@@ -20,7 +20,7 @@ import {
 } from "react";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
 import { startGlobalPointerDrag } from "@/lib/ai-edition/timeline/pointer-drag";
-import { formatSeconds } from "@/lib/ai-edition/timeline/virtual-preview";
+import { formatSeconds, locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
 import {
 	RegionItem,
 	RegionRow,
@@ -100,6 +100,11 @@ interface TimelinePaneProps {
 	onRemoveClip: (clipId: string) => void;
 	onUpdateSkipRange: (skipId: string, startSec: number, endSec: number) => void;
 	onRemoveSkipRange: (skipId: string) => void;
+	// T15 — Place-skip callback. Bottombar wires this to
+	// tl.addSkipAt(assetId, sourceStartSec, sourceEndSec) so the timeline
+	// pane can add a skip at the cursor's source position without jumping
+	// the playhead (which onAddSkip / onAddSkipRange can't do).
+	onAddSkip?: (assetId: string, sourceStartSec: number, sourceEndSec: number) => void;
 	// T10 — dnd-timeline drag/resize dispatch. Bottombar wires this to the
 	// per-kind updaters (updateZoomSpan / updateAnnotationSpan / etc).
 	onRegionSpanChange: (id: string, span: Span) => void;
@@ -260,6 +265,7 @@ export function TimelinePane({
 	onRemoveClip,
 	onUpdateSkipRange,
 	onRemoveSkipRange,
+	onAddSkip,
 	onRegionSpanChange,
 }: TimelinePaneProps) {
 	const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -277,6 +283,11 @@ export function TimelinePane({
 		endSec: number;
 	} | null>(null);
 	const [dropIndex, setDropIndex] = useState<number | null>(null);
+	// T15 — Place-skip mode. When armed, the viewport cursor becomes
+	// crosshair, the live pendingCutPreviewSec follows the pointer, and the
+	// next click adds a 1s skip via onAddSkip. Esc cancels.
+	const [pendingCutPlacement, setPendingCutPlacement] = useState(false);
+	const [pendingCutPreviewSec, setPendingCutPreviewSec] = useState<number | null>(null);
 	const hideControlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const resizeSequenceRef = useRef(0);
 
@@ -372,8 +383,58 @@ export function TimelinePane({
 			if (hideControlsTimerRef.current) clearTimeout(hideControlsTimerRef.current);
 			document.body.classList.remove("timeline-panning");
 			document.body.classList.remove("timeline-reordering");
+			document.body.classList.remove("timeline-placing-cut");
 		},
 		[],
+	);
+
+	// T15 — Place-skip mode side effects: body cursor class + Esc-to-cancel.
+	useEffect(() => {
+		if (!pendingCutPlacement) {
+			document.body.classList.remove("timeline-placing-cut");
+			return;
+		}
+		document.body.classList.add("timeline-placing-cut");
+		const handleKey = (event: KeyboardEvent) => {
+			if (event.key === "Escape") {
+				setPendingCutPlacement(false);
+				setPendingCutPreviewSec(null);
+			}
+		};
+		window.addEventListener("keydown", handleKey);
+		return () => {
+			document.body.classList.remove("timeline-placing-cut");
+			window.removeEventListener("keydown", handleKey);
+		};
+	}, [pendingCutPlacement]);
+
+	// Auto-disable place-skip if the timeline empties out.
+	useEffect(() => {
+		if (pendingCutPlacement && orderedClips.length === 0) {
+			setPendingCutPlacement(false);
+			setPendingCutPreviewSec(null);
+		}
+	}, [pendingCutPlacement, orderedClips.length]);
+
+	// T15 — Place a 1s skip centered on `centerSec` (timeline time),
+	// landing inside whatever clip the cursor is over. Mirrors axcut's
+	// addCut helper.
+	const addCut = useCallback(
+		(centerSec: number) => {
+			if (orderedClips.length === 0 || !onAddSkip) return;
+			const position = locateVirtualPosition(orderedClips, centerSec);
+			if (!position) return;
+			const clip = position.clip;
+			const clipEnd = clip.sourceEndSec ?? clip.sourceStartSec;
+			const sourceStartSec = clamp(
+				position.sourceTimeSec - 0.5,
+				clip.sourceStartSec,
+				Math.max(clip.sourceStartSec, clipEnd - 0.1),
+			);
+			const sourceEndSec = clamp(position.sourceTimeSec + 0.5, sourceStartSec + 0.1, clipEnd);
+			onAddSkip(clip.assetId, sourceStartSec, sourceEndSec);
+		},
+		[orderedClips, onAddSkip],
 	);
 
 	const showCutControls = useCallback((cutId: string) => {
@@ -615,13 +676,25 @@ export function TimelinePane({
 	// event.stopPropagation() to prevent this from firing.
 	const handleTimelinePointerDown = useCallback(
 		(event: ReactPointerEvent<HTMLDivElement>) => {
+			// T15 — Place-skip mode. A left-click places a 1s skip centered
+			// on the cursor; Esc cancels. Skip buttons / clip bodies stop
+			// propagation so they take precedence.
+			if (pendingCutPlacement && event.button === 0) {
+				const target = event.target as Element | null;
+				if (target?.closest("button, [data-clip-idx]")) return;
+				event.preventDefault();
+				addCut(sourceSecFromClientX(event.clientX));
+				setPendingCutPlacement(false);
+				setPendingCutPreviewSec(null);
+				return;
+			}
 			if (event.altKey || event.button === 1) {
 				startPan(event);
 				return;
 			}
 			startScrub(event);
 		},
-		[startPan, startScrub],
+		[pendingCutPlacement, addCut, sourceSecFromClientX, startPan, startScrub],
 	);
 
 	// T08 — Clip body pointerdown → reorder. 6px move threshold before the
@@ -820,11 +893,27 @@ export function TimelinePane({
 							: styles.viewport
 				}
 				onPointerDown={handleTimelinePointerDown}
+				onPointerMove={
+					pendingCutPlacement
+						? (event) => {
+								// pointerType guards against touch-emulation hover
+								if (event.pointerType === "touch") return;
+								setPendingCutPreviewSec(sourceSecFromClientX(event.clientX));
+							}
+						: undefined
+				}
+				onPointerLeave={() => {
+					if (pendingCutPlacement) setPendingCutPreviewSec(null);
+				}}
 				onDragOver={handleDragOver}
 				onDragLeave={() => setDropIndex(null)}
 				onDrop={handleDrop}
 				onWheel={handleWheel}
-				aria-label="Source timeline. Click and drag to scrub, Alt+drag to pan, Ctrl+wheel to zoom."
+				aria-label={
+					pendingCutPlacement
+						? "Place-skip mode. Click on a clip to drop a 1s cut, or press Esc to cancel."
+						: "Source timeline. Click and drag to scrub, Alt+drag to pan, Ctrl+wheel to zoom."
+				}
 			>
 				{clips.length === 0 ? (
 					<div className={styles.empty} data-drop-active={dropIndex !== null}>
@@ -1117,10 +1206,51 @@ export function TimelinePane({
 									aria-hidden="true"
 								/>
 							) : null}
+							{pendingCutPlacement && pendingCutPreviewSec !== null ? (
+								<div
+									className={styles.placementMarker}
+									style={{
+										left: TIMELINE_START_GUTTER_PX + pendingCutPreviewSec * pxPerSec,
+									}}
+									aria-hidden="true"
+								/>
+							) : null}
 						</div>
 					</div>
 				)}
 			</div>
+			{/* T14 — header row: clip / skip counts, total time, current
+			    time, and the Place-skip toggle. */}
+			<header className={styles.timelineHeader}>
+				<span className={styles.headerStat}>
+					{orderedClips.length} clip{orderedClips.length === 1 ? "" : "s"}
+				</span>
+				<span className={styles.headerDivider}>·</span>
+				<span className={styles.headerStat}>
+					{skipRanges.length} skip{skipRanges.length === 1 ? "" : "s"}
+				</span>
+				<span className={styles.headerDivider}>·</span>
+				<span className={styles.headerStat}>{formatSeconds(virtualDurationSec)} total</span>
+				<span className={styles.headerSpacer} />
+				<button
+					type="button"
+					className={
+						pendingCutPlacement
+							? `${styles.headerButton} ${styles.headerButtonActive}`
+							: styles.headerButton
+					}
+					onClick={() => {
+						setPendingCutPlacement((p) => !p);
+						setPendingCutPreviewSec(null);
+					}}
+					disabled={orderedClips.length === 0}
+					title="Place a 1-second skip where you next click on the timeline (Esc to cancel)"
+					aria-pressed={pendingCutPlacement}
+				>
+					{pendingCutPlacement ? "Click on timeline to place (Esc)" : "Place skip"}
+				</button>
+				<span className={styles.headerTime}>{formatSeconds(currentTimeSec)}</span>
+			</header>
 		</section>
 	);
 }

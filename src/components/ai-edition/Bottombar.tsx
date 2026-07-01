@@ -266,6 +266,7 @@ export function Bottombar({
 							onRemoveClip={(clipId) => void tl.removeClip(clipId)}
 							onUpdateSkipRange={(skipId, s, e) => void tl.updateSkipRange(skipId, s, e)}
 							onRemoveSkipRange={(skipId) => void tl.removeRegion("skip", skipId)}
+							onAddSkip={(assetId, s, e) => void tl.addSkipAt(assetId, s, e)}
 							onRegionSpanChange={(id, span) => handleRegionSpanChange(id, span)}
 							zoom={zoom}
 							visibleStartSec={visibleStartSec}
