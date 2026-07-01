@@ -783,18 +783,20 @@ export function TimelinePane({
 										Math.abs(candidateLeftPx - (baseLeftPx + baseWidthPx)) <= CLIP_JOIN_THRESHOLD_PX
 									);
 								});
-								const joinedLeftPx = hasJoinedPrev ? baseLeftPx - 1 : baseLeftPx;
-								const joinedWidthPx = hasJoinedPrev ? baseWidthPx + 1 : baseWidthPx;
-								const rawSegs = clipSegments(clip, skipRanges);
-								const segs = rawSegs.map((s) => {
-									if (s.kind !== "cut" || s.skipId !== dragPreview?.skipId) return s;
-									return {
-										...s,
-										startSec: dragPreview.startSec,
-										endSec: dragPreview.endSec,
-										len: dragPreview.endSec - dragPreview.startSec,
-									};
-								});
+								// ponytail: clips sit flush with their neighbors; the 1px overlap I shipped
+								// in T09 was the wrong default — user feedback: only SKIPS (cut strips
+								// inside a clip) should overlap, not whole clips. CSS still zeroes the
+								// border-radius/border on the joined sides so adjacent corners blend.
+								const joinedLeftPx = baseLeftPx;
+								const joinedWidthPx = baseWidthPx;
+								const previewedSkips = dragPreview
+									? skipRanges.map((k) =>
+											k.id === dragPreview.skipId
+												? { ...k, startSec: dragPreview.startSec, endSec: dragPreview.endSec }
+												: k,
+										)
+									: skipRanges;
+								const segs = clipSegments(clip, previewedSkips);
 								const segTotal = segs.reduce((m, s) => m + s.len, 0) || 1;
 								const selected = clip.id === selectedClipId;
 								const classes = [styles.trackBlock];
@@ -873,6 +875,15 @@ export function TimelinePane({
 																	className={`${styles.skipControlBtn} ${styles.skipControlDelete}`}
 																	aria-label={`Remove skip ${formatSeconds(s.startSec)}–${formatSeconds(s.endSec)}`}
 																	title="Remove skip"
+																	onPointerDown={(e) => {
+																		// ponytail: stop the clip block's
+																		// startClipReorder from grabbing
+																		// pointer capture and rerouting the
+																		// click up to the block (then
+																		// nowhere). Without this, the trash
+																		// button's onClick never fires.
+																		e.stopPropagation();
+																	}}
 																	onClick={(e) => {
 																		e.stopPropagation();
 																		onRemoveSkipRange(s.skipId);

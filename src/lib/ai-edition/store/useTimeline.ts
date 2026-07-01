@@ -4,9 +4,11 @@
 // (a reasonable default for the user to then resize).
 
 import { useCallback, useState } from "react";
+import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { AnnotationRegion, AnnotationType } from "@/components/video-editor/types";
 import { createId } from "../document/ids";
 import type { AxcutDocument } from "../schema";
+import { probeVideoDuration } from "../timeline/duration";
 import { useProjectStore } from "./projectStore";
 
 type RegionKind = "zoom" | "skip" | "annotation" | "speed";
@@ -476,12 +478,25 @@ export function useTimeline() {
 
 	// Insert a new full-duration clip for `assetId` at position `index`
 	// (0 = before all, clips.length = after all), then resequence.
+	//
+	// ponytail: when the asset has no cached durationSec (e.g., the user
+	// dropped a freshly-imported media card before any preview has loaded),
+	// we probe the file directly via a throwaway <video> element so the
+	// clip lands at the real duration, not the 60s placeholder. Without
+	// this the user sees a 60s block for a 5s recording until the preview
+	// happens to load and the auto-correct fires — which can be flaky in
+	// the browser-shim and racy in the real Electron window.
 	const insertClipAt = useCallback(
 		async (assetId: string, index: number) => {
 			if (!document) return;
 			const asset = document.assets.find((a) => a.id === assetId);
 			if (!asset) return;
-			const duration = asset.durationSec ?? PLACEHOLDER_DURATION_SEC;
+			let duration = asset.durationSec;
+			if (duration == null) {
+				const probed = await probeVideoDuration(toFileUrl(asset.originalPath));
+				if (probed != null) duration = probed;
+			}
+			if (duration == null) duration = PLACEHOLDER_DURATION_SEC;
 			const newClip: Clip = {
 				id: createId("clip"),
 				assetId,
@@ -496,8 +511,15 @@ export function useTimeline() {
 			const arr = [...document.timeline.clips];
 			const at = Math.max(0, Math.min(arr.length, index));
 			arr.splice(at, 0, newClip);
+			// ponytail: persist the probed duration back onto the asset so we
+			// don't re-probe on subsequent inserts / window resizes.
+			const nextAssets =
+				duration !== asset.durationSec && Number.isFinite(duration)
+					? document.assets.map((a) => (a.id === assetId ? { ...a, durationSec: duration } : a))
+					: document.assets;
 			const next: AxcutDocument = {
 				...document,
+				assets: nextAssets,
 				timeline: { ...document.timeline, clips: resequenceClips(arr) },
 			};
 			await saveDocument(next);
