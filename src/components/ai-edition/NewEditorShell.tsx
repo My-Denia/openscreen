@@ -851,6 +851,7 @@ export function NewEditorShell() {
 			{!bottomCollapsed ? (
 				<Bottombar
 					clips={clips}
+					videoSources={videoSources}
 					currentTimeSec={currentTimeSec}
 					sourceDurationSec={sourceDurationSec}
 					onSeek={handleSeek}

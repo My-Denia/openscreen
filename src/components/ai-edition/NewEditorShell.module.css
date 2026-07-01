@@ -1747,6 +1747,11 @@
 	cursor: not-allowed;
 }
 
+/* ─── Edit Clip modal — draggable source-range track ────────────── */
+.editClipRangeDragging {
+	box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
 /* ─── media card (left panel media list) ───────────────────────── */
 .mediaList {
 	list-style: none;

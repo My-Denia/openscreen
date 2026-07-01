@@ -317,6 +317,31 @@ export function useTimeline() {
 		[document, saveDocument],
 	);
 
+	// Axcut-consistent clip trim: only the source range is user-editable (the
+	// Edit Clip dialog's draggable track). Changing it changes the clip's
+	// effective duration, so every clip is resequenced back-to-back afterward —
+	// same invariant as insertClipAt/moveClip/removeClip — instead of leaving
+	// downstream clips at their old timeline positions (which would overlap).
+	const updateClipSourceRange = useCallback(
+		async (clipId: string, sourceStartSec: number, sourceEndSec: number) => {
+			if (!document) return;
+			const clamp = (n: number) => (Number.isFinite(n) ? Math.max(0, n) : 0);
+			const s = clamp(sourceStartSec);
+			const e = clamp(sourceEndSec);
+			const arr = document.timeline.clips.map((c) =>
+				c.id === clipId
+					? { ...c, sourceStartSec: Math.min(s, e), sourceEndSec: Math.max(s, e) }
+					: c,
+			);
+			const next: AxcutDocument = {
+				...document,
+				timeline: { ...document.timeline, clips: resequenceClips(arr) },
+			};
+			await saveDocument(next);
+		},
+		[document, saveDocument],
+	);
+
 	const splitAndInsert = useCallback(
 		async (assetId: string, splitTimeSec: number) => {
 			if (!document) return;
@@ -477,6 +502,7 @@ export function useTimeline() {
 		addClipBefore,
 		addClipAfter,
 		editClip,
+		updateClipSourceRange,
 		splitAndInsert,
 		insertClipAt,
 		moveClip,

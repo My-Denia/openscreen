@@ -16,9 +16,10 @@ import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { formatMs } from "@/lib/ai-edition/timeline/format";
 import { ASPECT_RATIOS, type AspectRatio } from "@/utils/aspectRatioUtils";
-import { EditClipModal, type EditClipPatch } from "./Modals";
+import { EditClipModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
 import { TimelinePane } from "./TimelinePane";
+import type { VideoSource } from "./VirtualPreview";
 
 type RegionKind = "zoom" | "skip" | "annotation" | "speed";
 
@@ -29,6 +30,7 @@ interface RegionHandle {
 
 interface BottombarProps {
 	clips: AxcutClip[];
+	videoSources: VideoSource[];
 	currentTimeSec: number;
 	sourceDurationSec: number;
 	onSeek: (timelineSec: number) => void;
@@ -69,6 +71,7 @@ const ZOOM_LABEL: Record<number, string> = {
 
 export function Bottombar({
 	clips,
+	videoSources,
 	currentTimeSec,
 	sourceDurationSec,
 	onSeek,
@@ -331,8 +334,11 @@ export function Bottombar({
 						? { label: editClipAsset.label, durationSec: editClipAsset.durationSec }
 						: null
 				}
-				onSave={(patch: EditClipPatch) => {
-					if (editClipTarget) void tl.editClip(editClipTarget.id, patch);
+				videoSources={videoSources}
+				onApply={(sourceStartSec, sourceEndSec) => {
+					if (editClipTarget) {
+						void tl.updateClipSourceRange(editClipTarget.id, sourceStartSec, sourceEndSec);
+					}
 				}}
 			/>
 		</footer>
