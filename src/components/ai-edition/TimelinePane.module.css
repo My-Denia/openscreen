@@ -78,6 +78,16 @@
 	pointer-events: none;
 }
 
+.lanesContainer {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 4px 0 2px;
+	border-bottom: 1px solid var(--border-soft);
+	flex-shrink: 0;
+}
+
 .trackLane {
 	position: relative;
 	display: flex;

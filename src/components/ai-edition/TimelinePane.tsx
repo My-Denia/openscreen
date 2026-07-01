@@ -1,4 +1,13 @@
-import { ChevronLeft, ChevronRight, Pencil, Trash2 } from "lucide-react";
+import { type Span } from "dnd-timeline";
+import {
+	ChevronLeft,
+	ChevronRight,
+	MessageSquare,
+	Pencil,
+	Timer,
+	Trash2,
+	ZoomIn,
+} from "lucide-react";
 import {
 	type DragEvent as ReactDragEvent,
 	type PointerEvent as ReactPointerEvent,
@@ -12,6 +21,12 @@ import {
 import type { AxcutClip } from "@/lib/ai-edition/schema";
 import { startGlobalPointerDrag } from "@/lib/ai-edition/timeline/pointer-drag";
 import { formatSeconds } from "@/lib/ai-edition/timeline/virtual-preview";
+import {
+	RegionItem,
+	RegionRow,
+	RegionTimelineProvider,
+	RegionTimelineSurface,
+} from "./RegionTimeline";
 import styles from "./TimelinePane.module.css";
 
 // pxPerSec limits — at zoom=1 the timeline fits the viewport (pxPerSec =
@@ -39,13 +54,45 @@ interface SkipRange {
 	endSec: number;
 }
 
+interface ZoomRegion {
+	id: string;
+	startMs: number;
+	endMs: number;
+	depth?: number;
+	customScale?: number;
+}
+
+interface AnnotationRegion {
+	id: string;
+	startMs: number;
+	endMs: number;
+	textContent?: string;
+}
+
+interface SpeedRegion {
+	id: string;
+	startMs: number;
+	endMs: number;
+	speed: number;
+}
+
+interface RegionSelection {
+	kind: "zoom" | "skip" | "annotation" | "speed";
+	id: string;
+}
+
 interface TimelinePaneProps {
 	clips: AxcutClip[];
 	assets: AssetMeta[];
 	skipRanges: SkipRange[];
+	zoomRegions: ZoomRegion[];
+	annotationRegions: AnnotationRegion[];
+	speedRegions: SpeedRegion[];
+	regionSelection: RegionSelection | null;
 	currentTimeSec: number;
 	selectedClipId: string | null;
 	onSelectClip: (id: string) => void;
+	onSelectRegion: (kind: RegionSelection["kind"], id: string) => void;
 	onSeek: (timelineSec: number) => void;
 	onInsertAsset: (assetId: string, index: number) => void;
 	onMoveClip: (clipId: string, toIndex: number) => void;
@@ -53,6 +100,9 @@ interface TimelinePaneProps {
 	onRemoveClip: (clipId: string) => void;
 	onUpdateSkipRange: (skipId: string, startSec: number, endSec: number) => void;
 	onRemoveSkipRange: (skipId: string) => void;
+	// T10 — dnd-timeline drag/resize dispatch. Bottombar wires this to the
+	// per-kind updaters (updateZoomSpan / updateAnnotationSpan / etc).
+	onRegionSpanChange: (id: string, span: Span) => void;
 }
 
 type KeepSegment = { kind: "keep"; len: number };
@@ -160,6 +210,15 @@ interface RulerTick {
 	major: boolean;
 }
 
+const ZOOM_LABEL: Record<number, string> = {
+	1: "1.25×",
+	2: "1.5×",
+	3: "1.8×",
+	4: "2.2×",
+	5: "3.5×",
+	6: "5×",
+};
+
 function buildRulerTicks(durationSec: number, pxPerSec: number): RulerTick[] {
 	const majorStepSec = chooseTickStep(90 / Math.max(pxPerSec, 0.001));
 	const minorStepSec = majorStepSec / 4;
@@ -176,9 +235,14 @@ export function TimelinePane({
 	clips,
 	assets,
 	skipRanges,
+	zoomRegions,
+	annotationRegions,
+	speedRegions,
+	regionSelection,
 	currentTimeSec,
 	selectedClipId,
 	onSelectClip,
+	onSelectRegion,
 	onSeek,
 	onInsertAsset,
 	onMoveClip,
@@ -186,6 +250,7 @@ export function TimelinePane({
 	onRemoveClip,
 	onUpdateSkipRange,
 	onRemoveSkipRange,
+	onRegionSpanChange,
 }: TimelinePaneProps) {
 	const viewportRef = useRef<HTMLDivElement | null>(null);
 	const resizeRef = useRef<ResizeState | null>(null);
@@ -214,6 +279,9 @@ export function TimelinePane({
 			),
 		[clips],
 	);
+	// T10 — region lanes read totalMs in ms (dnd-timeline uses ms coords).
+	// Equivalent to sourceDuration * 1000.
+	const totalMs = Math.round(sourceDuration * 1000);
 	const virtualDurationSec = useMemo(
 		() => clips.reduce((m, c) => Math.max(m, c.timelineEndSec), 0),
 		[clips],
@@ -762,6 +830,84 @@ export function TimelinePane({
 									{tick.major ? <span>{formatSeconds(tick.timeSec)}</span> : null}
 								</div>
 							))}
+						</div>
+						{/* T10 — region lanes (annotation / speed / zoom). They live
+						    inside the same .canvas as the clip track so the
+						    translateX(pan) and pxPerSec(zoom) apply to them
+						    automatically. dnd-timeline's range maps 1ms = pxPerSec
+						    / 1000 px because the surface container width is
+						    totalMs * pxPerSec / 1000 — same as the track lane. */}
+						<div className={styles.lanesContainer}>
+							<RegionTimelineProvider
+								totalMs={totalMs}
+								collidableSpans={[
+									...zoomRegions.map((z) => ({
+										id: z.id,
+										start: z.startMs,
+										end: z.endMs,
+									})),
+									...speedRegions.map((s) => ({
+										id: s.id,
+										start: s.startMs,
+										end: s.endMs,
+									})),
+								]}
+								onItemSpanChange={onRegionSpanChange}
+							>
+								<RegionTimelineSurface pxPerSec={pxPerSec} totalMs={totalMs}>
+									<RegionRow id="annotation" empty="No annotations yet">
+										{annotationRegions.map((a) => (
+											<RegionItem
+												key={a.id}
+												id={a.id}
+												rowId="annotation"
+												span={{ start: a.startMs, end: a.endMs }}
+												label={a.textContent?.slice(0, 40) || "Annotation"}
+												icon={<MessageSquare size={11} strokeWidth={2} aria-hidden="true" />}
+												selected={
+													regionSelection?.kind === "annotation" && regionSelection.id === a.id
+												}
+												onSelect={() => onSelectRegion("annotation", a.id)}
+												variant="annotation"
+											/>
+										))}
+									</RegionRow>
+									<RegionRow id="speed" empty="Constant speed">
+										{speedRegions.map((s) => (
+											<RegionItem
+												key={s.id}
+												id={s.id}
+												rowId="speed"
+												span={{ start: s.startMs, end: s.endMs }}
+												label={`${s.speed.toFixed(1)}×`}
+												icon={<Timer size={11} strokeWidth={2} aria-hidden="true" />}
+												selected={regionSelection?.kind === "speed" && regionSelection.id === s.id}
+												onSelect={() => onSelectRegion("speed", s.id)}
+												variant="speed"
+											/>
+										))}
+									</RegionRow>
+									<RegionRow id="zoom" empty="No zoom regions">
+										{zoomRegions.map((z) => (
+											<RegionItem
+												key={z.id}
+												id={z.id}
+												rowId="zoom"
+												span={{ start: z.startMs, end: z.endMs }}
+												label={
+													z.customScale
+														? `${z.customScale.toFixed(1)}×`
+														: (ZOOM_LABEL[z.depth ?? 1] ?? "1.8×")
+												}
+												icon={<ZoomIn size={11} strokeWidth={2} aria-hidden="true" />}
+												selected={regionSelection?.kind === "zoom" && regionSelection.id === z.id}
+												onSelect={() => onSelectRegion("zoom", z.id)}
+												variant="zoom"
+											/>
+										))}
+									</RegionRow>
+								</RegionTimelineSurface>
+							</RegionTimelineProvider>
 						</div>
 						<div className={styles.trackLane}>
 							{orderedClips.map((clip, i) => {
