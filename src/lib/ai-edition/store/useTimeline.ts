@@ -11,14 +11,6 @@ import { useProjectStore } from "./projectStore";
 
 type RegionKind = "zoom" | "skip" | "annotation" | "speed";
 
-// Placeholder duration applied to a freshly-inserted clip whose source asset
-// hasn't reported its real duration yet (media drag → drop before the preview
-// video fires `loadedmetadata`). The renderer's handleLoadedMetadata
-// (NewEditorShell) scans for clips sitting at exactly this value and
-// auto-corrects them to the probed duration once metadata arrives, so the
-// timeline ruler, progress bar, and sourceEndSec all stay in sync.
-export const PLACEHOLDER_DURATION_SEC = 60;
-
 interface RegionHandle {
 	kind: RegionKind;
 	id: string;
@@ -282,7 +274,7 @@ export function useTimeline() {
 			if (!document) return;
 			const asset = document.assets.find((a) => a.id === assetId);
 			if (!asset) return;
-			const duration = asset.durationSec ?? PLACEHOLDER_DURATION_SEC;
+			const duration = asset.durationSec ?? 30;
 			const newClip: AxcutDocument["timeline"]["clips"][number] = {
 				id: createId("clip"),
 				assetId,
@@ -316,7 +308,7 @@ export function useTimeline() {
 			if (!document) return;
 			const asset = document.assets.find((a) => a.id === assetId);
 			if (!asset) return;
-			const duration = asset.durationSec ?? PLACEHOLDER_DURATION_SEC;
+			const duration = asset.durationSec ?? 30;
 			const lastEnd = document.timeline.clips.at(-1)?.timelineEndSec ?? 0;
 			const newClip: AxcutDocument["timeline"]["clips"][number] = {
 				id: createId("clip"),
@@ -416,7 +408,7 @@ export function useTimeline() {
 			if (!document) return;
 			const asset = document.assets.find((a) => a.id === assetId);
 			if (!asset) return;
-			const duration = asset.durationSec ?? PLACEHOLDER_DURATION_SEC;
+			const duration = asset.durationSec ?? 30;
 			const targetIdx = document.timeline.clips.findIndex(
 				(c) => c.timelineStartSec <= splitTimeSec && c.timelineEndSec >= splitTimeSec,
 			);
@@ -481,7 +473,7 @@ export function useTimeline() {
 			if (!document) return;
 			const asset = document.assets.find((a) => a.id === assetId);
 			if (!asset) return;
-			const duration = asset.durationSec ?? PLACEHOLDER_DURATION_SEC;
+			const duration = asset.durationSec ?? 30;
 			const newClip: Clip = {
 				id: createId("clip"),
 				assetId,
