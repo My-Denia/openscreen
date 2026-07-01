@@ -298,6 +298,8 @@ export function Bottombar({
 							onMoveClip={(clipId, toIndex) => void tl.moveClip(clipId, toIndex)}
 							onEditClip={(clip) => setEditClipTarget(clip)}
 							onRemoveClip={(clipId) => void tl.removeClip(clipId)}
+							onUpdateSkipRange={(skipId, s, e) => void tl.updateSkipRange(skipId, s, e)}
+							onRemoveSkipRange={(skipId) => void tl.removeRegion("skip", skipId)}
 						/>
 					</div>
 				</div>

@@ -144,6 +144,26 @@ export function useTimeline() {
 		await saveDocument(next);
 	}, [document, currentTimeSec, saveDocument]);
 
+	const updateSkipRange = useCallback(
+		async (skipId: string, startSec: number, endSec: number) => {
+			if (!document) return;
+			const clamp = (n: number) => (Number.isFinite(n) ? Math.max(0, n) : 0);
+			const s = clamp(startSec);
+			const e = clamp(endSec);
+			const next: AxcutDocument = {
+				...document,
+				timeline: {
+					...document.timeline,
+					skipRanges: document.timeline.skipRanges.map((r) =>
+						r.id === skipId ? { ...r, startSec: Math.min(s, e), endSec: Math.max(s, e) } : r,
+					),
+				},
+			};
+			await saveDocument(next);
+		},
+		[document, saveDocument],
+	);
+
 	const removeRegion = useCallback(
 		async (kind: RegionKind, id: string) => {
 			if (!document) return;
@@ -463,5 +483,6 @@ export function useTimeline() {
 		removeClip,
 		selectClip,
 		clearClipSelection,
+		updateSkipRange,
 	};
 }
