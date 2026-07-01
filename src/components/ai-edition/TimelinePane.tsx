@@ -1317,16 +1317,20 @@ export function TimelinePane({
 									aria-hidden="true"
 								/>
 							) : null}
-							{pendingCutPlacement && pendingCutPreviewSec !== null ? (
-								<div
-									className={styles.placementMarker}
-									style={{
-										left: TIMELINE_START_GUTTER_PX + pendingCutPreviewSec * pxPerSec,
-									}}
-									aria-hidden="true"
-								/>
-							) : null}
 						</div>
+						{/* T15 — Place-skip marker is a SIBLING of .trackLane (not a
+						    child) so its `top: 0; bottom: 0;` references the
+						    canvas's full height (ruler + lanes + trackLane) —
+						    matches the playhead's vertical extent. */}
+						{pendingCutPlacement && pendingCutPreviewSec !== null ? (
+							<div
+								className={styles.placementMarker}
+								style={{
+									left: TIMELINE_START_GUTTER_PX + pendingCutPreviewSec * pxPerSec,
+								}}
+								aria-hidden="true"
+							/>
+						) : null}
 					</div>
 				)}
 			</div>
