@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import type { EditorProjectData } from "@/components/video-editor/projectPersistence";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { CropRegion } from "@/components/video-editor/types";
+import { useShortcuts } from "@/contexts/ShortcutsContext";
 import { migrateProjectDataToAxcutDocument } from "@/lib/ai-edition/document/migrate";
 import { transcribeAsset } from "@/lib/ai-edition/document/transcribe";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
@@ -80,6 +81,7 @@ export function NewEditorShell() {
 		resolve: (choice: UnsavedChoice) => void;
 	} | null>(null);
 	const { settings: editorSettings, set: setEditorSettings } = useEditorSettings();
+	const { openConfig: openShortcutsConfig } = useShortcuts();
 	const tl = useTimeline();
 	useUndoRedoShortcuts(() => {
 		// ponytail: placeholder, wire when undo stack merges with history
@@ -498,10 +500,8 @@ export function NewEditorShell() {
 	}, []);
 
 	const handleOpenSettings = useCallback(() => {
-		toast.info(
-			"Open the right rail to access Background, Effects, Layout, Cursor, and Timeline settings.",
-		);
-	}, []);
+		openShortcutsConfig();
+	}, [openShortcutsConfig]);
 
 	const pasteRegion = useCallback(async () => {
 		const doc = useProjectStore.getState().document;
