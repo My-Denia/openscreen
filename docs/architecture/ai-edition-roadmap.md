@@ -88,20 +88,17 @@ Two reference sources were read directly (not from stale docs) to ground this se
 - **Axcut, local WSL clone** (`\\wsl.localhost\Ubuntu\home\etienne\repos\axcut\apps\web\src\components\TimelinePane.tsx`, 1537 lines) — **authoritative**, materially ahead of `github.com/EtienneLescot/axcut` (699 lines, stale). Always read from the WSL path, not GitHub, until the two are reconciled.
 - **OpenScreen `main`**, region drag/resize (`git show main:src/components/video-editor/timeline/{TimelineWrapper,Item,Row}.tsx` + `AnnotationOverlay.tsx`) — deleted from `feat/ai-edition` in the dead-code purge (`a7fbea0`) but still on `main`.
 
-**5.1 — Skip (trim) resize + delete inside a clip block** — *from Axcut's model*
-Axcut renders skip ranges as strips **inside** each clip's own track block (`TimelinePane.tsx:966-1064`, `timeline-clip-skip-row`), not as a separate lane. Each strip: hover reveals `timeline-skip-hover-controls` (chevron-left / trash / chevron-right, `TimelinePane.tsx:1015-1061`) with a `SKIP_CONTROLS_HIDE_DELAY_MS=220` grace period; drag a chevron → `startResizeSkip` (`:507-584`) calls `onUpdateSkipRange(skipId, start, end, reason)`; trash → `onRemoveSkipRange(skipId)`. My current `TimelinePane.tsx` (`clipSegments()`) renders keep/cut segments as **pure visual, no interaction** — this is the gap.
-*Plan:* add hover-revealed controls + drag-resize to the `.segment.cut` blocks in my `TimelinePane.tsx`; add `updateSkipRange`/`removeSkipRange` to `useTimeline.ts` (skip data already exists in `timeline.skipRanges[]`).
+| # | Item | Source | Status | Commit |
+|---|------|--------|--------|--------|
+| 5.1 | Skip (trim) resize + delete inside clip block | Axcut `startResizeSkip` | ✅ done | `7edfe49` |
+| 5.2 | Clip reorder via drag (live insert marker + threshold) | Axcut `startClipReorder` | ⚠ partial — HTML5 `dataTransfer` reorder already in `90b4b3b`; live-marker + threshold port deferred (low value once Ctrl+C/V duplicate works) | — |
+| 5.3 | Clip duplicate Ctrl+C / Ctrl+V | Axcut `:480-505` | ✅ done — extended existing shell-level clipboard handler (`copiedClipId` state) | `2f53b2f` |
+| 5.4 | Edit Clip modal: real preview + draggable range, not numeric inputs | Axcut `ClipEditDialog` | ✅ done — reused `VirtualPreview`, dual-handle draggable range track, Reset/Cancel/Apply | `96787e1` |
+| 5.5 | Zoom / Annotation / Speed regions: drag + resize | OpenScreen `main` `dnd-timeline` provider | ✅ done — `RegionTimeline.tsx` provider + `RegionRow`/`RegionItem`; zoom+speed collision-clamped, annotation free to overlap | `f70b7c4` |
 
-**5.2 — Clip reorder by dragging the clip body** — *from Axcut*
-`startClipReorder` (`:586-653`): pointerdown on the clip body, 6px move threshold (`CLIP_REORDER_THRESHOLD_PX`) before it counts as a drag, live insert-index computed from pointer position, reorder marker shown, `onMoveClip(clipId, insertIndex)` on release. My `TimelinePane.tsx` currently only supports drag via native HTML5 `dataTransfer` (works, but no live insert marker synced to pointer position, no threshold, no Ctrl+C/V duplicate). *Store already has* `moveClip` (added `90b4b3b`) — mostly a UI-interaction port.
+Bonus fix bundled with 5.1: `totalMs` in the lanes previously used `sourceDurationSec`, which only matched timeline time for single-clip projects. Now uses `clips.reduce(timelineEndSec)` — same calc as `TimelinePane` — so the lanes stay in sync.
 
-**5.3 — Clip duplicate (Ctrl+C / Ctrl+V)** — *from Axcut* (`:480-505`). Not in `useTimeline.ts` yet — needs a `duplicateClip(clipId)` op.
-
-**5.4 — Edit Clip modal: real preview + draggable range, not numeric inputs** — *from Axcut's `ClipEditDialog`* (`TimelinePane.tsx:1153-1378`). Embeds a live `<VirtualPreview>` scoped to just that clip, a draggable dual-handle range track (`clip-edit-track`, start/end handles drag via `startDrag`/pointer delta over track width), Reset/Cancel/Apply. My `EditClipModal` (`Modals.tsx`) is numeric-input-only. *Plan:* rebuild using the same pattern, reusing my existing `VirtualPreview.tsx` for the embedded preview.
-
-**5.5 — Zoom / Annotation / Speed regions: can't move or resize** — *from OpenScreen `main`, built on `dnd-timeline` (a `@dnd-kit` wrapper, already a dependency — `package.json:77` — just unused in the new editor).* Old `TimelineEditor.tsx` wraps everything in `<TimelineWrapper>` (dnd-timeline `TimelineContext` provider + custom `clampToNeighbours`/snap-to-edges/collision logic, `main_TimelineWrapper.tsx` at ~545 lines) with `<Row>`/`<Item>` per region (`useRow()`/`useItem()` from `dnd-timeline` supply `setNodeRef`/`listeners`/drag+resize handles for free — the two 8px end-caps in `Item.tsx:109-130` are what `dnd-timeline` recognizes for edge-resize). A single `onItemSpanChange(id, span)` callback fires for both move and resize; `handleItemSpanChange` (`TimelineEditor.tsx:1411-1437`) routes it to the right region-type updater by id lookup. Zoom/trim/speed collide (can't overlap); annotation/blur don't. My new `Bottombar.tsx` `LaneRow` renders pills as **static positioned buttons, no drag/resize at all** — this is the gap, and it's the largest one: needs the `dnd-timeline` provider mounted around the lanes, `Item`/`Row` re-skinned to the new design tokens, and `updateZoomSpan`/`updateAnnotationSpan`/`updateSpeedSpan` added to `useTimeline.ts`.
-
-**Sequencing recommendation:** 5.1 → 5.4 (both extend the clip-track work already merged in `90b4b3b`, moderate scope) before 5.5 (standalone, large — a `dnd-timeline` provider + Item/Row port, comparable in size to the multi-clip timeline rewrite itself).
+**Snap-guide + floating drag tooltip** during region drag/resize are intentionally deferred (P3). The collision-clamp + bounds-clamp logic was ported; visual polish was not.
 
 ### P1 — functional plumbing still to plug
 - **Agent runtime (Phase 6.3/6.4)** — no real tool-calling agent yet. Chat calls the LLM directly (`llm-call.ts`) but the model can't apply timeline ops. Port Axcut's DeepAgentJS tool set → `electron/ai-edition/agent-runtime.ts`, expose `replace_timeline` / cut ops, save a checkpoint before/after. *Files:* `electron/ai-edition/`, `chat-service.ts`.
@@ -120,6 +117,7 @@ Axcut renders skip ranges as strips **inside** each clip's own track block (`Tim
 - **RightPanes header Help buttons** are no-ops (`RightPanes.tsx:48-54`).
 - **Pixel nits:** annotation color default `#ffffff` → `var(--annotation)` (`RightPanelStack.tsx:296`); `.transport .rec[aria-pressed]` hardcoded `#ffffff`; modal backdrop hardcoded `rgba(22,23,29,.55)` → `var(--overlay-dark)`.
 - **i18n:** finish replacing any remaining hardcoded English in `ai-edition/*` with locale keys.
+- **Region drag visual polish:** snap-guide line + floating time tooltip during drag/resize (visual companion to the clamp logic already in `RegionTimeline.tsx`).
 
 ### Deferred / known limitations
 - **Long-recording scrub lag (>30 min)** — proxy MP4 dropped by decision 6; revival = per-asset "Generate proxy" button.
