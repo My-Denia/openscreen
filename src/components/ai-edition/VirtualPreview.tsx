@@ -1,17 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fromFileUrl } from "@/components/video-editor/projectPersistence";
-import type { AxcutClip, AxcutZoomRegion } from "@/lib/ai-edition/schema";
-import { findActiveSpeedRegion, type SpeedRegion } from "@/lib/ai-edition/timeline/speed";
+import type { AxcutClip } from "@/lib/ai-edition/schema";
 import {
 	clampVirtualTime,
 	locateSourcePosition,
 	locateVirtualPosition,
 	totalVirtualDuration,
 } from "@/lib/ai-edition/timeline/virtual-preview";
-import {
-	computeZoomPreviewTransform,
-	IDENTITY_ZOOM_TRANSFORM,
-} from "@/lib/ai-edition/timeline/zoom-preview";
 import { CursorPreviewLayer } from "./CursorPreviewLayer";
 import styles from "./VirtualPreview.module.css";
 
@@ -24,8 +19,6 @@ export interface VideoSource {
 interface VirtualPreviewProps {
 	videoSources: VideoSource[];
 	clips: AxcutClip[];
-	zoomRegions?: AxcutZoomRegion[];
-	speedRegions?: SpeedRegion[];
 	seekTarget?: { timeSec: number; isSource?: boolean; requestId: number } | null;
 	onTimeChange?: (timeSec: number) => void;
 	onLoadedMetadata?: (durationSec: number, assetId: string) => void;
@@ -37,8 +30,6 @@ interface VirtualPreviewProps {
 export function VirtualPreview({
 	videoSources,
 	clips,
-	zoomRegions = [],
-	speedRegions = [],
 	seekTarget,
 	onTimeChange,
 	onLoadedMetadata,
@@ -47,7 +38,6 @@ export function VirtualPreview({
 	onVideoError,
 }: VirtualPreviewProps) {
 	const videoRef = useRef<HTMLVideoElement | null>(null);
-	const videoFrameRef = useRef<HTMLDivElement | null>(null);
 
 	const isProgrammaticSeekRef = useRef(false);
 	const pendingSeekRef = useRef<{ sourceTimeSec: number; play: boolean } | null>(null);
@@ -93,8 +83,6 @@ export function VirtualPreview({
 	virtualTimeSecRef.current = virtualTimeSec;
 	const virtualDurationSecRef = useRef(virtualDurationSec);
 	virtualDurationSecRef.current = virtualDurationSec;
-	const speedRegionsRef = useRef(speedRegions);
-	speedRegionsRef.current = speedRegions;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: re-create the rAF when the active source swaps.
 	useEffect(() => {
 		let raf = 0;
@@ -175,36 +163,9 @@ export function VirtualPreview({
 		(nextTimeSec: number) => {
 			setVirtualTimeSec(nextTimeSec);
 			onTimeChange?.(nextTimeSec);
-			// ponytail: mirrors main's per-frame `video.playbackRate = ...`
-			// (videoEventHandlers.ts) — the browser does the actual time
-			// warping, so this is the only thing speed regions need. No
-			// virtual-timeline remap: a sped-up region still occupies its
-			// original span on the ruler, it's just played through faster.
-			const v = videoRef.current;
-			if (v) {
-				const activeRegion = findActiveSpeedRegion(
-					speedRegionsRef.current,
-					Math.round(nextTimeSec * 1000),
-				);
-				const rate = activeRegion?.speed ?? 1;
-				if (v.playbackRate !== rate) v.playbackRate = rate;
-			}
 		},
 		[onTimeChange],
 	);
-
-	// Apply the zoom-region transform directly to the DOM (bypassing React
-	// render) so it stays in lockstep with the 60 Hz virtual-time updates
-	// above without adding a style-prop re-render on every frame.
-	useEffect(() => {
-		const frame = videoFrameRef.current;
-		if (!frame) return;
-		const transform =
-			zoomRegions.length === 0
-				? IDENTITY_ZOOM_TRANSFORM
-				: computeZoomPreviewTransform(zoomRegions, virtualTimeSec * 1000);
-		frame.style.transform = `translate(${transform.translateXPercent}%, ${transform.translateYPercent}%) scale(${transform.scale})`;
-	}, [zoomRegions, virtualTimeSec]);
 
 	const seekToVirtualTime = useCallback(
 		(nextVirtualTimeSec: number, preservePlayback = false) => {
@@ -266,7 +227,7 @@ export function VirtualPreview({
 	return (
 		<div className={styles.container}>
 			{activeSource ? (
-				<div ref={videoFrameRef} className={styles.videoFrame}>
+				<div className={styles.videoFrame}>
 					<video
 						key={activeSource.src}
 						ref={videoRef}
