@@ -1,11 +1,13 @@
 import { Maximize2, Pause, Play, Repeat, SkipBack, SkipForward } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ZoomFocus } from "@/components/video-editor/types";
-import type { AxcutClip, AxcutZoomRegion } from "@/lib/ai-edition/schema";
+import type { AxcutAnnotationRegion, AxcutClip, AxcutZoomRegion } from "@/lib/ai-edition/schema";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import { EditorEmptyState } from "./EditorEmptyState";
 import styles from "./NewEditorShell.module.css";
 import { PreviewCanvas } from "./PreviewCanvas";
+
+type BlurData = NonNullable<AxcutAnnotationRegion["blurData"]>;
 
 interface PreviewProps {
 	hasProject: boolean;
@@ -16,6 +18,13 @@ interface PreviewProps {
 	selectedZoomRegionId?: string | null;
 	onZoomFocusChange?: (id: string, focus: ZoomFocus) => void;
 	onZoomFocusCommit?: () => void;
+	annotationRegions?: AxcutAnnotationRegion[];
+	selectedAnnotationId?: string | null;
+	onSelectAnnotation?: (id: string) => void;
+	onAnnotationPositionChange?: (id: string, position: { x: number; y: number }) => void;
+	onAnnotationSizeChange?: (id: string, size: { width: number; height: number }) => void;
+	onAnnotationBlurDataChange?: (id: string, blurData: BlurData) => void;
+	onAnnotationCommit?: () => void;
 	seekTarget: { timeSec: number; requestId: number } | null;
 	onTimeChange: (sec: number) => void;
 	onSeek: (sec: number) => void;
@@ -40,6 +49,13 @@ export function Preview({
 	selectedZoomRegionId,
 	onZoomFocusChange,
 	onZoomFocusCommit,
+	annotationRegions,
+	selectedAnnotationId,
+	onSelectAnnotation,
+	onAnnotationPositionChange,
+	onAnnotationSizeChange,
+	onAnnotationBlurDataChange,
+	onAnnotationCommit,
 	seekTarget,
 	onTimeChange,
 	onSeek,
@@ -162,6 +178,13 @@ export function Preview({
 						selectedZoomRegionId={selectedZoomRegionId}
 						onZoomFocusChange={onZoomFocusChange}
 						onZoomFocusCommit={onZoomFocusCommit}
+						annotationRegions={annotationRegions}
+						selectedAnnotationId={selectedAnnotationId}
+						onSelectAnnotation={onSelectAnnotation}
+						onAnnotationPositionChange={onAnnotationPositionChange}
+						onAnnotationSizeChange={onAnnotationSizeChange}
+						onAnnotationBlurDataChange={onAnnotationBlurDataChange}
+						onAnnotationCommit={onAnnotationCommit}
 						seekTarget={seekTarget}
 						onTimeChange={onTimeChange}
 						onSeek={onSeek}

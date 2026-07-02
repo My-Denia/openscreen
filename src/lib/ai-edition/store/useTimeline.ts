@@ -254,6 +254,28 @@ export function useTimeline() {
 		[document, saveDocument],
 	);
 
+	// Drag/resize on the preview overlay (position, size, blur mask edits) — same
+	// live/commit split as updateZoomFocusLive/commitZoomFocus, for the same
+	// reason: local-only writes while dragging, one persisted save on release.
+	const updateAnnotationLive = useCallback(
+		(id: string, patch: Partial<AxcutDocument["annotations"][number]>) => {
+			const doc = useProjectStore.getState().document;
+			if (!doc) return;
+			const next: AxcutDocument = {
+				...doc,
+				annotations: doc.annotations.map((a) => (a.id === id ? { ...a, ...patch } : a)),
+			};
+			setDocument(next);
+		},
+		[setDocument],
+	);
+
+	const commitAnnotationChange = useCallback(async () => {
+		const doc = useProjectStore.getState().document;
+		if (!doc) return;
+		await saveDocument(doc);
+	}, [saveDocument]);
+
 	const updateSpeedSpan = useCallback(
 		async (id: string, startMs: number, endMs: number) => {
 			if (!document) return;
@@ -780,6 +802,8 @@ export function useTimeline() {
 		updateZoomFocusLive,
 		commitZoomFocus,
 		updateAnnotationSpan,
+		updateAnnotationLive,
+		commitAnnotationChange,
 		updateSpeedSpan,
 		// T19 — drives the preview video during skip-edge resize.
 		setCurrentTime: useProjectStore((s) => s.setCurrentTime),

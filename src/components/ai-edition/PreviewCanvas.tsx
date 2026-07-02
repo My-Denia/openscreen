@@ -29,7 +29,7 @@ import type {
 	WebcamMaskShape,
 	ZoomFocus,
 } from "@/components/video-editor/types";
-import type { AxcutClip, AxcutZoomRegion } from "@/lib/ai-edition/schema";
+import type { AxcutAnnotationRegion, AxcutClip, AxcutZoomRegion } from "@/lib/ai-edition/schema";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import {
 	computeCompositeLayout,
@@ -37,10 +37,13 @@ import {
 	type WebcamCompositeLayout,
 } from "@/lib/compositeLayout";
 import { getCssClipPath } from "@/lib/webcamMaskShapes";
+import { AnnotationLayer } from "./AnnotationLayer";
 import styles from "./NewEditorShell.module.css";
 import { type VideoSource, VirtualPreview } from "./VirtualPreview";
 import { WebcamOverlay } from "./WebcamOverlay";
 import { ZoomFocusOverlay } from "./ZoomFocusOverlay";
+
+type BlurData = NonNullable<AxcutAnnotationRegion["blurData"]>;
 
 interface PreviewCanvasProps {
 	videoSources: VideoSource[];
@@ -49,6 +52,13 @@ interface PreviewCanvasProps {
 	selectedZoomRegionId?: string | null;
 	onZoomFocusChange?: (id: string, focus: ZoomFocus) => void;
 	onZoomFocusCommit?: () => void;
+	annotationRegions?: AxcutAnnotationRegion[];
+	selectedAnnotationId?: string | null;
+	onSelectAnnotation?: (id: string) => void;
+	onAnnotationPositionChange?: (id: string, position: { x: number; y: number }) => void;
+	onAnnotationSizeChange?: (id: string, size: { width: number; height: number }) => void;
+	onAnnotationBlurDataChange?: (id: string, blurData: BlurData) => void;
+	onAnnotationCommit?: () => void;
 	seekTarget: { timeSec: number; requestId: number } | null;
 	onTimeChange: (sec: number) => void;
 	onSeek: (sec: number) => void;
@@ -133,10 +143,12 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 		[layout, settings, canvasSize],
 	);
 	const [isPlaying, setIsPlaying] = useState(false);
+	const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
 	const handleVideoElement = useMemo(() => props.onVideoElement, [props.onVideoElement]);
 	const relayIsPlaying = (el: HTMLVideoElement | null) => {
 		handleVideoElement(el);
 		setIsPlaying(!el?.paused);
+		setVideoEl(el);
 	};
 	const relayProps = { ...props, onVideoElement: relayIsPlaying };
 
@@ -195,6 +207,26 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 							isPlaying={isPlaying}
 							onFocusChange={props.onZoomFocusChange}
 							onFocusCommit={props.onZoomFocusCommit}
+						/>
+					) : null}
+					{props.annotationRegions &&
+					props.onSelectAnnotation &&
+					props.onAnnotationPositionChange &&
+					props.onAnnotationSizeChange &&
+					props.onAnnotationBlurDataChange &&
+					props.onAnnotationCommit ? (
+						<AnnotationLayer
+							annotations={props.annotationRegions}
+							selectedAnnotationId={props.selectedAnnotationId ?? null}
+							currentTimeSec={props.currentTimeSec}
+							containerWidth={layout.screenRect.width}
+							containerHeight={layout.screenRect.height}
+							videoElement={videoEl}
+							onSelectAnnotation={props.onSelectAnnotation}
+							onPositionChange={props.onAnnotationPositionChange}
+							onSizeChange={props.onAnnotationSizeChange}
+							onBlurDataChange={props.onAnnotationBlurDataChange}
+							onCommit={props.onAnnotationCommit}
 						/>
 					) : null}
 				</div>
