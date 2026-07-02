@@ -9,9 +9,12 @@ import {
 	Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
+import { parseCustomPlaybackSpeedInput } from "@/components/video-editor/customPlaybackSpeed";
 import {
 	MAX_ZOOM_SCALE,
 	MIN_ZOOM_SCALE,
+	SPEED_OPTIONS,
 	ZOOM_DEPTH_SCALES,
 	type ZoomDepth,
 } from "@/components/video-editor/types";
@@ -183,6 +186,16 @@ function RegionInspector({
 		(_, i) => ZOOM_DEPTH_SCALES[(i + 1) as ZoomDepth] === effectiveZoomScale,
 	);
 
+	const speedValue = selection.kind === "speed" ? ((region as { speed?: number })?.speed ?? 1) : 1;
+	// ponytail: mirrors main's CustomSpeedInput — the text field shows a draft
+	// string, empty whenever the current value exactly matches a preset (so
+	// the input looks "unused" while a preset is active), and only commits on
+	// blur/Enter after validating range via parseCustomPlaybackSpeedInput.
+	const [speedDraft, setSpeedDraft] = useState("");
+	useEffect(() => {
+		setSpeedDraft(SPEED_OPTIONS.some((o) => o.speed === speedValue) ? "" : String(speedValue));
+	}, [speedValue]);
+
 	// ponytail: keep rapid text edits in local state and flush on blur so we
 	// don't push an undo snapshot per keystroke.
 	const annot =
@@ -211,6 +224,30 @@ function RegionInspector({
 			);
 			setDocument({ ...document, annotations: next });
 			void saveDocument({ ...document, annotations: next });
+		},
+		[document, selection.id, setDocument, saveDocument],
+	);
+
+	// Speed regions live outside the schema (`legacyEditor.speedRegions`, see
+	// useTimeline.ts) — same escape hatch pattern, so patch it directly here.
+	const patchSpeed = useCallback(
+		(speed: number) => {
+			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
+			const prev = ((legacy.speedRegions as unknown[]) ?? []) as Array<{
+				id: string;
+				startMs: number;
+				endMs: number;
+				speed: number;
+			}>;
+			const next = {
+				...document,
+				legacyEditor: {
+					...legacy,
+					speedRegions: prev.map((s) => (s.id === selection.id ? { ...s, speed } : s)),
+				},
+			};
+			setDocument(next);
+			void saveDocument(next);
 		},
 		[document, selection.id, setDocument, saveDocument],
 	);
@@ -565,13 +602,73 @@ function RegionInspector({
 						Trim region — drag the handles in the timeline to resize. Press Del to remove the cut.
 					</div>
 				) : region ? (
-					<div
-						style={{ font: "500 12px var(--font-body)", color: "var(--muted)", padding: "0 4px" }}
-					>
-						Speed: {(region as { speed: number }).speed}× ·{" "}
-						{Math.round((region as { startMs: number }).startMs)}ms—
-						{(region as { endMs: number }).endMs}ms
-					</div>
+					<>
+						<div
+							style={{
+								font: "500 11px/1.4 var(--font-mono)",
+								color: "var(--muted)",
+								padding: "0 4px",
+								marginBottom: 8,
+							}}
+						>
+							{Math.round((region as { startMs: number }).startMs)}ms —{" "}
+							{Math.round((region as { endMs: number }).endMs)}ms
+						</div>
+						<Field label={`Speed — ${speedValue}×`}>
+							<div
+								style={{
+									display: "grid",
+									gridTemplateColumns: "repeat(5, 1fr)",
+									gap: 6,
+									marginBottom: 8,
+								}}
+							>
+								{SPEED_OPTIONS.map((option) => (
+									<button
+										type="button"
+										key={option.label}
+										onClick={() => patchSpeed(option.speed)}
+										style={{
+											padding: "6px 4px",
+											border: `1px solid ${speedValue === option.speed ? "var(--accent)" : "var(--border)"}`,
+											borderRadius: 8,
+											background: speedValue === option.speed ? "var(--accent-wash)" : "var(--bg)",
+											color: "var(--fg-2)",
+											font: "500 11px/1 var(--font-mono)",
+											cursor: "pointer",
+										}}
+									>
+										{option.label}
+									</button>
+								))}
+							</div>
+							<input
+								type="text"
+								inputMode="decimal"
+								placeholder={`${speedValue}×`}
+								value={speedDraft}
+								onChange={(e) => setSpeedDraft(e.target.value)}
+								onBlur={() => {
+									const result = parseCustomPlaybackSpeedInput(speedDraft);
+									if (result.status === "valid") patchSpeed(result.speed);
+									else {
+										if (result.status === "too-fast") toast.error("Speed can't exceed 16×.");
+										setSpeedDraft(
+											SPEED_OPTIONS.some((o) => o.speed === speedValue) ? "" : String(speedValue),
+										);
+									}
+								}}
+								onKeyDown={(e) => {
+									if (e.key !== "Enter") return;
+									const result = parseCustomPlaybackSpeedInput(speedDraft);
+									if (result.status === "valid") patchSpeed(result.speed);
+									else if (result.status === "too-fast") toast.error("Speed can't exceed 16×.");
+									e.currentTarget.blur();
+								}}
+								style={{ width: "100%" }}
+							/>
+						</Field>
+					</>
 				) : null}
 				<button
 					type="button"
