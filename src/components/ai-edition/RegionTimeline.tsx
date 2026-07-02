@@ -72,8 +72,7 @@ export function RegionTimelineProvider({
 	const hasOverlap = useCallback(
 		(span: Span, excludeId: string, rowId: string) =>
 			collidableSpans.some(
-				(r) =>
-					r.id !== excludeId && r.rowId === rowId && span.end > r.start && span.start < r.end,
+				(r) => r.id !== excludeId && r.rowId === rowId && span.end > r.start && span.start < r.end,
 			),
 		[collidableSpans],
 	);
@@ -257,7 +256,7 @@ interface RegionItemProps {
 	selected: boolean;
 	/** F2.7 — `additive` is true on shift-click (adds to the multi-selection). */
 	onSelect: (additive: boolean) => void;
-	variant: "zoom" | "annotation" | "speed";
+	variant: "zoom" | "annotation" | "speed" | "skip";
 }
 
 export function RegionItem({
@@ -280,7 +279,9 @@ export function RegionItem({
 			? styles.zoomPill
 			: variant === "speed"
 				? styles.speedPill
-				: styles.annotationPill;
+				: variant === "skip"
+					? styles.skipPill
+					: styles.annotationPill;
 	return (
 		<div
 			ref={setNodeRef}

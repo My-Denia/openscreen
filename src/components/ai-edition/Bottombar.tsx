@@ -16,6 +16,7 @@ import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { suggestZoomRegions } from "@/lib/ai-edition/store/zoomSuggestions";
+import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
 import { ASPECT_RATIOS, type AspectRatio } from "@/utils/aspectRatioUtils";
 import { EditClipModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
@@ -181,7 +182,17 @@ export function Bottombar({
 		if (zoomRegions.some((z) => z.id === id)) void tl.updateZoomSpan(id, span.start, span.end);
 		else if (speedRegions.some((s) => s.id === id))
 			void tl.updateSpeedSpan(id, span.start, span.end);
-		else void tl.updateAnnotationSpan(id, span.start, span.end);
+		else if (skipRanges.some((s) => s.id === id)) {
+			// ponytail: skip spans are edited in timeline (virtual) ms via the
+			// same lane drag/resize as zoom/speed/annotation, but persisted in
+			// source-time seconds (skipRangeSchema) — map back through the
+			// clip the span resolves to.
+			const startPos = locateVirtualPosition(clips, span.start / 1000);
+			const endPos = locateVirtualPosition(clips, span.end / 1000);
+			if (startPos && endPos) {
+				void tl.updateSkipRange(id, startPos.sourceTimeSec, endPos.sourceTimeSec);
+			}
+		} else void tl.updateAnnotationSpan(id, span.start, span.end);
 	};
 	// ponytail: T10 removed the explicit onRemoveRegion prop (region
 	// removal happens via the Del/Bksp shortcut wired in NewEditorShell).
@@ -365,16 +376,6 @@ export function Bottombar({
 							onMoveClip={(clipId, toIndex) => void tl.moveClip(clipId, toIndex)}
 							onEditClip={(clip) => setEditClipTarget(clip)}
 							onRemoveClip={(clipId) => void tl.removeClip(clipId)}
-							onUpdateSkipRange={(skipId, s, e) => void tl.updateSkipRange(skipId, s, e)}
-							onPreviewSource={(timeSec, _assetId) => {
-								// T19 — drive the source-time clock so the preview
-								// video scrubs to the edge being dragged. We don't
-								// rebind the preview's activeSource because that
-								// resets playback; the existing Preview's
-								// seekToSourceTime handles the same-source case.
-								tl.setCurrentTime(timeSec);
-							}}
-							onRemoveSkipRange={(skipId) => void tl.removeRegion("skip", skipId)}
 							onAddSkip={(assetId, s, e) => void tl.addSkipAt(assetId, s, e)}
 							onRegionSpanChange={(id, span) => handleRegionSpanChange(id, span)}
 							zoom={zoom}
