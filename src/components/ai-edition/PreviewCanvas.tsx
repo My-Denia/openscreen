@@ -31,6 +31,7 @@ import type {
 } from "@/components/video-editor/types";
 import type { AxcutAnnotationRegion, AxcutClip, AxcutZoomRegion } from "@/lib/ai-edition/schema";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
+import type { SpeedRegion } from "@/lib/ai-edition/timeline/speed";
 import {
 	computeCompositeLayout,
 	getWebcamLayoutCssBoxShadow,
@@ -49,6 +50,7 @@ interface PreviewCanvasProps {
 	videoSources: VideoSource[];
 	clips: AxcutClip[];
 	zoomRegions?: AxcutZoomRegion[];
+	speedRegions?: SpeedRegion[];
 	selectedZoomRegionId?: string | null;
 	onZoomFocusChange?: (id: string, focus: ZoomFocus) => void;
 	onZoomFocusCommit?: () => void;

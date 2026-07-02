@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ZoomFocus } from "@/components/video-editor/types";
 import type { AxcutAnnotationRegion, AxcutClip, AxcutZoomRegion } from "@/lib/ai-edition/schema";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
+import type { SpeedRegion } from "@/lib/ai-edition/timeline/speed";
 import { EditorEmptyState } from "./EditorEmptyState";
 import styles from "./NewEditorShell.module.css";
 import { PreviewCanvas } from "./PreviewCanvas";
@@ -15,6 +16,7 @@ interface PreviewProps {
 	videoSources: import("./VirtualPreview").VideoSource[];
 	clips: AxcutClip[];
 	zoomRegions?: AxcutZoomRegion[];
+	speedRegions?: SpeedRegion[];
 	selectedZoomRegionId?: string | null;
 	onZoomFocusChange?: (id: string, focus: ZoomFocus) => void;
 	onZoomFocusCommit?: () => void;
@@ -46,6 +48,7 @@ export function Preview({
 	videoSources,
 	clips,
 	zoomRegions,
+	speedRegions,
 	selectedZoomRegionId,
 	onZoomFocusChange,
 	onZoomFocusCommit,
@@ -175,6 +178,7 @@ export function Preview({
 						videoSources={videoSources}
 						clips={clips}
 						zoomRegions={zoomRegions}
+						speedRegions={speedRegions}
 						selectedZoomRegionId={selectedZoomRegionId}
 						onZoomFocusChange={onZoomFocusChange}
 						onZoomFocusCommit={onZoomFocusCommit}

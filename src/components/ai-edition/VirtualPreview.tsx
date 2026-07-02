@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fromFileUrl } from "@/components/video-editor/projectPersistence";
 import type { AxcutClip, AxcutZoomRegion } from "@/lib/ai-edition/schema";
+import { findActiveSpeedRegion, type SpeedRegion } from "@/lib/ai-edition/timeline/speed";
 import {
 	clampVirtualTime,
 	locateSourcePosition,
 	locateVirtualPosition,
 	totalVirtualDuration,
 } from "@/lib/ai-edition/timeline/virtual-preview";
-import { computeZoomPreviewTransform, IDENTITY_ZOOM_TRANSFORM } from "@/lib/ai-edition/timeline/zoom-preview";
+import {
+	computeZoomPreviewTransform,
+	IDENTITY_ZOOM_TRANSFORM,
+} from "@/lib/ai-edition/timeline/zoom-preview";
 import { CursorPreviewLayer } from "./CursorPreviewLayer";
 import styles from "./VirtualPreview.module.css";
 
@@ -21,6 +25,7 @@ interface VirtualPreviewProps {
 	videoSources: VideoSource[];
 	clips: AxcutClip[];
 	zoomRegions?: AxcutZoomRegion[];
+	speedRegions?: SpeedRegion[];
 	seekTarget?: { timeSec: number; isSource?: boolean; requestId: number } | null;
 	onTimeChange?: (timeSec: number) => void;
 	onLoadedMetadata?: (durationSec: number, assetId: string) => void;
@@ -33,6 +38,7 @@ export function VirtualPreview({
 	videoSources,
 	clips,
 	zoomRegions = [],
+	speedRegions = [],
 	seekTarget,
 	onTimeChange,
 	onLoadedMetadata,
@@ -87,6 +93,8 @@ export function VirtualPreview({
 	virtualTimeSecRef.current = virtualTimeSec;
 	const virtualDurationSecRef = useRef(virtualDurationSec);
 	virtualDurationSecRef.current = virtualDurationSec;
+	const speedRegionsRef = useRef(speedRegions);
+	speedRegionsRef.current = speedRegions;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: re-create the rAF when the active source swaps.
 	useEffect(() => {
 		let raf = 0;
@@ -167,6 +175,20 @@ export function VirtualPreview({
 		(nextTimeSec: number) => {
 			setVirtualTimeSec(nextTimeSec);
 			onTimeChange?.(nextTimeSec);
+			// ponytail: mirrors main's per-frame `video.playbackRate = ...`
+			// (videoEventHandlers.ts) — the browser does the actual time
+			// warping, so this is the only thing speed regions need. No
+			// virtual-timeline remap: a sped-up region still occupies its
+			// original span on the ruler, it's just played through faster.
+			const v = videoRef.current;
+			if (v) {
+				const activeRegion = findActiveSpeedRegion(
+					speedRegionsRef.current,
+					Math.round(nextTimeSec * 1000),
+				);
+				const rate = activeRegion?.speed ?? 1;
+				if (v.playbackRate !== rate) v.playbackRate = rate;
+			}
 		},
 		[onTimeChange],
 	);
