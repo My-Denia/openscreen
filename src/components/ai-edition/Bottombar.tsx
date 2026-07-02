@@ -8,7 +8,8 @@ import {
 	WandSparkles,
 	ZoomIn,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import type { AnnotationRegion } from "@/components/video-editor/types";
 import type { AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
@@ -89,6 +90,22 @@ export function Bottombar({
 	const { settings, set } = useEditorSettings();
 	const tl = useTimeline();
 	const [ratioOpen, setRatioOpen] = useState(false);
+	const ratioButtonRef = useRef<HTMLButtonElement | null>(null);
+	// ponytail: `.bottombar` sets `overflow: hidden` to contain the timeline
+	// lanes, which also clips any absolutely-positioned child that escapes
+	// its box -- including this menu. Render it through a portal, positioned
+	// from the button's live viewport rect, so it paints above everything
+	// regardless of ancestor overflow/stacking.
+	const [ratioMenuRect, setRatioMenuRect] = useState<{ left: number; bottom: number } | null>(
+		null,
+	);
+	useEffect(() => {
+		if (!ratioOpen) return;
+		const button = ratioButtonRef.current;
+		if (!button) return;
+		const rect = button.getBoundingClientRect();
+		setRatioMenuRect({ left: rect.left, bottom: window.innerHeight - rect.top + 4 });
+	}, [ratioOpen]);
 	const [editClipTarget, setEditClipTarget] = useState<AxcutClip | null>(null);
 	const firstClip = clips[0] ?? null;
 	// T11 — viewport state lifted from TimelinePane so the navigator strip
@@ -277,6 +294,7 @@ export function Bottombar({
 						</VtBtn>
 						<div style={{ position: "relative" }}>
 							<button
+								ref={ratioButtonRef}
 								type="button"
 								className={styles.ratio}
 								onClick={() => setRatioOpen((v) => !v)}
@@ -286,39 +304,42 @@ export function Bottombar({
 								<span>{RATIO_LABELS[settings.aspectRatio]}</span>
 								<ChevronDown size={10} className="caret" />
 							</button>
-							{ratioOpen ? (
-								<div
-									role="menu"
-									style={{
-										position: "absolute",
-										top: "calc(100% + 4px)",
-										left: 0,
-										minWidth: 120,
-										background: "var(--surface)",
-										border: "1px solid var(--border)",
-										borderRadius: "var(--r-md)",
-										boxShadow: "var(--elev-pop)",
-										padding: 4,
-										zIndex: 60,
-									}}
-								>
-									{ASPECT_RATIOS.map((r) => (
-										<button
-											type="button"
-											key={r}
-											role="menuitem"
-											style={menuItemStyle(r === settings.aspectRatio)}
-											disabled={!hasDoc}
-											onClick={() => {
-												void set({ aspectRatio: r });
-												setRatioOpen(false);
+							{ratioOpen && ratioMenuRect
+								? createPortal(
+										<div
+											role="menu"
+											style={{
+												position: "fixed",
+												left: ratioMenuRect.left,
+												bottom: ratioMenuRect.bottom,
+												minWidth: 120,
+												background: "var(--surface)",
+												border: "1px solid var(--border)",
+												borderRadius: "var(--r-md)",
+												boxShadow: "var(--elev-pop)",
+												padding: 4,
+												zIndex: 1000,
 											}}
 										>
-											{RATIO_LABELS[r]}
-										</button>
-									))}
-								</div>
-							) : null}
+											{ASPECT_RATIOS.map((r) => (
+												<button
+													type="button"
+													key={r}
+													role="menuitem"
+													style={menuItemStyle(r === settings.aspectRatio)}
+													disabled={!hasDoc}
+													onClick={() => {
+														void set({ aspectRatio: r });
+														setRatioOpen(false);
+													}}
+												>
+													{RATIO_LABELS[r]}
+												</button>
+											))}
+										</div>,
+										document.body,
+									)
+								: null}
 						</div>
 					</div>
 					<div className={styles.hintRow}>
