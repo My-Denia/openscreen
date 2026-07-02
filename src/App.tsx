@@ -116,8 +116,7 @@ export default function App() {
 
 	return (
 		<TooltipProvider>
-			{showNotes && <NotesWindow />}
-			{content}
+			{showNotes ? <NotesWindow /> : content}
 			<Toaster theme="dark" />
 		</TooltipProvider>
 	);
