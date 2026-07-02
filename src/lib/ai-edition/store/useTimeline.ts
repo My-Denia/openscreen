@@ -35,6 +35,10 @@ export function useTimeline() {
 	const currentTimeSec = useProjectStore((s) => s.currentTimeSec);
 	const saveDocument = useProjectStore((s) => s.saveDocument);
 	const [selection, setSelection] = useState<RegionHandle | null>(null);
+	// F2.7 — shift-click multi-selection. `selection` stays the inspector's
+	// focused region (the last one clicked); `multiSelection` is the full set
+	// the Delete key operates on.
+	const [multiSelection, setMultiSelection] = useState<RegionHandle[]>([]);
 	const [clipSelection, setClipSelection] = useState<string | null>(null);
 
 	const hasDoc = document !== null && projectId !== null;
@@ -283,15 +287,68 @@ export function useTimeline() {
 			}
 			await saveDocument(next);
 			if (selection?.id === id) setSelection(null);
+			setMultiSelection((prev) => prev.filter((h) => h.id !== id));
 		},
 		[document, selection, saveDocument],
 	);
 
-	const selectRegion = useCallback((kind: RegionKind, id: string) => {
-		setSelection({ kind, id });
-	}, []);
+	// F2.7 — batch removal for multi-selection: one document save (one undo
+	// snapshot) regardless of how many regions are selected.
+	const removeRegions = useCallback(
+		async (handles: RegionHandle[]) => {
+			if (!document || handles.length === 0) return;
+			const zoomIds = new Set(handles.filter((h) => h.kind === "zoom").map((h) => h.id));
+			const skipIds = new Set(handles.filter((h) => h.kind === "skip").map((h) => h.id));
+			const annotationIds = new Set(
+				handles.filter((h) => h.kind === "annotation").map((h) => h.id),
+			);
+			const speedIds = new Set(handles.filter((h) => h.kind === "speed").map((h) => h.id));
+			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
+			const prevSpeed = ((legacy.speedRegions as unknown[]) ?? []).filter(
+				(s) => !speedIds.has((s as { id: string }).id),
+			);
+			const next: AxcutDocument = {
+				...document,
+				zoomRanges: document.zoomRanges.filter(
+					(z) => !zoomIds.has(z.id),
+				) as AxcutDocument["zoomRanges"],
+				annotations: document.annotations.filter((a) => !annotationIds.has(a.id)),
+				timeline: {
+					...document.timeline,
+					skipRanges: document.timeline.skipRanges.filter((s) => !skipIds.has(s.id)),
+				},
+				legacyEditor:
+					speedIds.size > 0 ? { ...legacy, speedRegions: prevSpeed } : document.legacyEditor,
+			};
+			await saveDocument(next);
+			setSelection(null);
+			setMultiSelection([]);
+		},
+		[document, saveDocument],
+	);
 
-	const clearSelection = useCallback(() => setSelection(null), []);
+	const selectRegion = useCallback(
+		(kind: RegionKind, id: string, opts?: { additive?: boolean }) => {
+			const handle = { kind, id };
+			if (opts?.additive) {
+				// Shift-click toggles membership; the focused region follows the click.
+				setMultiSelection((prev) => {
+					const exists = prev.some((h) => h.kind === kind && h.id === id);
+					return exists ? prev.filter((h) => !(h.kind === kind && h.id === id)) : [...prev, handle];
+				});
+				setSelection(handle);
+				return;
+			}
+			setMultiSelection([handle]);
+			setSelection(handle);
+		},
+		[],
+	);
+
+	const clearSelection = useCallback(() => {
+		setSelection(null);
+		setMultiSelection([]);
+	}, []);
 
 	const addClipBefore = useCallback(
 		async (assetId: string) => {
@@ -668,6 +725,7 @@ export function useTimeline() {
 		assets: document?.assets ?? [],
 		hasDoc,
 		selection,
+		multiSelection,
 		clipSelection,
 		addZoom,
 		addSkip,
@@ -675,6 +733,7 @@ export function useTimeline() {
 		addAnnotation,
 		addSpeed,
 		removeRegion,
+		removeRegions,
 		selectRegion,
 		clearSelection,
 		addClipBefore,

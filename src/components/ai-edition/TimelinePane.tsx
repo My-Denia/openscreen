@@ -89,10 +89,12 @@ interface TimelinePaneProps {
 	annotationRegions: AnnotationRegion[];
 	speedRegions: SpeedRegion[];
 	regionSelection: RegionSelection | null;
+	// F2.7 — full shift-click selection set, for multi-select highlighting.
+	regionMultiSelection?: RegionSelection[];
 	currentTimeSec: number;
 	selectedClipId: string | null;
 	onSelectClip: (id: string) => void;
-	onSelectRegion: (kind: RegionSelection["kind"], id: string) => void;
+	onSelectRegion: (kind: RegionSelection["kind"], id: string, additive?: boolean) => void;
 	onSeek: (timelineSec: number) => void;
 	onInsertAsset: (assetId: string, index: number) => void;
 	onMoveClip: (clipId: string, toIndex: number) => void;
@@ -266,6 +268,7 @@ export function TimelinePane({
 	annotationRegions,
 	speedRegions,
 	regionSelection,
+	regionMultiSelection,
 	currentTimeSec,
 	selectedClipId,
 	onSelectClip,
@@ -990,6 +993,12 @@ export function TimelinePane({
 		],
 	);
 
+	// F2.7 — a region is highlighted when it's the focused selection or part
+	// of the shift-click multi-selection.
+	const isRegionSelected = (kind: RegionSelection["kind"], id: string) =>
+		(regionSelection?.kind === kind && regionSelection.id === id) ||
+		(regionMultiSelection?.some((h) => h.kind === kind && h.id === id) ?? false);
+
 	return (
 		<section className={styles.pane}>
 			<div
@@ -1086,10 +1095,8 @@ export function TimelinePane({
 												span={{ start: a.startMs, end: a.endMs }}
 												label={a.textContent?.slice(0, 40) || "Annotation"}
 												icon={<MessageSquare size={11} strokeWidth={2} aria-hidden="true" />}
-												selected={
-													regionSelection?.kind === "annotation" && regionSelection.id === a.id
-												}
-												onSelect={() => onSelectRegion("annotation", a.id)}
+												selected={isRegionSelected("annotation", a.id)}
+												onSelect={(additive) => onSelectRegion("annotation", a.id, additive)}
 												variant="annotation"
 											/>
 										))}
@@ -1103,8 +1110,8 @@ export function TimelinePane({
 												span={{ start: s.startMs, end: s.endMs }}
 												label={`${s.speed.toFixed(1)}×`}
 												icon={<Timer size={11} strokeWidth={2} aria-hidden="true" />}
-												selected={regionSelection?.kind === "speed" && regionSelection.id === s.id}
-												onSelect={() => onSelectRegion("speed", s.id)}
+												selected={isRegionSelected("speed", s.id)}
+												onSelect={(additive) => onSelectRegion("speed", s.id, additive)}
 												variant="speed"
 											/>
 										))}
@@ -1122,8 +1129,8 @@ export function TimelinePane({
 														: (ZOOM_LABEL[z.depth ?? 1] ?? "1.8×")
 												}
 												icon={<ZoomIn size={11} strokeWidth={2} aria-hidden="true" />}
-												selected={regionSelection?.kind === "zoom" && regionSelection.id === z.id}
-												onSelect={() => onSelectRegion("zoom", z.id)}
+												selected={isRegionSelected("zoom", z.id)}
+												onSelect={(additive) => onSelectRegion("zoom", z.id, additive)}
 												variant="zoom"
 											/>
 										))}

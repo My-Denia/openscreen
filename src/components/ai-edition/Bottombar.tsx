@@ -40,6 +40,8 @@ interface BottombarProps {
 	annotationRegions: AnnotationRegion[];
 	speedRegions: Array<{ id: string; startMs: number; endMs: number; speed: number }>;
 	selection: RegionHandle | null;
+	// F2.7 — full shift-click selection set, for multi-select highlighting.
+	multiSelection?: RegionHandle[];
 	hasDoc: boolean;
 	onAddZoom: () => void;
 	onAddAnnotation: () => void;
@@ -49,7 +51,7 @@ interface BottombarProps {
 	// handler live here). The Scissors button in this component calls
 	// togglePlaceSkip directly.
 	setTogglePlaceSkip?: (fn: () => void) => void;
-	onSelectRegion: (kind: RegionKind, id: string) => void;
+	onSelectRegion: (kind: RegionKind, id: string, additive?: boolean) => void;
 	onCaptions: () => void;
 }
 
@@ -74,6 +76,7 @@ export function Bottombar({
 	annotationRegions,
 	speedRegions,
 	selection,
+	multiSelection,
 	hasDoc,
 	onAddZoom,
 	onAddAnnotation,
@@ -352,6 +355,7 @@ export function Bottombar({
 							annotationRegions={annotationRegions}
 							speedRegions={speedRegions}
 							regionSelection={selection}
+							regionMultiSelection={multiSelection}
 							currentTimeSec={currentTimeSec}
 							selectedClipId={tl.clipSelection}
 							onSelectClip={tl.selectClip}
