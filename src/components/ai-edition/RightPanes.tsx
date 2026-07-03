@@ -743,7 +743,18 @@ function TranscriptClipBlock({
 	);
 
 	return (
-		<span style={{ display: "block", marginBottom: 16 }}>
+		<span
+			style={{
+				display: "flex",
+				flexDirection: "column",
+				marginBottom: 16,
+				// ponytail: bound each clip block to the pane height. Combined
+				// with the parent paneBody's overflow-y:auto, only one block
+				// is fully visible at a time and the user scrolls between them.
+				height: "calc(100vh - 220px)",
+				minHeight: 360,
+			}}
+		>
 			<span
 				style={{
 					display: "flex",
@@ -828,11 +839,13 @@ function TranscriptClipBlock({
 						textWrap: "pretty",
 						cursor: "text",
 						outline: "none",
-						// ponytail: bound each clip block's height so the editor
-						// becomes its own scroll container — the auto-scroll
-						// effect scrolls within this block, the parent's
+						// ponytail: the wrapper above is flex-column; the editor
+						// grows to fill whatever height the wrapper leaves after
+						// the header. Combined with overflow-y:auto, the cue
+						// highlight scrolls inside the editor, and the parent
 						// paneBody scrolls across clip blocks.
-						maxHeight: 220,
+						flex: "1 1 auto",
+						minHeight: 0,
 						overflowY: "auto",
 					}}
 				>
