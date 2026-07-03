@@ -957,7 +957,8 @@ export function NewEditorShell() {
 						active={rightPane}
 						onChange={setRightPane}
 						onCrop={() => setCropOpen(true)}
-						transcript={document?.transcript ?? null}
+						transcripts={document?.transcripts ?? []}
+						assets={document?.assets ?? []}
 						clips={clips}
 						currentTimeSec={currentTimeSec}
 						onSeek={handleSeek}

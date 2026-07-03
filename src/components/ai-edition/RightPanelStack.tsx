@@ -20,6 +20,7 @@ import {
 } from "@/components/video-editor/types";
 import type {
 	AxcutAnnotationRegion,
+	AxcutAsset,
 	AxcutClip,
 	AxcutDocument,
 	AxcutTranscript,
@@ -47,7 +48,8 @@ interface RightPanelStackProps {
 	active: RightPaneId;
 	onChange: (id: RightPaneId) => void;
 	onCrop: () => void;
-	transcript: AxcutTranscript | null;
+	transcripts: AxcutTranscript[];
+	assets: AxcutAsset[];
 	clips: AxcutClip[];
 	currentTimeSec: number;
 	onSeek: (sec: number) => void;
@@ -77,7 +79,8 @@ export function RightPanelStack({
 	active,
 	onChange,
 	onCrop,
-	transcript,
+	transcripts,
+	assets,
 	clips,
 	currentTimeSec,
 	onSeek,
@@ -109,7 +112,8 @@ export function RightPanelStack({
 				{active === "background" ? <BackgroundPane /> : null}
 				{active === "transcript" ? (
 					<TranscriptPane
-						transcript={transcript}
+						transcripts={transcripts}
+						assets={assets}
 						clips={clips}
 						currentTimeSec={currentTimeSec}
 						onSeek={onSeek}

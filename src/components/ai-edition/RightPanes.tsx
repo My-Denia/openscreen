@@ -14,15 +14,29 @@ import {
 	Palette,
 	Sliders,
 } from "lucide-react";
-import { type ChangeEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type ChangeEvent,
+	type MouseEvent as ReactMouseEvent,
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import defaultCursorPreviewUrl from "@/assets/cursors/Cursor=Default.svg";
-import type { AxcutClip, AxcutTranscript } from "@/lib/ai-edition/schema";
+import type { AxcutAsset, AxcutClip, AxcutTranscript } from "@/lib/ai-edition/schema";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
+import {
+	buildAggregatedSections,
+	type ClipSection,
+	type ClipWord,
+} from "@/lib/ai-edition/timeline/aggregated-transcript";
+import { formatMs } from "@/lib/ai-edition/timeline/format";
 import { getAssetPath } from "@/lib/assetPath";
 import { CURSOR_THEMES, DEFAULT_CURSOR_THEME_ID } from "@/lib/cursor/cursorThemes";
 import { resolveImageWallpaperUrl, WALLPAPER_PATHS } from "@/lib/wallpaper";
 import styles from "./NewEditorShell.module.css";
-import { TranscriptEditor } from "./TranscriptEditor";
 
 export type RightPaneId =
 	| "background"
@@ -377,10 +391,15 @@ function normaliseHex(raw: string): string | null {
 }
 
 // ─── Transcript ────────────────────────────────────────────────────
+// Aggregated transcript view: one section per clip on the timeline, in
+// timeline order. Each section shows the kept / removed words for that
+// clip's source range, inline trim-duration pills, and filler chips.
+// Mirrors the `Current Transcription` pane in axcut's reference design.
 
 export function TranscriptPane({
-	transcript,
 	clips,
+	transcripts,
+	assets,
 	currentTimeSec,
 	onSeek,
 	onDropWordRange,
@@ -388,8 +407,9 @@ export function TranscriptPane({
 	canTranscribe,
 	isTranscribing,
 }: {
-	transcript: AxcutTranscript | null;
 	clips: AxcutClip[];
+	transcripts: AxcutTranscript[];
+	assets: AxcutAsset[];
 	currentTimeSec: number;
 	onSeek: (sec: number) => void;
 	onDropWordRange: (start: number, end: number) => void;
@@ -397,12 +417,18 @@ export function TranscriptPane({
 	canTranscribe: boolean;
 	isTranscribing: boolean;
 }) {
-	if (!transcript) {
+	const sections = useMemo(
+		() => buildAggregatedSections(clips, transcripts, assets),
+		[clips, transcripts, assets],
+	);
+	const hasAnyTranscript = transcripts.length > 0;
+
+	if (clips.length === 0 || !hasAnyTranscript) {
 		return (
 			<Pane
 				title="Current transcription"
 				icon={<FileText size={14} />}
-				helpText="The transcript of the spoken words, generated on-device by Whisper. Click a word to seek; select a range to cut it from the timeline."
+				helpText="Aggregated transcript of every clip on the timeline, in order. Click a word to seek; select a range to cut it."
 			>
 				<div
 					style={{
@@ -418,7 +444,7 @@ export function TranscriptPane({
 				>
 					<FileText size={28} style={{ color: "var(--dim)" }} />
 					<p style={{ font: "500 13px var(--font-body)", color: "var(--fg-2)" }}>
-						No transcript yet
+						{clips.length === 0 ? "No clips yet" : "No transcript yet"}
 					</p>
 					<p style={{ font: "400 12px var(--font-body)", color: "var(--muted)", maxWidth: 260 }}>
 						Transcribe uses local Whisper — runs in your browser, no data leaves the device.
@@ -435,22 +461,309 @@ export function TranscriptPane({
 			</Pane>
 		);
 	}
+
 	return (
 		<div className={`${styles.pane} ${styles.isActive}`}>
 			<header className={styles.paneHead}>
 				<h2>Current transcription</h2>
 			</header>
 			<div className={styles.paneBody}>
-				<TranscriptEditor
-					transcript={transcript}
-					clips={clips}
-					currentTimeSec={currentTimeSec}
-					onSeek={onSeek}
-					onDropWordRange={onDropWordRange}
-				/>
+				{sections.map((section, idx) => (
+					<ClipTranscriptSection
+						key={section.clip.id}
+						index={idx}
+						section={section}
+						currentTimeSec={currentTimeSec}
+						onSeek={onSeek}
+						onDropWordRange={onDropWordRange}
+					/>
+				))}
 			</div>
 		</div>
 	);
+}
+
+// Per-clip transcript section: head with badge + filename + source range,
+// and a flowing text body. Word click = seek; shift-click + click = range
+// select across words; "Cut" button drops the selected range.
+
+interface ClipTranscriptSectionProps {
+	index: number;
+	section: ClipSection;
+	currentTimeSec: number;
+	onSeek: (sec: number) => void;
+	onDropWordRange: (start: number, end: number) => void;
+}
+
+function ClipTranscriptSection({
+	index,
+	section,
+	currentTimeSec,
+	onSeek,
+	onDropWordRange,
+}: ClipTranscriptSectionProps) {
+	const { clip, asset, words, trims } = section;
+	const [anchorId, setAnchorId] = useState<string | null>(null);
+	const [focusId, setFocusId] = useState<string | null>(null);
+
+	const handleWordClick = useCallback(
+		(event: ReactMouseEvent, wordId: string, startSec: number) => {
+			if (event.shiftKey && anchorId) {
+				setFocusId(wordId);
+			} else {
+				setAnchorId(wordId);
+				setFocusId(wordId);
+				onSeek(startSec);
+			}
+		},
+		[anchorId, onSeek],
+	);
+
+	const selectedRange = useMemo(() => {
+		if (!anchorId || !focusId) return null;
+		const fromIdx = words.findIndex((cw) => cw.word.id === anchorId);
+		const toIdx = words.findIndex((cw) => cw.word.id === focusId);
+		if (fromIdx < 0 || toIdx < 0) return null;
+		const [lo, hi] = fromIdx <= toIdx ? [fromIdx, toIdx] : [toIdx, fromIdx];
+		const slice = words.slice(lo, hi + 1);
+		if (slice.length === 0) return null;
+		return {
+			startSec: Math.min(...slice.map((cw) => cw.word.startSec)),
+			endSec: Math.max(...slice.map((cw) => cw.word.endSec)),
+			count: slice.length,
+		};
+	}, [anchorId, focusId, words]);
+
+	const handleCut = useCallback(() => {
+		if (selectedRange) {
+			onDropWordRange(selectedRange.startSec, selectedRange.endSec);
+			setAnchorId(null);
+			setFocusId(null);
+		}
+	}, [onDropWordRange, selectedRange]);
+
+	const filename = asset?.label ?? clip.assetId;
+	const sourceRangeLabel =
+		clip.sourceEndSec !== undefined
+			? `${formatMs(clip.sourceStartSec * 1000)}—${formatMs(clip.sourceEndSec * 1000)}`
+			: `${formatMs(clip.sourceStartSec * 1000)}—`;
+
+	return (
+		<section style={{ marginBottom: 16 }}>
+			<header
+				style={{
+					display: "flex",
+					alignItems: "center",
+					gap: 10,
+					padding: "0 4px 4px",
+					borderBottom: "1px solid var(--border-soft)",
+					marginBottom: 6,
+				}}
+			>
+				<span
+					style={{
+						width: 22,
+						height: 22,
+						display: "inline-flex",
+						alignItems: "center",
+						justifyContent: "center",
+						background: "var(--accent-soft)",
+						color: "var(--accent)",
+						borderRadius: "var(--r-sm)",
+						font: "700 12px/1 var(--font-mono)",
+						flexShrink: 0,
+					}}
+				>
+					{index + 1}
+				</span>
+				<div style={{ minWidth: 0, flex: 1 }}>
+					<div
+						style={{
+							font: "600 13px/1.2 var(--font-body)",
+							color: "var(--fg)",
+							overflow: "hidden",
+							textOverflow: "ellipsis",
+							whiteSpace: "nowrap",
+						}}
+					>
+						{filename}
+					</div>
+					<div
+						style={{
+							font: "400 11px/1.3 var(--font-mono)",
+							color: "var(--muted)",
+							marginTop: 2,
+						}}
+					>
+						Clip {index + 1} · {sourceRangeLabel}
+					</div>
+				</div>
+				{selectedRange ? (
+					<button
+						type="button"
+						title={`Cut ${selectedRange.count} word${selectedRange.count === 1 ? "" : "s"}`}
+						aria-label={`Cut ${selectedRange.count} word${selectedRange.count === 1 ? "" : "s"}`}
+						onClick={handleCut}
+						style={{
+							display: "inline-flex",
+							alignItems: "center",
+							gap: 4,
+							padding: "3px 8px",
+							border: "1px solid var(--danger)",
+							borderRadius: "var(--r-sm)",
+							background: "var(--danger-soft)",
+							color: "var(--danger)",
+							font: "600 11px/1 var(--font-body)",
+							cursor: "pointer",
+							flexShrink: 0,
+						}}
+					>
+						Cut {formatMs(selectedRange.startSec * 1000)}—{formatMs(selectedRange.endSec * 1000)}
+					</button>
+				) : null}
+			</header>
+			{words.length === 0 ? (
+				<p
+					style={{
+						margin: 0,
+						padding: "4px 4px",
+						font: "400 12px/1.5 var(--font-body)",
+						color: "var(--muted)",
+						fontStyle: "italic",
+					}}
+				>
+					No transcript for this clip — open the asset card and regenerate.
+				</p>
+			) : (
+				<p
+					style={{
+						margin: 0,
+						padding: "0 4px",
+						font: "400 13px/1.65 var(--font-body)",
+						color: "var(--fg)",
+						textWrap: "pretty",
+					}}
+				>
+					{words.map((cw, i) => {
+						const w = cw.word;
+						const isCurrent = currentTimeSec >= w.startSec && currentTimeSec <= w.endSec;
+						const isSelected =
+							anchorId !== null &&
+							focusId !== null &&
+							isWordInRange(w.id, anchorId, focusId, words);
+						return (
+							<span key={w.id}>
+								{i > 0 && shouldGroupWithPrev(words, i, trims) ? " " : null}
+								{isTrimBoundary(i, trims) ? (
+									<span
+										style={{
+											display: "inline-block",
+											margin: "0 4px",
+											padding: "1px 6px",
+											color: "var(--accent)",
+											borderRadius: "var(--r-sm)",
+											font: "500 11px/1.4 var(--font-mono)",
+											verticalAlign: "middle",
+											whiteSpace: "nowrap",
+										}}
+									>
+										{trimDurationAt(i, trims).toFixed(1)}s
+									</span>
+								) : null}
+								<span
+									role="button"
+									tabIndex={0}
+									onClick={(e) => handleWordClick(e, w.id, w.startSec)}
+									onKeyDown={(e) => {
+										if (e.key === "Enter" || e.key === " ") {
+											e.preventDefault();
+											handleWordClick(e as unknown as ReactMouseEvent, w.id, w.startSec);
+										}
+									}}
+									style={{
+										padding: "1px 2px",
+										borderRadius: 3,
+										cursor: "pointer",
+										background: isSelected ? "var(--accent-wash)" : undefined,
+										color: cw.kept ? (isCurrent ? "var(--accent)" : "var(--fg)") : "var(--danger)",
+										fontWeight: cw.kept ? 400 : 600,
+										textDecoration: cw.kept ? "none" : "line-through",
+										textDecorationColor: cw.kept ? undefined : "var(--danger)",
+										opacity: cw.kept ? 1 : 0.85,
+									}}
+								>
+									{cw.filler ? (
+										<span
+											style={{
+												display: "inline-block",
+												padding: "1px 6px",
+												margin: "0 1px",
+												background: "var(--danger-soft)",
+												color: "var(--danger)",
+												borderRadius: "var(--r-sm)",
+												fontWeight: 500,
+											}}
+										>
+											{w.text}
+										</span>
+									) : (
+										w.text
+									)}
+								</span>
+							</span>
+						);
+					})}
+				</p>
+			)}
+		</section>
+	);
+}
+
+// ponytail: collapsed inline helpers — pure data lookups against the
+// precomputed trims array, kept here because they only matter to the JSX
+// above and pulling them into the pure helper file would force React types.
+
+function isWordInRange(
+	wordId: string,
+	anchorId: string,
+	focusId: string,
+	words: ClipWord[],
+): boolean {
+	const fromIdx = words.findIndex((cw) => cw.word.id === anchorId);
+	const toIdx = words.findIndex((cw) => cw.word.id === focusId);
+	if (fromIdx < 0 || toIdx < 0) return false;
+	const [lo, hi] = fromIdx <= toIdx ? [fromIdx, toIdx] : [toIdx, fromIdx];
+	const idx = words.findIndex((cw) => cw.word.id === wordId);
+	return idx >= lo && idx <= hi;
+}
+
+function isTrimBoundary(wordIndex: number, trims: { startWordIndex: number }[]): boolean {
+	return trims.some((t) => t.startWordIndex === wordIndex);
+}
+
+function trimDurationAt(
+	wordIndex: number,
+	trims: { startWordIndex: number; endWordIndex: number; durationSec: number }[],
+): number {
+	const t = trims.find((tr) => tr.startWordIndex === wordIndex);
+	return t?.durationSec ?? 0;
+}
+
+// ponytail: don't double-space across trim pills — words are already
+// separated by their natural whitespace, but a trim pill eats the spaces
+// around it so we only need a single space between adjacent kept words.
+function shouldGroupWithPrev(
+	words: ClipWord[],
+	i: number,
+	trims: { startWordIndex: number; endWordIndex: number }[],
+): boolean {
+	const prev = words[i - 1];
+	const curr = words[i];
+	if (!prev || !curr) return false;
+	if (!prev.kept || !curr.kept) return false;
+	// A trim boundary at `i` already injects its own visual gap.
+	const isAtTrim = trims.some((t) => t.startWordIndex === i || t.endWordIndex === i - 1);
+	return !isAtTrim;
 }
 
 // ─── Video Effects ─────────────────────────────────────────────────
