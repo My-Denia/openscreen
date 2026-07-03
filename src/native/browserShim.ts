@@ -3,6 +3,7 @@
 // The dev server at http://localhost:5173 can be opened in Chrome/Firefox for
 // rapid iteration without the Electron window overhead.
 
+import { PROVIDER_DEFINITIONS } from "../../electron/ai-edition/provider-registry";
 import { nativeBridgeClient as realClient } from "./client";
 
 function detectBrowserMode(): boolean {
@@ -78,6 +79,65 @@ function createShimBridgeClient() {
 		}
 	};
 	let currentDoc: unknown = loadFromStorage();
+
+	// ponytail: stateful LLM config/credentials so the "connect a provider"
+	// flow is actually testable in browser-mode preview — the real backend
+	// persists this in safeStorage; here it's localStorage, faked but sticky
+	// across reloads so the UX round-trips the same way.
+	type ShimLlmConfig = {
+		provider: string;
+		model: string;
+		baseUrl?: string;
+		reasoningEffort?: string;
+		allowAgentEdits?: boolean;
+	};
+	const credentialsByProvider = new Map<string, { apiKey: string }>();
+	let activeConfig: ShimLlmConfig | null = null;
+	const llmStorageKey = "browser-shim-llm";
+	(() => {
+		try {
+			const raw = localStorage.getItem(llmStorageKey);
+			if (!raw) return;
+			const parsed = JSON.parse(raw) as {
+				config: ShimLlmConfig | null;
+				credentials: Record<string, { apiKey: string }>;
+			};
+			activeConfig = parsed.config ?? null;
+			for (const [id, cred] of Object.entries(parsed.credentials ?? {})) {
+				credentialsByProvider.set(id, cred);
+			}
+		} catch {
+			// ponytail: same as saveToStorage
+		}
+	})();
+	const saveLlmState = () => {
+		try {
+			localStorage.setItem(
+				llmStorageKey,
+				JSON.stringify({
+					config: activeConfig,
+					credentials: Object.fromEntries(credentialsByProvider),
+				}),
+			);
+		} catch {
+			// ponytail: same as saveToStorage
+		}
+	};
+	const buildLlmSnapshot = () => ({
+		config: activeConfig,
+		connectedProviders: [...credentialsByProvider.keys()],
+		availableProviders: PROVIDER_DEFINITIONS.map((d) => ({
+			id: d.id,
+			label: d.label,
+			authKind: d.authKind,
+		})),
+		credentialSummary: PROVIDER_DEFINITIONS.map((def) => ({
+			providerId: def.id,
+			connected: credentialsByProvider.has(def.id),
+			authKind: def.authKind,
+			credentialKind: credentialsByProvider.has(def.id) ? "api-key" : null,
+		})),
+	});
 
 	// ponytail: in-memory chat sessions per project for browser shim. The
 	// renderer treats these the same as the main-process sessions.
@@ -155,19 +215,30 @@ function createShimBridgeClient() {
 			addAsset: () =>
 				Promise.resolve({ success: true, assetId: "asset_shim", document: currentDoc }),
 			removeAsset: () => Promise.resolve({ success: true, assetId: "", document: currentDoc }),
-			llmGetSnapshot: () =>
-				Promise.resolve({
-					config: null,
-					connectedProviders: [],
-					availableProviders: [
-						{ id: "anthropic", label: "Claude", authKind: "api-key" },
-						{ id: "openai", label: "OpenAI", authKind: "api-key" },
-					],
-					credentialSummary: [],
-				}),
-			llmSetConfig: () => Promise.resolve({ success: true }),
-			llmSetApiKey: () => Promise.resolve({ success: true }),
-			llmRemoveApiKey: () => Promise.resolve({ success: true }),
+			llmGetSnapshot: () => Promise.resolve(buildLlmSnapshot()),
+			llmSetConfig: (config: ShimLlmConfig) => {
+				activeConfig = config;
+				saveLlmState();
+				return Promise.resolve({ success: true });
+			},
+			llmSetApiKey: (providerId: string, apiKey: string) => {
+				if (apiKey.trim()) credentialsByProvider.set(providerId, { apiKey: apiKey.trim() });
+				else credentialsByProvider.delete(providerId);
+				saveLlmState();
+				return Promise.resolve({ success: true });
+			},
+			llmRemoveApiKey: (providerId: string) => {
+				credentialsByProvider.delete(providerId);
+				if (activeConfig?.provider === providerId) activeConfig = null;
+				saveLlmState();
+				return Promise.resolve({ success: true });
+			},
+			llmDisconnect: (providerId: string) => {
+				credentialsByProvider.delete(providerId);
+				if (activeConfig?.provider === providerId) activeConfig = null;
+				saveLlmState();
+				return Promise.resolve({ success: true, snapshot: buildLlmSnapshot() });
+			},
 			llmListProviderModels: (providerId: string) =>
 				Promise.resolve({
 					models: [`${providerId}-demo-model-1`, `${providerId}-demo-model-2`],
