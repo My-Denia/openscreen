@@ -253,6 +253,11 @@
 	border-left: 1px solid var(--border-soft);
 }
 
+.leftPanel {
+	overflow: hidden;
+	min-height: 0;
+}
+
 /* ─── rails — vertical icon strips ─────────────────────────────── */
 .rail {
 	display: flex;
