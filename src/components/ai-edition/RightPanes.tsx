@@ -661,30 +661,16 @@ function TranscriptClipBlock({
 				skipWordRange([cw]);
 				return true;
 			}
-			const anchorId =
-				findSelectionWordId(
-					editor,
-					selection.anchorNode,
-					selection.anchorOffset,
-					"forward",
-					words,
-				) ??
-				findSelectionWordId(
-					editor,
-					selection.anchorNode,
-					selection.anchorOffset,
-					"backward",
-					words,
-				);
-			const focusId =
-				findSelectionWordId(
-					editor,
-					selection.focusNode,
-					selection.focusOffset,
-					"backward",
-					words,
-				) ??
-				findSelectionWordId(editor, selection.focusNode, selection.focusOffset, "forward", words);
+			// ponytail: for a non-collapsed selection, the anchor/focus
+			// already identify the endpoints — no need to apply the
+			// "Backspace at start of word" / "Delete at end of word"
+			// boundary heuristic (that fallback is for collapsed carets
+			// only — it would return the previous/next word here and
+			// shrink the trim range to a few words at the selection
+			// boundary). Use findWordId directly to get the word
+			// containing each endpoint.
+			const anchorId = findWordId(selection.anchorNode);
+			const focusId = findWordId(selection.focusNode);
 			if (!anchorId || !focusId) return false;
 			const fromIdx = words.findIndex((w) => w.word.id === anchorId);
 			const toIdx = words.findIndex((w) => w.word.id === focusId);
@@ -955,23 +941,13 @@ function TranscriptWord({
 }
 
 // ─── Caret / selection helpers ────────────────────────────────────
-// Ponytail port of axcut's findCollapsedDeletionWordId /
-// findSelectionWordId. Both walk the DOM around the current selection
-// to resolve which transcript word the user is targeting.
+// Ponytail port of axcut's findCollapsedDeletionWordId. The non-collapsed
+// path uses findWordId directly (a range selection's endpoints already
+// identify the boundary words — no boundary heuristic needed).
 
 function findWordId(node: Node | null): string | null {
 	const element = node instanceof Element ? node : node?.parentElement;
 	return element?.closest<HTMLElement>("[data-word-id]")?.dataset.wordId ?? null;
-}
-
-function findSelectionWordId(
-	editor: HTMLElement,
-	node: Node | null,
-	offset: number,
-	direction: "backward" | "forward",
-	words: ClipWord[],
-): string | null {
-	return findWordId(node) ?? findCollapsedDeletionWordId(editor, node, offset, direction, words);
 }
 
 function findCollapsedDeletionWordId(
