@@ -348,7 +348,7 @@
 	color: var(--fg-2);
 }
 .panelBody {
-	flex: 1 1 auto;
+	flex: 1 1 0;
 	overflow-y: auto;
 	padding: var(--sp-3) var(--sp-4);
 	scrollbar-width: thin;
