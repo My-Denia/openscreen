@@ -15,6 +15,7 @@ import type {
 	AiEditionLlmSnapshot,
 	AiEditionProjectSummary,
 } from "../../../src/native/contracts";
+import type { ChatEventSink } from "../../ai-edition/chat-service";
 import { compactSession, getSessionBudget } from "../../ai-edition/chat-service";
 import type { DocumentService } from "../../ai-edition/document-service";
 import type { LlmConfigStore, LlmCredential } from "../../ai-edition/llm-config-store";
@@ -42,8 +43,13 @@ export interface AiEditionServiceOptions {
 		sessionId: string,
 		message: string,
 		document?: unknown,
+		sink?: ChatEventSink,
 	) => Promise<AiEditionChatResult>;
-	runChatDefault: (projectId: string, message: string) => Promise<AiEditionChatResult>;
+	runChatDefault: (
+		projectId: string,
+		message: string,
+		sink?: ChatEventSink,
+	) => Promise<AiEditionChatResult>;
 	undoLastToolBatch: (projectId: string, sessionId: string) => AiEditionChatResult;
 	getDefaultChatHistory: (projectId: string) => AiEditionChatMessage[];
 	clearDefaultChatHistory: (projectId: string) => void;
@@ -317,16 +323,21 @@ export class AiEditionService {
 		sessionId: string,
 		message: string,
 		document?: unknown,
+		sink?: ChatEventSink,
 	): Promise<AiEditionChatResult> {
-		return this.options.runChat(projectId, sessionId, message, document);
+		return this.options.runChat(projectId, sessionId, message, document, sink);
 	}
 
 	chatUndoLastBatch(projectId: string, sessionId: string): AiEditionChatResult {
 		return this.options.undoLastToolBatch(projectId, sessionId);
 	}
 
-	async chatRunDefault(projectId: string, message: string): Promise<AiEditionChatResult> {
-		return this.options.runChatDefault(projectId, message);
+	async chatRunDefault(
+		projectId: string,
+		message: string,
+		sink?: ChatEventSink,
+	): Promise<AiEditionChatResult> {
+		return this.options.runChatDefault(projectId, message, sink);
 	}
 
 	chatHistoryDefault(projectId: string): AiEditionChatMessage[] {

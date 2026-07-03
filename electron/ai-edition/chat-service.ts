@@ -1,23 +1,22 @@
-// In-memory chat service. ponytail: no SQLite, no LangGraph, no checkpoints
-// for Phase 6 scaffolding. Stores sessions per project in a nested Map. The
-// actual LLM call goes through `llm-call.ts` (no LangChain dep — direct fetch
-// to the provider's /chat/completions endpoint).
-//
-// Phase 8 upgrades this to SQLite-backed sessions with checkpoint restore.
+// In-memory chat service. ponytail: chat sessions live in a nested Map; the
+// agentic loop itself lives in `deep-agent/service.ts` and is a port of
+// axcut's AxcutDeepAgentService (LangGraph stateful thread via
+// `createDeepAgent`). The IPC bridge streams `text` deltas + `toolStart` /
+// `toolEnd` lifecycle + `error` events into the renderer through the
+// ChatEventSink.
 
 import { v4 as uuidv4 } from "uuid";
-import { type AxcutDocument, documentSchema } from "../../src/lib/ai-edition/schema";
+import {
+	type AxcutDocument,
+	createEmptyDocument,
+	documentSchema,
+} from "../../src/lib/ai-edition/schema";
 import type {
 	AiEditionChatMessage,
 	AiEditionChatResult,
 	AiEditionToolCallSummary,
 } from "../../src/native/contracts";
-import {
-	AGENT_TOOL_SPECS,
-	documentSnapshotForModel,
-	executeAgentTool,
-	isMutatingTool,
-} from "./agent-tools";
+import { isMutatingTool } from "./agent-tools";
 import {
 	applyCompaction,
 	budgetSnapshot,
@@ -26,7 +25,7 @@ import {
 	DEFAULT_BUDGET_TOKENS,
 	shouldCompact,
 } from "./chat-compaction";
-import { type ChatMessage, type LlmToolCall, streamLlm } from "./llm-call";
+import { streamLlm } from "./llm-call";
 import type { LlmConfigStore } from "./llm-config-store";
 import { PROVIDER_DEFINITIONS } from "./provider-registry";
 
@@ -35,28 +34,6 @@ const sessionsByProject = new Map<string, Map<string, ChatSession>>();
 // P1.3/P1.8 — pre-batch document snapshot per session, taken right before the
 // first write tool of a chat turn runs. undoLastToolBatch() re-applies it.
 const checkpointsBySession = new Map<string, { document: AxcutDocument; createdAt: string }>();
-
-// P1.4 — the model may chain tools (getTranscript → replaceTimeline → …).
-// Cap iterations so a confused model can't loop forever.
-const MAX_TOOL_ITERATIONS = 8;
-
-const SYSTEM_PROMPT =
-	"You are an AI video editor. The user is editing a recording in OpenScreen. " +
-	"Help them cut silences, tighten pacing, add captions, and rewrite titles. " +
-	"Be concise, action-oriented, and reference the timeline or transcript by time when relevant.";
-
-// P1.5 — tool-aware prompt: lists what the tools do and embeds a compact
-// document snapshot the model can edit against without a read round-trip.
-function buildToolSystemPrompt(document: AxcutDocument): string {
-	return (
-		`${SYSTEM_PROMPT}\n\n` +
-		"You can edit the project directly with tools. Times are seconds in the asset's " +
-		"source time. Read the transcript with getTranscript before cutting speech. " +
-		"Prefer addSkip/setSkipRange for local cuts and replaceTimeline for bulk re-cuts. " +
-		"After editing, tell the user in one or two sentences what you changed.\n\n" +
-		`Current document snapshot:\n${JSON.stringify(documentSnapshotForModel(document))}`
-	);
-}
 
 export interface ChatSession {
 	id: string;
@@ -162,13 +139,37 @@ export function undoLastToolBatch(projectId: string, sessionId: string): AiEditi
 	return { success: true, document: checkpoint.document };
 }
 
+export interface ChatEventSink {
+	/** Streamed text delta from the model. */
+	text?: (delta: string) => void;
+	/** A tool call is about to execute. */
+	toolStart?: (name: string, args: unknown) => void;
+	/** A tool call has finished. `ok=false` carries the model's error message. */
+	toolEnd?: (name: string, ok: boolean, summary?: string) => void;
+	/** The agent loop hit a fatal error (provider 4xx, network, parse). */
+	error?: (message: string) => void;
+}
+
+// ponytail: zero-config noop for sink callbacks that the caller did not provide.
+const noop = () => undefined;
+
+/** ponytail: zero-config sink that swallows every event. */
+const NOOP_SINK: Required<ChatEventSink> = {
+	text: noop,
+	toolStart: noop,
+	toolEnd: noop,
+	error: noop,
+};
+
 export async function runChat(
 	projectId: string,
 	sessionId: string,
 	message: string,
 	llmConfig: LlmConfigStore,
 	documentInput?: unknown,
+	sink: ChatEventSink = {},
 ): Promise<AiEditionChatResult> {
+	const emit: Required<ChatEventSink> = { ...NOOP_SINK, ...sink };
 	const config = llmConfig.getConfig();
 	if (!config) {
 		return {
@@ -222,6 +223,8 @@ export async function runChat(
 	};
 	session.messages.push(userMessage);
 
+	const editsAllowed = config.allowAgentEdits !== false;
+
 	// P3.7 — context compaction: when the session grows past the heuristic
 	// budget, summarize the older half into a single "Earlier context"
 	// assistant message. The current user turn stays uncompacted, so the
@@ -240,117 +243,69 @@ export async function runChat(
 		});
 	}
 
-	const systemPrompt = workingDocument ? buildToolSystemPrompt(workingDocument) : SYSTEM_PROMPT;
-	const loopMessages: ChatMessage[] = [
-		{ role: "system", content: systemPrompt },
-		...session.messages.slice(-20).map((m): ChatMessage => ({ role: m.role, content: m.content })),
-	];
+	const history = session.messages
+		.slice(-20)
+		.map((m) => ({ role: m.role as "user" | "assistant" | "system", content: m.content }));
 
-	// P2.5 — write tools are gated behind the allowAgentEdits flag. Undefined
-	// means enabled (edits are checkpointed and undoable).
-	const editsAllowed = config.allowAgentEdits !== false;
+	// P1.3 — checkpoint the pre-batch document before the first write tool
+	// runs. The agent runtime calls back into the sink we hand it, so we
+	// snapshot at the first `toolStart` whose tool is mutating.
+	let checkpointSaved = false;
+	const ensureCheckpoint = () => {
+		if (checkpointSaved) return;
+		if (!workingDocument) return;
+		checkpointsBySession.set(sessionKey(projectId, sessionId), {
+			document: workingDocument,
+			createdAt: new Date().toISOString(),
+		});
+		checkpointSaved = true;
+	};
 
 	const appliedToolCalls: AiEditionToolCallSummary[] = [];
-	let documentChanged = false;
-	let checkpointSaved = false;
-	let finalContent = "";
 
-	for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
-		const collectedToolCalls: LlmToolCall[] = [];
-		const result = await streamLlm(
-			{
-				provider: config.provider,
-				model: config.model,
-				apiKey: apiKey ?? "",
-				baseUrl: config.baseUrl,
-				reasoningEffort: config.reasoningEffort,
-				accountId,
-				messages: loopMessages,
-				tools: workingDocument ? AGENT_TOOL_SPECS : undefined,
-			},
-			{
-				// ponytail: streamLlm already accumulates the deltas internally
-				// and the renderer's chat panel still consumes the finalized
-				// `result.content`. Collecting tool calls here so the existing
-				// tool-execution flow keeps working unchanged.
-				onToolCall: (call) => collectedToolCalls.push(call),
-			},
-		);
-
-		if (!result.success) {
-			return { success: false, error: result.error ?? "Empty response from model." };
-		}
-
-		const toolCalls = collectedToolCalls.length ? collectedToolCalls : (result.toolCalls ?? []);
-
-		if (!toolCalls.length) {
-			finalContent = result.content ?? "";
-			break;
-		}
-
-		loopMessages.push({
-			role: "assistant",
-			content: result.content ?? "",
-			toolCalls,
-		});
-
-		for (const call of toolCalls) {
-			if (!workingDocument) {
-				loopMessages.push({
-					role: "tool",
-					toolCallId: call.id,
-					content: JSON.stringify({ error: "No document available." }),
-				});
-				continue;
+	const agentSink = {
+		text: (delta: string) => emit.text(delta),
+		toolStart: (name: string, args: unknown) => {
+			emit.toolStart(name, args);
+			if (isMutatingTool(name) && editsAllowed) ensureCheckpoint();
+		},
+		toolEnd: (name: string, ok: boolean, summary?: string) => {
+			emit.toolEnd(name, ok, summary);
+			if (ok && summary) {
+				appliedToolCalls.push({ name, summary });
 			}
-			if (isMutatingTool(call.name) && !editsAllowed) {
-				loopMessages.push({
-					role: "tool",
-					toolCallId: call.id,
-					content: JSON.stringify({
-						error:
-							"Project edits are disabled in the AI settings. Ask the user to enable " +
-							"'Allow the agent to edit the project', then try again.",
-					}),
-				});
-				continue;
-			}
-			// P1.3 — checkpoint the pre-batch document before the first write.
-			if (isMutatingTool(call.name) && !checkpointSaved) {
-				checkpointsBySession.set(sessionKey(projectId, sessionId), {
-					document: workingDocument,
-					createdAt: new Date().toISOString(),
-				});
-				checkpointSaved = true;
-			}
-			const execution = executeAgentTool(workingDocument, call.name, call.arguments);
-			if (execution.ok && execution.document) {
-				workingDocument = execution.document;
-				documentChanged = true;
-				if (execution.summary) {
-					appliedToolCalls.push({ name: call.name, summary: execution.summary });
-				}
-			}
-			loopMessages.push({ role: "tool", toolCallId: call.id, content: execution.resultJson });
-		}
+		},
+		error: (message: string) => emit.error(message),
+	};
 
-		// The loop continues: the model sees the tool results and either chains
-		// more tools or produces the final text answer.
-		if (iteration === MAX_TOOL_ITERATIONS - 1) {
-			finalContent =
-				result.content ||
-				"I hit the tool-call limit for one message. The edits so far have been applied.";
-		}
-	}
+	const { invokeOpenScreenAgent } = await import("./deep-agent/service");
 
-	if (!finalContent && appliedToolCalls.length === 0) {
-		return { success: false, error: "Empty response from model." };
+	const result = await invokeOpenScreenAgent({
+		document: workingDocument ?? emptyDocumentForTextOnly(projectId),
+		model: {
+			provider: config.provider,
+			model: config.model,
+			apiKey: apiKey ?? undefined,
+			baseUrl: config.baseUrl,
+			reasoningEffort: config.reasoningEffort,
+			accountId,
+		},
+		history,
+		userMessage: message,
+		sink: agentSink,
+	});
+
+	if (!result.text) {
+		return {
+			success: false,
+			error: "Empty response from model.",
+		};
 	}
 
 	const assistantMessage: AiEditionChatMessage = {
 		id: uuidv4(),
 		role: "assistant",
-		content: finalContent || "Done.",
+		content: result.text,
 		createdAt: new Date().toISOString(),
 		toolCalls: appliedToolCalls.length ? appliedToolCalls : undefined,
 	};
@@ -359,9 +314,16 @@ export async function runChat(
 	return {
 		success: true,
 		assistantMessage,
-		document: documentChanged && workingDocument ? workingDocument : undefined,
+		document: result.mutated ? result.document : undefined,
 		toolCalls: appliedToolCalls.length ? appliedToolCalls : undefined,
 	};
+}
+
+// ponytail: when no document snapshot exists the agent has no edit surface.
+// We still hand it an empty (schema-valid) document so the LangGraph thread
+// can run, and the model simply won't call write tools against it.
+function emptyDocumentForTextOnly(projectId: string): AxcutDocument {
+	return createEmptyDocument({ title: "Untitled project", projectId });
 }
 
 // ponytail: legacy single-session compatibility for the simpler ChatPanel
@@ -383,9 +345,10 @@ export async function runChatDefault(
 	projectId: string,
 	message: string,
 	llmConfig: LlmConfigStore,
+	sink?: ChatEventSink,
 ): Promise<AiEditionChatResult> {
 	const session = getOrCreateDefaultSession(projectId);
-	return runChat(projectId, session.id, message, llmConfig);
+	return runChat(projectId, session.id, message, llmConfig, undefined, sink);
 }
 
 export function getDefaultChatHistory(projectId: string): AiEditionChatMessage[] {

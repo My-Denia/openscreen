@@ -3029,11 +3029,18 @@ export function registerIpcHandlers(
 		getAiEditionDocuments: () =>
 			new DocumentService(path.join(app.getPath("userData"), "projects")),
 		getAiEditionLlmConfig: () => new LlmConfigStore(app.getPath("userData")),
-		runAiEditionChat: (projectId, sessionId, message, document) =>
-			runChat(projectId, sessionId, message, new LlmConfigStore(app.getPath("userData")), document),
+		runAiEditionChat: (projectId, sessionId, message, document, sink) =>
+			runChat(
+				projectId,
+				sessionId,
+				message,
+				new LlmConfigStore(app.getPath("userData")),
+				document,
+				sink,
+			),
 		undoAiEditionToolBatch: (projectId, sessionId) => undoLastToolBatch(projectId, sessionId),
-		runAiEditionChatDefault: (projectId, message) =>
-			runChatDefault(projectId, message, new LlmConfigStore(app.getPath("userData"))),
+		runAiEditionChatDefault: (projectId, message, sink) =>
+			runChatDefault(projectId, message, new LlmConfigStore(app.getPath("userData")), sink),
 		getAiEditionChatHistoryDefault: (projectId) => getDefaultChatHistory(projectId),
 		clearAiEditionChatHistoryDefault: (projectId) => clearDefaultChatHistory(projectId),
 		listAiEditionChatSessions: (projectId) => listSessions(projectId),

@@ -1,4 +1,5 @@
 import { ipcMain } from "electron";
+import type { AiEditionChatEvent } from "../../src/native/contracts";
 import {
 	NATIVE_BRIDGE_CHANNEL,
 	NATIVE_BRIDGE_VERSION,
@@ -9,6 +10,7 @@ import {
 	type ProjectFileResult,
 	type ProjectPathResult,
 } from "../../src/native/contracts";
+import type { ChatEventSink } from "../ai-edition/chat-service";
 import type { DocumentService } from "../ai-edition/document-service";
 import type { CursorTelemetryLoadResult } from "../native-bridge/cursor/adapter";
 import { TelemetryCursorAdapter } from "../native-bridge/cursor/telemetryCursorAdapter";
@@ -46,6 +48,7 @@ export interface NativeBridgeContext {
 		sessionId: string,
 		message: string,
 		document?: unknown,
+		sink?: ChatEventSink,
 	) => Promise<import("../../src/native/contracts").AiEditionChatResult>;
 	undoAiEditionToolBatch: (
 		projectId: string,
@@ -54,6 +57,7 @@ export interface NativeBridgeContext {
 	runAiEditionChatDefault: (
 		projectId: string,
 		message: string,
+		sink?: ChatEventSink,
 	) => Promise<import("../../src/native/contracts").AiEditionChatResult>;
 	getAiEditionChatHistoryDefault: (
 		projectId: string,
@@ -128,6 +132,27 @@ function isBridgeRequest(value: unknown): value is NativeBridgeRequest {
 	return typeof candidate.domain === "string" && typeof candidate.action === "string";
 }
 
+// ponytail: build a ChatEventSink that broadcasts each event to the renderer
+// that requested the chat run. The webContents may be gone by the time a late
+// delta fires (tab closed, window destroyed) — webContents.send throws, so we
+// swallow the error to keep the loop running. The renderer treats a missing
+// "end of stream" as "the run was abandoned" and shows an inline error.
+function buildChatEventSink(sender: Electron.WebContents, sessionId: string): ChatEventSink {
+	const send = (payload: AiEditionChatEvent) => {
+		try {
+			sender.send("ai-edition.chat-event", payload);
+		} catch {
+			// ponytail: webContents gone — keep the loop running silently.
+		}
+	};
+	return {
+		text: (delta) => send({ kind: "text", sessionId, delta }),
+		toolStart: (name, args) => send({ kind: "toolStart", sessionId, name, args }),
+		toolEnd: (name, ok, summary) => send({ kind: "toolEnd", sessionId, name, ok, summary }),
+		error: (message) => send({ kind: "error", sessionId, message }),
+	};
+}
+
 export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 	ipcMain.removeHandler(NATIVE_BRIDGE_CHANNEL);
 
@@ -174,7 +199,7 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 		deleteSession: context.deleteAiEditionChatSession,
 	});
 
-	ipcMain.handle(NATIVE_BRIDGE_CHANNEL, async (_, request: unknown) => {
+	ipcMain.handle(NATIVE_BRIDGE_CHANNEL, async (event, request: unknown) => {
 		if (!isBridgeRequest(request)) {
 			return createErrorResponse(undefined, "INVALID_REQUEST", "Invalid native bridge request.");
 		}
@@ -362,16 +387,20 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 								requestId,
 								await aiEditionService.llmListProviderModels(request.payload.providerId),
 							);
-						case "chat.run":
+						case "chat.run": {
+							const sessionId = request.payload.sessionId;
+							const sink = buildChatEventSink(event.sender, sessionId);
 							return createSuccessResponse(
 								requestId,
 								await aiEditionService.chatRun(
 									request.payload.projectId,
-									request.payload.sessionId,
+									sessionId,
 									request.payload.message,
 									request.payload.document,
+									sink,
 								),
 							);
+						}
 						case "chat.undoLastBatch":
 							return createSuccessResponse(
 								requestId,
@@ -380,14 +409,17 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 									request.payload.sessionId,
 								),
 							);
-						case "chat.runDefault":
+						case "chat.runDefault": {
+							const sink = buildChatEventSink(event.sender, "default");
 							return createSuccessResponse(
 								requestId,
 								await aiEditionService.chatRunDefault(
 									request.payload.projectId,
 									request.payload.message,
+									sink,
 								),
 							);
+						}
 						case "chat.history":
 							return createSuccessResponse(
 								requestId,

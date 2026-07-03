@@ -532,7 +532,19 @@ export type NativeBridgeRequest =
 export type NativeBridgeEventName =
 	| "project.contextChanged"
 	| "cursor.providerChanged"
-	| "cursor.telemetryLoaded";
+	| "cursor.telemetryLoaded"
+	| "ai-edition.chat-event";
+
+// ponytail: streamed chat-progress event broadcast by runChat so the renderer
+// can render text deltas + tool ops live instead of waiting for the final RPC
+// return. Empty `assistant` slot + `kind: "error"` means the upstream
+// provider failed and the toast was a side-channel; the renderer shows it
+// inline so the chat doesn't appear to "echo back my question".
+export type AiEditionChatEvent =
+	| { kind: "text"; sessionId: string; delta: string }
+	| { kind: "toolStart"; sessionId: string; name: string; args: unknown }
+	| { kind: "toolEnd"; sessionId: string; name: string; ok: boolean; summary?: string }
+	| { kind: "error"; sessionId: string; message: string };
 
 export interface NativeBridgeEvent<TPayload = unknown> {
 	name: NativeBridgeEventName;
