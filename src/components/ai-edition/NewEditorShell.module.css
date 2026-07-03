@@ -303,8 +303,8 @@
 
 /* ─── panels (chat, transcript, etc.) ──────────────────────────── */
 .panel {
-	display: grid;
-	grid-template-rows: auto 1fr auto;
+	display: flex;
+	flex-direction: column;
 	min-width: 0;
 	min-height: 0;
 	background: var(--bg);
@@ -348,6 +348,7 @@
 	color: var(--fg-2);
 }
 .panelBody {
+	flex: 1 1 auto;
 	overflow-y: auto;
 	padding: var(--sp-3) var(--sp-4);
 	scrollbar-width: thin;
@@ -1124,6 +1125,10 @@
 .stripActions button:hover {
 	background: var(--surface-3);
 	color: var(--fg-2);
+}
+.stripActions button:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
 }
 .chatHint {
 	font-size: var(--fs-app-sm);
