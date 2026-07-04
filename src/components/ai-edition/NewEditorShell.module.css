@@ -795,18 +795,17 @@
 	letter-spacing: 0.02em;
 }
 
-/* ─── transport bar ────────────────────────────────────────────── */
+/* ─── transport bar (lives inside .timelineHead, next to the tool icons) ─ */
 .transport {
 	display: flex;
 	align-items: center;
-	gap: var(--sp-2);
-	padding: var(--sp-2) var(--sp-4);
-	background: var(--bg);
-	border-top: 1px solid var(--border-soft);
+	gap: 6px;
+	flex: 1;
+	min-width: 0;
 }
 .transport .tbtn {
-	width: 32px;
-	height: 32px;
+	width: 28px;
+	height: 28px;
 	display: grid;
 	place-items: center;
 	border-radius: var(--r-sm);
@@ -814,6 +813,7 @@
 	background: transparent;
 	border: 0;
 	cursor: pointer;
+	flex-shrink: 0;
 	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
 }
 .transport .tbtn:hover {
@@ -821,8 +821,8 @@
 	color: var(--fg);
 }
 .transport .tbtn.play {
-	width: 36px;
-	height: 36px;
+	width: 28px;
+	height: 28px;
 	background: var(--fg);
 	color: var(--bg);
 	border-radius: 50%;
@@ -837,6 +837,7 @@
 	letter-spacing: 0.02em;
 	min-width: 96px;
 	text-align: center;
+	flex-shrink: 0;
 }
 .transport .time .sep { color: var(--meta); margin-inline: 4px; }
 .transport .time .total { color: var(--muted); }
