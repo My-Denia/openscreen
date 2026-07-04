@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
-import { mkdir, rename, stat } from "node:fs/promises";
+import { copyFile as copyFileAsync, mkdir, rename, stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -54,7 +54,15 @@ export const STT_MODELS: Record<SttModelId, SttModelDescriptor> = {
 	wav2vec2: {
 		cacheDir: "wav2vec2",
 		file: "model.onnx",
-		url: "https://huggingface.co/facebook/wav2vec2-base-960h/resolve/main/onnx/model.onnx",
+		// ponytail: facebook/wav2vec2-base-960h ships on HF as PyTorch only —
+		// no pre-exported ONNX. We export once (see scripts/export-wav2vec2-onnx.py)
+		// and host the result on a GitHub release to avoid checking 360 MB into
+		// git. Override via the OPENSCREEN_WAV2VEC2_URL env var to point at a
+		// self-hosted mirror, or run a build step that pre-populates the user
+		// cache from the local file at electron/native/models/.
+		url:
+			process.env.OPENSCREEN_WAV2VEC2_URL ??
+			"https://github.com/getopenscreen/openscreen/releases/download/v0.0.0-stt-models/model.onnx",
 		// ponytail: SHA pinned at export time. Re-derive by re-exporting
 		// facebook/wav2vec2-base-960h and updating if HF upstream changes.
 		expectedSha256: "8a278b42db089ddbc955152646575d439b31cca547cead37891f57c374451b36",
@@ -72,6 +80,38 @@ export const WAV2VEC2_CONFIG_URL =
 	"https://huggingface.co/facebook/wav2vec2-base-960h/resolve/main/config.json";
 export const WAV2VEC2_CONFIG_SHA256 =
 	"38bbf4840796b025902fd2a9fbbe8b6bf59eb262eb55c935b1e2ac5ea068a3ec";
+
+/**
+ * ponytail: facebook/wav2vec2-base-960h ships on HuggingFace as PyTorch
+ * (.bin / .safetensors) only — no pre-exported ONNX file. We export once
+ * via `optimum` and bundle the resulting .onnx alongside the app for
+ * offline operation. `ensureModels` looks for the bundled file first,
+ * downloads + SHA-verifies only when not found.
+ */
+function bundledWav2vec2Candidates(): string[] {
+	const out: string[] = [];
+	// Production: extraResources copies `electron/native/models/` into resourcesPath.
+	const resources = process.env.OPENSCREEN_RESOURCES_PATH;
+	if (resources) {
+		out.push(path.join(resources, "models", "wav2vec2-base-960h", "model.onnx"));
+	}
+	// Dev: file lives next to the bundled whisper-server binary, or in cwd.
+	const here = process.cwd();
+	out.push(path.join(here, "electron", "native", "models", "wav2vec2-base-960h", "model.onnx"));
+	return out;
+}
+
+/** Resolve the bundled wav2vec2 ONNX path; returns null when no candidate exists. */
+export function findBundledWav2vec2(): string | null {
+	for (const candidate of bundledWav2vec2Candidates()) {
+		try {
+			if (existsSync(candidate)) return candidate;
+		} catch {
+			// ignore — the candidate path may not exist yet
+		}
+	}
+	return null;
+}
 
 /** ponytail: pin SHA-256 per release and update this map before tagging. Stored in a
  * single source of truth so the build script + the runtime verifier read the same value. */
@@ -290,38 +330,73 @@ export async function ensureModels(opts: EnsureModelsOptions): Promise<void> {
 
 	for (const { id, descriptor, path: dest } of targets) {
 		if (!dest) continue;
-		await downloadModel(descriptor, dest, {
-			onProgress: (bytes) => opts.onProgress?.({ id, downloadedBytes: bytes, totalBytes: 0 }),
-			fetcher: opts.fetcher,
-		});
-		// Pin the total post-hoc for progress event UIs that need it.
-		try {
-			const s = await stat(dest);
-			opts.onProgress?.({ id, downloadedBytes: s.size, totalBytes: s.size });
-		} catch {
-			// best-effort; subsequent reads will fail loudly if missing
-		}
 
-		// ponytail: keep companion downloads inline so the caller can `ensureModels({withWav2vec2Companions:true})`
-		// and end up with a self-sufficient cache directory.
-		if (id === "wav2vec2" && opts.withWav2vec2Companions) {
-			const baseDir = path.dirname(dest);
-			await downloadCompanionFile(
-				{
-					url: WAV2VEC2_VOCAB_URL,
-					dest: path.join(baseDir, "vocab.json"),
-					expectedSha256: WAV2VEC2_VOCAB_SHA256,
-				},
-				{ fetcher: opts.fetcher },
-			);
-			await downloadCompanionFile(
-				{
-					url: WAV2VEC2_CONFIG_URL,
-					dest: path.join(baseDir, "config.json"),
-					expectedSha256: WAV2VEC2_CONFIG_SHA256,
-				},
-				{ fetcher: opts.fetcher },
-			);
+		// ponytail: wav2vec2-base-960h ships as PyTorch only on HF; the ONNX we
+		// need must come from a local export. Prefer the bundled copy in
+		// `electron/native/models/wav2vec2-base-960h/`, copy + SHA-verify it
+		// into the user-data cache, and skip the URL fallback entirely.
+		if (id === "wav2vec2") {
+			await ensureWav2vec2(dest, opts);
+		} else {
+			await downloadModel(descriptor, dest, {
+				onProgress: (bytes) => opts.onProgress?.({ id, downloadedBytes: bytes, totalBytes: 0 }),
+				fetcher: opts.fetcher,
+			});
+			// Pin the total post-hoc for progress event UIs that need it.
+			try {
+				const s = await stat(dest);
+				opts.onProgress?.({ id, downloadedBytes: s.size, totalBytes: s.size });
+			} catch {
+				// best-effort; subsequent reads will fail loudly if missing
+			}
+		}
+	}
+}
+
+/** Copy the bundled wav2vec2 ONNX + companions into the user-data cache, verify SHA. */
+async function ensureWav2vec2(dest: string, opts: EnsureModelsOptions): Promise<void> {
+	const id: SttModelId = "wav2vec2";
+	const bundled = findBundledWav2vec2();
+	if (!bundled) {
+		// ponytail: a build that strips `electron/native/models/` from extraResources
+		// (or a packaging error) ends up here. Surface a clear error rather than
+		// trying to download the ONNX from a URL that doesn't exist on HF.
+		throw new Error(
+			"wav2vec2-base-960h ONNX not bundled. Expected at electron/native/models/wav2vec2-base-960h/model.onnx. " +
+				"Re-run scripts/export-wav2vec2-onnx.py or restore the model.onnx artifact.",
+		);
+	}
+	await mkdir(path.dirname(dest), { recursive: true });
+	const baseDir = path.dirname(dest);
+
+	// Stream-copy the bundled ONNX to the user-data cache + verify SHA before the
+	// forced alignment ever tries to load it. Cheap, fail-fast.
+	const tmp = `${dest}.partial`;
+	await copyFileAsync(bundled, tmp);
+	await rename(tmp, dest);
+	const actual = await sha256OfFile(dest);
+	const expected = STT_MODELS.wav2vec2.expectedSha256;
+	if (expected && actual.toLowerCase() !== expected.toLowerCase()) {
+		await rename(dest, `${dest}.bad`).catch(() => undefined);
+		throw new Error(`SHA-256 mismatch for bundled wav2vec2: expected ${expected}, got ${actual}`);
+	}
+	opts.onProgress?.({
+		id,
+		downloadedBytes: (await stat(dest)).size,
+		totalBytes: (await stat(dest)).size,
+	});
+
+	// Companion files (vocab.json + config.json) sit next to model.onnx in the
+	// bundle. Copy them alongside so `forcedAlignment.ensureVocabLoaded` can SHA-verify
+	// the vocab at load time without a network round-trip.
+	if (opts.withWav2vec2Companions) {
+		const vocabSrc = `${bundled.replace(/model\.onnx$/, "")}vocab.json`;
+		const configSrc = `${bundled.replace(/model\.onnx$/, "")}config.json`;
+		if (existsSync(vocabSrc)) {
+			await copyFileAsync(vocabSrc, path.join(baseDir, "vocab.json"));
+		}
+		if (existsSync(configSrc)) {
+			await copyFileAsync(configSrc, path.join(baseDir, "config.json"));
 		}
 	}
 }

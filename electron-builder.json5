@@ -42,6 +42,10 @@
     {
       "from": "public/cursors",
       "to": "cursors"
+    },
+    {
+      "from": "electron/native/models",
+      "to": "models"
     }
   ],
 

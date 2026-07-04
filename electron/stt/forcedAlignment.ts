@@ -194,8 +194,12 @@ export class ForcedAligner {
 	private async prepare(): Promise<void> {
 		const loader = this.opts.ortLoader ?? DEFAULT_ORT_LOADER;
 		const ort = await loader();
+		// ponytail: ORT 1.20+ renamed the CPU EP from "cpuExecutionProvider" to
+		// "cpu". Pass both so the same code works whether `onnxruntime-node`
+		// pulls 1.17.x or 1.20+ — ORT drops unknown names with a warning
+		// and falls through to the next.
 		const session = await ort.InferenceSession.create(path.resolve(this.opts.modelPath), {
-			executionProviders: ["cpuExecutionProvider"],
+			executionProviders: ["cpu", "cpuExecutionProvider"],
 			graphOptimizationLevel: "all",
 		});
 		this.session = session as unknown as OrtSession;

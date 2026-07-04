@@ -165,12 +165,14 @@ export class WhisperServerManager {
 				options.modelPath,
 				"--port",
 				String(port),
-				// Host defaults to 127.0.0.1 in whisper-server; pin it explicitly so
-				// future changes don't accidentally expose it on 0.0.0.0.
-				"-h",
+				// whisper-server exposes `--host` (not `-h`; `-h` is the help flag).
+				// Pin to localhost so future upstream defaults don't accidentally
+				// expose the HTTP endpoint on 0.0.0.0.
+				"--host",
 				"127.0.0.1",
-				"--convert",
-				"false",
+				// ponytail: whisper-server expects WAV (16-bit LE PCM, 16 kHz mono)
+				// already. We pre-convert in `writeSamplesAsWav`, so do NOT enable
+				// `--convert` (which would require an ffmpeg runtime we don't ship).
 			],
 			{ stdio: ["ignore", "pipe", "pipe"] },
 		);
