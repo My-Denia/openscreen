@@ -1,13 +1,18 @@
-// Live webcam preview overlay. Reads `document.cameraTrack.sourcePath` and
-// the current virtual time and drives a real <video> element at the right
-// source-time. The webcam is a derived stream — cuts/zoom/speed come from the
-// main timeline. This component only reads; it does not write.
+// Live webcam preview overlay. Reads the ACTIVE clip's asset `cameraTrack`
+// (P4 — the camera link lives per-asset, not on the document, since a
+// project can hold multiple recordings each with their own camera or none)
+// and drives a real <video> element at the right source-time. The webcam is
+// a derived stream — cuts/zoom/speed come from the main timeline. This
+// component only reads; it does not write.
 //
 // ponytail: the camera plays in parallel with the screen. Source-time mapping
 //   cameraTime = clip.sourceStartSec + (currentTimeSec − clip.timelineStartSec)
 //   adjustment = (cameraTrack.startMs + cameraTrack.offsetMs) / 1000
 //   final      = max(0, cameraTime − adjustment)
 // (startMs is when the camera comes online; offsetMs is the early/late delay).
+// Because this is resolved from the active clip's asset, the overlay
+// naturally disappears when the playhead moves onto a clip whose asset has
+// no camera, and reappears when it moves onto one that does.
 
 import { useEffect, useMemo, useState } from "react";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
@@ -15,6 +20,7 @@ import type { WebcamLayoutPreset, WebcamMaskShape } from "@/components/video-edi
 import type { AxcutClip } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
+import { resolveActiveCameraTrack } from "@/lib/ai-edition/timeline/camera";
 import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
 import { getCssClipPath } from "@/lib/webcamMaskShapes";
 import styles from "./NewEditorShell.module.css";
@@ -34,24 +40,26 @@ interface WebcamOverlayProps {
 
 export function WebcamOverlay(props: WebcamOverlayProps) {
 	const { settings } = useEditorSettings();
-	const cameraTrack = useProjectStore((s) => s.document?.cameraTrack ?? null);
+	const assets = useProjectStore((s) => s.document?.assets ?? null);
 
 	const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
 	const [hasError, setHasError] = useState(false);
 
+	const position = useMemo(
+		() => locateVirtualPosition(props.clips, props.currentTimeSec),
+		[props.clips, props.currentTimeSec],
+	);
+
+	const cameraTrack = useMemo(
+		() => resolveActiveCameraTrack(assets ?? [], props.clips, props.currentTimeSec),
+		[assets, props.clips, props.currentTimeSec],
+	);
+
 	const cameraTime = useMemo(() => {
-		if (!cameraTrack?.visible) return null;
-		const position = locateVirtualPosition(props.clips, props.currentTimeSec);
-		if (!position) return null;
+		if (!cameraTrack?.visible || !position) return null;
 		const offsetSec = (cameraTrack.startMs + cameraTrack.offsetMs) / 1000;
 		return Math.max(0, position.sourceTimeSec - offsetSec);
-	}, [
-		cameraTrack?.visible,
-		cameraTrack?.startMs,
-		cameraTrack?.offsetMs,
-		props.clips,
-		props.currentTimeSec,
-	]);
+	}, [cameraTrack, position]);
 
 	// Drive the camera <video> time so its playback matches the main timeline.
 	useEffect(() => {

@@ -35,7 +35,9 @@ import type {
 	AxcutSkipRange,
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
+import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
+import { resolveActiveCameraTrack } from "@/lib/ai-edition/timeline/camera";
 import type { SpeedRegion } from "@/lib/ai-edition/timeline/speed";
 import {
 	computeCompositeLayout,
@@ -86,6 +88,7 @@ const WEBCAM_SOURCE_SIZE = { width: 960, height: 720 };
 
 export function PreviewCanvas(props: PreviewCanvasProps) {
 	const { settings, setLive, commit } = useEditorSettings();
+	const assets = useProjectStore((s) => s.document?.assets ?? []);
 	const frameRef = useRef<HTMLDivElement | null>(null);
 	const webcamSlotRef = useRef<HTMLDivElement | null>(null);
 	const [canvasSize, setCanvasSize] = useState({ width: 1280, height: 720 });
@@ -130,7 +133,8 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 	const frameSize = useMemo(() => {
 		const ratio = getAspectRatioValue(settings.aspectRatio);
 		const { width: containerWidth, height: containerHeight } = containerSize;
-		if (containerWidth <= 0 || containerHeight <= 0) return { width: containerWidth, height: containerHeight };
+		if (containerWidth <= 0 || containerHeight <= 0)
+			return { width: containerWidth, height: containerHeight };
 		if (containerWidth / containerHeight > ratio) {
 			const height = containerHeight;
 			return { width: Math.round(height * ratio), height: Math.round(height) };
@@ -184,6 +188,17 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 	const webcamStyle = useMemo(
 		() => buildWebcamStyle(layout, settings, canvasSize),
 		[layout, settings, canvasSize],
+	);
+	// P4 — the layout math above only knows the user's chosen preset
+	// (PiP/dual/stack), not whether the clip under the playhead actually has a
+	// camera. Without this, an empty (but styled — shadow, background) webcam
+	// slot stays visible for clips with no camera attached.
+	const activeCameraTrack = useMemo(
+		() => resolveActiveCameraTrack(assets, props.clips, props.currentTimeSec),
+		[assets, props.clips, props.currentTimeSec],
+	);
+	const showWebcamSlot = Boolean(
+		layout?.webcamRect && activeCameraTrack?.visible && activeCameraTrack.sourcePath,
 	);
 	const [isPlaying, setIsPlaying] = useState(false);
 	const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
@@ -278,7 +293,7 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 					) : null}
 				</div>
 			) : null}
-			{layout?.webcamRect ? (
+			{layout?.webcamRect && showWebcamSlot ? (
 				<div
 					ref={webcamSlotRef}
 					className={styles.webcamSlot}
