@@ -133,13 +133,23 @@ async function fetchWithRetry(url: string, fetcher: typeof fetch): Promise<Respo
 				headers: { "user-agent": "openscreen-stt" },
 			});
 			if (res.ok && res.body) return res;
+			// 4xx (other than 408/425/429) is not transient — auth or a wrong URL won't
+			// turn into 200 by retrying. Surface the error immediately.
+			if (res.status >= 400 && res.status < 500 && !RETRYABLE_STATUS.has(res.status)) {
+				throw new Error(`Failed to download ${url}: HTTP ${res.status} ${res.statusText}`);
+			}
 			if (RETRYABLE_STATUS.has(res.status) && attempt < MAX_ATTEMPTS) {
 				await sleep(backoffMs(attempt, res.headers.get("retry-after")));
 				continue;
 			}
-			throw new Error(`Failed to download ${url}: HTTP ${res.status}`);
+			throw new Error(`Failed to download ${url}: HTTP ${res.status} ${res.statusText}`);
 		} catch (err) {
 			lastErr = err;
+			// Don't retry a typed HTTP failure (already threw inside the try above) —
+			// 4xx errors look identical to network errors to the catch handler.
+			if (err instanceof Error && err.message.startsWith("Failed to download")) {
+				throw err;
+			}
 			if (attempt >= MAX_ATTEMPTS) throw err;
 			await sleep(backoffMs(attempt, null));
 		}

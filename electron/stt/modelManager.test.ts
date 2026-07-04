@@ -112,4 +112,33 @@ describe("modelManager", () => {
 		// We only requested only:["whisper"], so fetches should be 0.
 		expect(fetches).toBe(0);
 	});
+
+	it("downloadModel surfaces 4xx errors immediately instead of retrying", async () => {
+		const dest = path.join(dir, "locked.bin");
+		await mkdir(path.dirname(dest), { recursive: true });
+		let fetches = 0;
+		const fetcher: typeof fetch = async () => {
+			fetches++;
+			// 401 — auth-gated; retrying won't help. Spec behavior: fail fast.
+			return new Response("auth required", { status: 401, statusText: "Unauthorized" });
+		};
+		await expect(downloadModel(STT_MODELS.whisper, dest, { fetcher })).rejects.toThrow(
+			/HTTP 401 Unauthorized/,
+		);
+		expect(fetches).toBe(1); // single attempt, no 60s backoff loop
+	});
+
+	it("downloadModel retries transient 5xx + network errors with bounded backoff", async () => {
+		const dest = path.join(dir, "flaky.bin");
+		await mkdir(path.dirname(dest), { recursive: true });
+		let fetches = 0;
+		const fetcher: typeof fetch = async () => {
+			fetches++;
+			if (fetches < 2)
+				return new Response("busy", { status: 503, statusText: "Service Unavailable" });
+			return new Response(Readable.from(["payload"]) as unknown as BodyInit, { status: 200 });
+		};
+		await downloadModel(STT_MODELS.whisper, dest, { fetcher });
+		expect(fetches).toBe(2); // one retry, then success
+	});
 });
