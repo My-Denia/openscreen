@@ -8,18 +8,23 @@ import { pipeline } from "node:stream/promises";
 /**
  * Manages the lifetime of the on-disk model artifacts used by the STT stack.
  *
- *  - Whisper: ggml-medium.bin (~1.5 GB), downloaded on first transcription.
- *    Source: https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin
- *  - Forced alignment: facebook/mms-alignment (~1 GB), Apache-2.0.
- *    Source: https://huggingface.co/facebook/mms-alignment/resolve/main/onnx/model.onnx
+ *  - Whisper: ggml-medium.bin (~1.5 GB), MIT-licensed (OpenAI Whisper via
+ *    ggerganov/whisper.cpp). Downloaded on first transcription.
+ *  - Forced alignment: facebook/wav2vec2-base-960h (~377 MB), Apache 2.0.
+ *    Char-level English vocab (32 tokens: 26 letters + apostrophe + word
+ *    delimiter + 4 special tokens). Suitable for English forced alignment;
+ *    non-English content falls back to whisper.cpp's per-token timestamps.
  *
- * The spec's acceptance gate references these file names and totals; SHA-256
- * verification is in place so an interrupted download can't pass as a valid
- * model. The pinned SHA values are placeholders that must be updated against
- * the upstream at release tag time — see `// ponytail:` note in `STT_MODELS`.
+ * SHA-256 verification is in place so an interrupted or tampered download
+ * can't pass as a valid model. Vocab + config files ship alongside.
+ *
+ * ponytail: the original spec pointed at `facebook/mms-alignment` (CC-BY-NC-4.0,
+ * gated, 401) which would have been both a license violation and a download
+ * blocker. The current entry is the spec's documented fallback, lifted from
+ * "verify before bundle" into "ship by default" after verification failed.
  */
 
-export type SttModelId = "whisper" | "mms-alignment";
+export type SttModelId = "whisper" | "wav2vec2";
 
 export interface SttModelDescriptor {
 	/** Display + cache directory name. */
@@ -46,22 +51,27 @@ export const STT_MODELS: Record<SttModelId, SttModelDescriptor> = {
 		expectedSha256: null,
 		approximateBytes: 1_500_000_000,
 	},
-	"mms-alignment": {
-		cacheDir: "mms-alignment",
+	wav2vec2: {
+		cacheDir: "wav2vec2",
 		file: "model.onnx",
-		// facebook/mms-alignment ships its ONNX export at the repo's
-		// `onnx/model.onnx` path. Tokenizer + vocab fetched alongside.
-		url: "https://huggingface.co/facebook/mms-alignment/resolve/main/onnx/model.onnx",
-		expectedSha256: null,
-		approximateBytes: 1_000_000_000,
+		url: "https://huggingface.co/facebook/wav2vec2-base-960h/resolve/main/onnx/model.onnx",
+		// ponytail: SHA pinned at export time. Re-derive by re-exporting
+		// facebook/wav2vec2-base-960h and updating if HF upstream changes.
+		expectedSha256: "8a278b42db089ddbc955152646575d439b31cca547cead37891f57c374451b36",
+		approximateBytes: 380_000_000,
 	},
 };
 
-/** mms-alignment also needs `vocab.json` for the word-id mapping. */
-export const MMS_ALIGNMENT_VOCAB_URL =
-	"https://huggingface.co/facebook/mms-alignment/resolve/main/vocab.json";
-export const MMS_ALIGNMENT_TOKENIZER_CONFIG_URL =
-	"https://huggingface.co/facebook/mms-alignment/resolve/main/tokenizer_config.json";
+/** Companion files for the wav2vec2 alignment model. Required by the ORT session
+ * to map logit indices → characters and to know the audio preprocessing params. */
+export const WAV2VEC2_VOCAB_URL =
+	"https://huggingface.co/facebook/wav2vec2-base-960h/resolve/main/vocab.json";
+export const WAV2VEC2_VOCAB_SHA256 =
+	"8ae64b2ec10a2ea5c4416ed0394dcad8643b764ef979109fbf5261cb88eb836f";
+export const WAV2VEC2_CONFIG_URL =
+	"https://huggingface.co/facebook/wav2vec2-base-960h/resolve/main/config.json";
+export const WAV2VEC2_CONFIG_SHA256 =
+	"38bbf4840796b025902fd2a9fbbe8b6bf59eb262eb55c935b1e2ac5ea068a3ec";
 
 /** ponytail: pin SHA-256 per release and update this map before tagging. Stored in a
  * single source of truth so the build script + the runtime verifier read the same value. */
@@ -79,18 +89,14 @@ export interface ModelProgress {
 export function modelPaths(baseDir: string): Record<SttModelId, string> {
 	return {
 		whisper: path.join(baseDir, STT_MODELS.whisper.cacheDir, STT_MODELS.whisper.file),
-		"mms-alignment": path.join(
-			baseDir,
-			STT_MODELS["mms-alignment"].cacheDir,
-			STT_MODELS["mms-alignment"].file,
-		),
+		wav2vec2: path.join(baseDir, STT_MODELS.wav2vec2.cacheDir, STT_MODELS.wav2vec2.file),
 	};
 }
 
 /** True when both model files exist and have non-zero size. */
 export async function areModelsPresent(baseDir: string): Promise<boolean> {
 	const paths = modelPaths(baseDir);
-	for (const id of ["whisper", "mms-alignment"] as const) {
+	for (const id of ["whisper", "wav2vec2"] as const) {
 		try {
 			const s = await stat(paths[id]);
 			if (!s.isFile() || s.size <= 0) return false;
@@ -164,6 +170,8 @@ export interface DownloadOptions {
 	getTotalBytes?: () => number | null;
 	/** Override fetch (for tests); defaults to `globalThis.fetch`. */
 	fetcher?: typeof fetch;
+	/** Expected SHA-256 hex; if provided, verify after download. */
+	expectedSha256?: string | null;
 }
 
 /** Stream a model URL to disk atomically (`<file>.partial` → rename on success). */
@@ -195,19 +203,70 @@ export async function downloadModel(
 		downloaded += chunk.length;
 		options.onProgress?.(downloaded);
 	});
-	await pipeline(source, (await import("node:fs")).createWriteStream(tmp));
+	const { createWriteStream } = await import("node:fs");
+	await pipeline(source, createWriteStream(tmp));
 	await rename(tmp, dest);
 
-	if (descriptor.expectedSha256) {
+	const expected = options.expectedSha256 ?? descriptor.expectedSha256;
+	if (expected) {
 		const actual = await sha256OfFile(dest);
-		if (actual.toLowerCase() !== descriptor.expectedSha256.toLowerCase()) {
+		if (actual.toLowerCase() !== expected.toLowerCase()) {
 			// ponytail: keep the bad file around under a `.bad` suffix so a maintainer can
 			// compare against the upstream — but never present it as a valid model.
 			await rename(dest, `${dest}.bad`).catch(() => undefined);
 			throw new Error(
-				`SHA-256 mismatch for ${descriptor.file}: expected ${descriptor.expectedSha256}, got ${actual}`,
+				`SHA-256 mismatch for ${descriptor.file}: expected ${expected}, got ${actual}`,
 			);
 		}
+	}
+}
+
+export interface CompanionFile {
+	/** HTTPS URL to download from. */
+	url: string;
+	/** Absolute destination path. */
+	dest: string;
+	/** Expected SHA-256 hex; throws on mismatch. */
+	expectedSha256: string;
+}
+
+/** Download a companion file (vocab, config) with SHA verification. Same retry policy as
+ * the main model. Reuses the destination if it already exists with non-zero size. */
+export async function downloadCompanionFile(
+	file: CompanionFile,
+	options: DownloadOptions = {},
+): Promise<void> {
+	if (existsSync(file.dest)) {
+		const s = await stat(file.dest);
+		if (s.isFile() && s.size > 0) {
+			const actual = await sha256OfFile(file.dest);
+			if (actual.toLowerCase() === file.expectedSha256.toLowerCase()) {
+				options.onProgress?.(s.size);
+				return;
+			}
+			// ponytail: keep the bad file under .bad for diagnosis, but don't use it.
+			await rename(file.dest, `${file.dest}.bad`).catch(() => undefined);
+		}
+	}
+	await mkdir(path.dirname(file.dest), { recursive: true });
+	const fetcher = options.fetcher ?? fetch;
+	const res = await fetchWithRetry(file.url, fetcher);
+	const tmp = `${file.dest}.partial`;
+	let downloaded = 0;
+	const source = Readable.fromWeb(res.body as never);
+	source.on("data", (chunk: Buffer | Uint8Array) => {
+		downloaded += chunk.length;
+		options.onProgress?.(downloaded);
+	});
+	const { createWriteStream } = await import("node:fs");
+	await pipeline(source, createWriteStream(tmp));
+	await rename(tmp, file.dest);
+	const actual = await sha256OfFile(file.dest);
+	if (actual.toLowerCase() !== file.expectedSha256.toLowerCase()) {
+		await rename(file.dest, `${file.dest}.bad`).catch(() => undefined);
+		throw new Error(
+			`SHA-256 mismatch for ${path.basename(file.dest)}: expected ${file.expectedSha256}, got ${actual}`,
+		);
 	}
 }
 
@@ -215,13 +274,15 @@ export interface EnsureModelsOptions {
 	baseDir: string;
 	/** Models to ensure; defaults to both. */
 	only?: SttModelId[];
+	/** Download wav2vec2 companion files (vocab.json + config.json) alongside the model. */
+	withWav2vec2Companions?: boolean;
 	onProgress?: (event: ModelProgress) => void;
 	fetcher?: typeof fetch;
 }
 
 /** Ensure every required model is present locally; downloads with progress + retry. */
 export async function ensureModels(opts: EnsureModelsOptions): Promise<void> {
-	const targets = (opts.only ?? (["whisper", "mms-alignment"] as SttModelId[])).map((id) => ({
+	const targets = (opts.only ?? (["whisper", "wav2vec2"] as SttModelId[])).map((id) => ({
 		id,
 		descriptor: STT_MODELS[id],
 		path: modelPaths(opts.baseDir)[id],
@@ -239,6 +300,28 @@ export async function ensureModels(opts: EnsureModelsOptions): Promise<void> {
 			opts.onProgress?.({ id, downloadedBytes: s.size, totalBytes: s.size });
 		} catch {
 			// best-effort; subsequent reads will fail loudly if missing
+		}
+
+		// ponytail: keep companion downloads inline so the caller can `ensureModels({withWav2vec2Companions:true})`
+		// and end up with a self-sufficient cache directory.
+		if (id === "wav2vec2" && opts.withWav2vec2Companions) {
+			const baseDir = path.dirname(dest);
+			await downloadCompanionFile(
+				{
+					url: WAV2VEC2_VOCAB_URL,
+					dest: path.join(baseDir, "vocab.json"),
+					expectedSha256: WAV2VEC2_VOCAB_SHA256,
+				},
+				{ fetcher: opts.fetcher },
+			);
+			await downloadCompanionFile(
+				{
+					url: WAV2VEC2_CONFIG_URL,
+					dest: path.join(baseDir, "config.json"),
+					expectedSha256: WAV2VEC2_CONFIG_SHA256,
+				},
+				{ fetcher: opts.fetcher },
+			);
 		}
 	}
 }

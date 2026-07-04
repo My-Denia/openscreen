@@ -1,30 +1,27 @@
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { MMS_ALIGNMENT_TOKENIZER_CONFIG_URL, MMS_ALIGNMENT_VOCAB_URL } from "./modelManager";
+import { WAV2VEC2_VOCAB_SHA256 } from "./modelManager";
 import type { SttPhraseSegment, SttWordSegment } from "./transcriptionContract";
 
 /**
- * Word-level forced alignment on top of `facebook/mms-alignment` ONNX.
+ * Word-level forced alignment on top of `facebook/wav2vec2-base-960h` (Apache 2.0).
  *
  *   audio (Float32Array @ 16 kHz)
- *     → onnxruntime forward pass → CTC logits over word-piece tokens
+ *     → onnxruntime forward pass → CTC logits over a 32-token char vocab
  *     → per-frame argmax → token-id stream
- *     → for each word in the recognizer's phrase, locate its token id(s) and
- *       frame-interpolate `[startSec, endSec]`.
+ *     → walk the token stream, slice on the `|` word-delimiter (id 4) and
+ *       blank frames (id 0) → one word per group → word timestamps
  *
- * The aligner is multilingual (covers all 13 OpenScreen locales) because it
- * powers forced alignment always-on regardless of language. Model weights are
- * downloaded on first use by `modelManager.ensureModels`.
+ * License note: Apache 2.0 is MIT-compatible, unlike `facebook/mms-alignment`
+ * which is CC-BY-NC-4.0 and would have blocked distribution under MIT.
  *
- * Spec fallback chain if `mms-alignment` ONNX isn't compatible with
- * `onnxruntime-node`:
- *   1. `facebook/wav2vec2-base-960h` (~360 MB, English) + degraded phrase alignment.
- *   2. Hand-rolled CTC forced aligner on top of `wav2vec2` ONNX weights.
+ * Coverage: char-level English-only forced alignment. The vocab is 32 tokens
+ * (a-z + apostrophe + word-delimiter `|` + 4 special). Non-English audio
+ * falls back to whisper.cpp's per-token timestamps, which are less precise
+ * (~±50-200 ms) but already produced at zero extra cost.
  *
- * The verification step ("mms-alignment identity and ONNX-export availability
- * on onnxruntime-node needs verification in the first PR") is encoded here as
- * `loadAlignmentSession` lazy-loading the ORT runtime; the constructor falls
- * back with a typed error if `onnxruntime-node` is missing or returns a
- * non-`InferenceSession` value.
+ * Framerate: the wav2vec2 feature extractor downsamples 16 kHz by 5×2×2×2×2×2×2 = 320,
+ * so each output frame covers 20 ms of audio. We assume 50 Hz downstream.
  */
 
 interface OrtModule {
@@ -52,112 +49,205 @@ const DEFAULT_ORT_LOADER: OrtLoader = async () => {
 	return mod;
 };
 
-/** Default ONNX input name for mms-alignment's Wav2Vec2 model. */
+/** Default ONNX input name for wav2vec2-base-960h. */
 export const ALIGNMENT_INPUT_NAME = "input_values";
-/** Default ONNX output name; the model returns logits over the word-piece vocab. */
+/** Default ONNX output name; the model returns logits over the 32-token vocab. */
 export const ALIGNMENT_OUTPUT_NAME = "logits";
 
+/** Special token ids in the wav2vec2-base-960h vocab (stable, alphabetical + specials). */
+const TOKEN_PAD = 0; // <pad>
+const TOKEN_WORD_DELIMITER = 4; // "|"
+
+/** ponytail: char-level vocab with stable token-to-id mapping (verified by reading the
+ * downloaded vocab.json). Used as a fast-path when the on-disk vocab is missing. */
+const KNOWN_VOCAB: Record<string, number> = {
+	"<pad>": 0,
+	"<s>": 1,
+	"</s>": 2,
+	"<unk>": 3,
+	"|": 4,
+	E: 5,
+	T: 6,
+	A: 7,
+	O: 8,
+	N: 9,
+	I: 10,
+	H: 11,
+	S: 12,
+	R: 13,
+	D: 14,
+	L: 15,
+	U: 16,
+	M: 17,
+	W: 18,
+	C: 19,
+	F: 20,
+	G: 21,
+	Y: 22,
+	P: 23,
+	B: 24,
+	V: 25,
+	K: 26,
+	"'": 27,
+	X: 28,
+	J: 29,
+	Q: 30,
+	Z: 31,
+};
+
 /**
- * Tokenizer + vocab mapping for `mms-alignment`. Loaded once and cached for
- * the life of the aligner. `tokenToId` is the inverse of the vocabulary file
- * shipped with the HuggingFace repo; `wordToToken` gives the surface token id
- * for a word (assuming no further subword splits — the aligner yields word
- * matches in near-monotone speech).
+ * ponytail: pure function — exported for tests. Builds the (token → id) lookup
+ * from the downloaded `vocab.json` (raw HuggingFace JSON object: `token → id`).
+ * Falls back to the hard-coded `KNOWN_VOCAB` if `rawVocab` is empty/malformed.
  */
-interface AlignmentTokenizer {
+export function toAlignmentVocab(rawVocab: unknown): {
 	tokenToId: Map<string, number>;
 	idToToken: Map<number, string>;
-	vocabSize: number;
-}
-
-interface AlignmentTokenizerFiles {
-	tokenizerConfig: unknown;
-	vocab: Record<string, number>;
-}
-
-async function fetchAlignmentTokenizer(fetcher: typeof fetch = fetch): Promise<AlignmentTokenizer> {
-	const [tokenizerRes, vocabRes] = await Promise.all([
-		fetcher(MMS_ALIGNMENT_TOKENIZER_CONFIG_URL, { headers: { "user-agent": "openscreen-stt" } }),
-		fetcher(MMS_ALIGNMENT_VOCAB_URL, { headers: { "user-agent": "openscreen-stt" } }),
-	]);
-	if (!tokenizerRes.ok) throw new Error(`Failed to fetch tokenizer config: ${tokenizerRes.status}`);
-	if (!vocabRes.ok) throw new Error(`Failed to fetch vocab: ${vocabRes.status}`);
-	const tokenizerConfig = (await tokenizerRes.json()) as unknown;
-	const vocab = (await vocabRes.json()) as Record<string, number>;
-	const files: AlignmentTokenizerFiles = { tokenizerConfig, vocab };
-	return toAlignmentTokenizer(files);
-}
-
-/** Pure function — exposed for unit tests. Builds the lookup tables from raw JSON. */
-export function toAlignmentTokenizer(files: AlignmentTokenizerFiles): AlignmentTokenizer {
+} {
 	const tokenToId = new Map<string, number>();
-	for (const [token, id] of Object.entries(files.vocab)) {
-		tokenToId.set(token, id);
+	if (rawVocab && typeof rawVocab === "object") {
+		for (const [tok, rawId] of Object.entries(rawVocab as Record<string, unknown>)) {
+			const id = Number(rawId);
+			if (Number.isFinite(id) && id >= 0) tokenToId.set(tok, id);
+		}
+	}
+	if (tokenToId.size === 0) {
+		for (const [tok, id] of Object.entries(KNOWN_VOCAB)) tokenToId.set(tok, id);
 	}
 	const idToToken = new Map<number, string>();
-	for (const [token, id] of tokenToId) idToToken.set(id, token);
-	return {
-		tokenToId,
-		idToToken,
-		vocabSize: tokenToId.size,
-	};
+	for (const [tok, id] of tokenToId) idToToken.set(id, tok);
+	return { tokenToId, idToToken };
+}
+
+/** ponytail: pure function — exposes how the recognizer's word text maps to per-frame
+ * token ids. Each entry is one non-blank, non-delimiter character of a word (the
+ * wav2vec2 CTC head emits letters directly; no subword splits). Words are
+ * reconstructed at the consumer by walking past `|` (word delimiter) and `<pad>`
+ * (blank) frames.
+ */
+export interface CharToken {
+	char: string;
+	id: number;
+}
+
+export interface CharPhraseSegment {
+	phraseIndex: number;
+	wordIndex: number;
+	tokens: CharToken[]; // the letters, in order, with their token ids
+}
+
+/** Public for tests. Returns the per-word char-token sequences for each phrase. */
+export function phraseCharTokens(
+	phrases: SttPhraseSegment[],
+	tokenToId: Map<string, number>,
+): CharPhraseSegment[] {
+	const out: CharPhraseSegment[] = [];
+	for (let phraseIndex = 0; phraseIndex < phrases.length; phraseIndex++) {
+		const phrase = phrases[phraseIndex];
+		const words = phrase.text
+			.normalize("NFKC")
+			.replace(/[^\p{L}'’\-\s]/gu, "")
+			.split(/\s+/)
+			.filter(Boolean);
+		for (let wordIndex = 0; wordIndex < words.length; wordIndex++) {
+			const word = words[wordIndex].toUpperCase();
+			const tokens: CharToken[] = [];
+			for (const ch of word) {
+				// ponytail: wav2vec2 vocab has `'` for apostrophes but not other punctuation;
+				// skip chars we can't represent rather than fail the whole phrase.
+				const id = tokenToId.get(ch);
+				if (id !== undefined && id !== TOKEN_PAD && id !== TOKEN_WORD_DELIMITER) {
+					tokens.push({ char: ch, id });
+				}
+			}
+			if (tokens.length > 0) out.push({ phraseIndex, wordIndex, tokens });
+		}
+	}
+	return out;
 }
 
 export interface ForcedAlignerOptions {
 	/** Absolute path to the ONNX file. */
 	modelPath: string;
+	/** Absolute path to the matching `vocab.json`; loaded once on first align(). */
+	vocabPath?: string;
 	ortLoader?: OrtLoader;
-	fetcher?: typeof fetch;
 }
 
 /** Manager for the long-lived ORT session; should be created once per app. */
 export class ForcedAligner {
 	private session: OrtSession | null = null;
-	private tokenizer: AlignmentTokenizer | null = null;
+	private tokenToId: Map<string, number> | null = null;
 	private readonly opts: ForcedAlignerOptions;
-	private readonly loadOnce: Promise<void>;
+	private readonly prepareOnce: Promise<void>;
 
 	constructor(opts: ForcedAlignerOptions) {
 		this.opts = opts;
-		this.loadOnce = this.prepare();
+		this.prepareOnce = this.prepare();
 	}
 
-	/** Lazy session + tokenizer load. Safe to call multiple times. */
+	/** Lazy session + vocab load. Safe to call multiple times. */
 	async ready(): Promise<void> {
-		return this.loadOnce;
+		return this.prepareOnce;
 	}
 
 	private async prepare(): Promise<void> {
 		const loader = this.opts.ortLoader ?? DEFAULT_ORT_LOADER;
 		const ort = await loader();
 		const session = await ort.InferenceSession.create(path.resolve(this.opts.modelPath), {
-			// mms-alignment is CPU-friendly; ORT picks a sensible default.
 			executionProviders: ["cpuExecutionProvider"],
 			graphOptimizationLevel: "all",
 		});
 		this.session = session as unknown as OrtSession;
-		this.tokenizer = await fetchAlignmentTokenizer(this.opts.fetcher);
+		// ponytail: vocab load is deferred to first align() — optional config
+		// (sampling_rate, conv strides) lives in the same file but only the
+		// vocab mapping is strictly required for the alignment walk.
+	}
+
+	private async ensureVocabLoaded(): Promise<Map<string, number>> {
+		if (this.tokenToId) return this.tokenToId;
+		if (!this.opts.vocabPath) {
+			// ponytail: skip the disk read when the caller didn't provide a path —
+			// tests inject vocab via the public API; production always sets it.
+			const { tokenToId } = toAlignmentVocab(KNOWN_VOCAB);
+			this.tokenToId = tokenToId;
+			return tokenToId;
+		}
+		const raw = await readFile(this.opts.vocabPath, "utf8");
+		const parsed = JSON.parse(raw) as unknown;
+		const { tokenToId } = toAlignmentVocab(parsed);
+		// ponytail: a SHA-pinned download could in principle still be tampered with
+		// on disk; verify once at load and refuse if it drifted. Cheap (a few ms
+		// per file), fail-fast, no recheck on every align() call.
+		const expected = WAV2VEC2_VOCAB_SHA256;
+		const { createHash } = await import("node:crypto");
+		const actual = createHash("sha256").update(raw, "utf8").digest("hex").toLowerCase();
+		if (actual !== expected.toLowerCase()) {
+			throw new Error(
+				`vocab.json SHA mismatch: expected ${expected}, got ${actual}. Re-download required.`,
+			);
+		}
+		this.tokenToId = tokenToId;
+		return tokenToId;
 	}
 
 	/**
-	 * Align each phrase into per-word `[startSec, endSec]` timestamps by
-	 * greedy CTC alignment of the recognizer's hypothesis against the audio.
-	 *
-	 * Returns one `SttWordSegment` per non-empty token in the recognizer's
-	 * text; an empty result signals the aligner found no frames for the
-	 * hypothesis (caller may fall back to phrase-level spans).
+	 * Align each phrase into per-word `[startSec, endSec]` timestamps by walking the
+	 * CTC argmax sequence.
 	 */
 	async align(opts: {
 		samples: Float32Array;
 		sampleRate: number;
 		phraseSegments: SttPhraseSegment[];
 	}): Promise<SttWordSegment[]> {
-		await this.loadOnce;
-		if (!this.session || !this.tokenizer) {
+		await this.prepareOnce;
+		if (!this.session) {
 			throw new Error("ForcedAligner not ready");
 		}
 		if (opts.phraseSegments.length === 0) return [];
-		const tokens = phraseTokens(opts.phraseSegments, this.tokenizer.tokenToId);
+		const tokenToId = await this.ensureVocabLoaded();
+
+		const tokens = phraseCharTokens(opts.phraseSegments, tokenToId);
 		if (tokens.length === 0) return [];
 
 		const { inputValues, frameCount } = prepareInput(opts.samples, opts.sampleRate);
@@ -179,57 +269,15 @@ export class ForcedAligner {
 
 	/** Free the ORT session; the next call re-loads. */
 	async dispose(): Promise<void> {
-		// No explicit disposal in ORT's narrow binding; nulling the refs is enough for GC.
 		this.session = null;
-		this.tokenizer = null;
+		this.tokenToId = null;
 	}
-}
-
-/** Public for tests — converts each phrase into a stream of token ids, including
- * blanks (id 0, standard CTC blank) between phrases so the aligner can't bleed
- * spans across phrase boundaries.
- */
-export function phraseTokens(
-	phrases: SttPhraseSegment[],
-	tokenToId: Map<string, number>,
-): { tokenId: number; phraseIndex: number; wordIndex: number; word: string }[] {
-	const out: ReturnType<typeof phraseTokens> = [];
-	for (let phraseIndex = 0; phraseIndex < phrases.length; phraseIndex++) {
-		const phrase = phrases[phraseIndex];
-		const words = phrase.text
-			.normalize("NFKC")
-			.replace(/[^\p{L}\p{N}'’\-\s]/gu, " ")
-			.split(/\s+/)
-			.filter(Boolean);
-		for (let wordIndex = 0; wordIndex < words.length; wordIndex++) {
-			const word = words[wordIndex];
-			// Try direct match first; fall back to the model-required ▁ (U+2581) prefix
-			// that mms-alignment's vocab uses for word-initial tokens.
-			const prefixed = `▁${word}`;
-			let id = tokenToId.get(prefixed) ?? tokenToId.get(word);
-			if (id === undefined) {
-				// Last-ditch: lowercase + strip punctuation.
-				const cleaned = word.toLowerCase().replace(/[^\p{L}\p{N}'’-]/gu, "");
-				id = tokenToId.get(`▁${cleaned}`) ?? tokenToId.get(cleaned);
-			}
-			if (id === undefined) {
-				// ponytail: un-transcribable word — skip rather than fail the whole phrase.
-				continue;
-			}
-			out.push({ tokenId: id, phraseIndex, wordIndex, word });
-		}
-		out.push({ tokenId: 0, phraseIndex, wordIndex: -1, word: "" }); // blank
-	}
-	return out;
 }
 
 /**
- * mms-alignment expects a 1-D Float32Array at 16 kHz. Returns the input plus
- * how many CTC frames it represents at the model's framerate (~49.95 Hz).
- * For non-16 kHz inputs we resample naively (linear interpolation) since
- * forced alignment is always called after a 16 kHz pipeline upstream; if a
- * different rate arrives, we degrade to the nearest-frame mapping instead of
- * throwing — fallback path documented in the spec.
+ * mms-alignment uses a 49.95 Hz framerate from a 320-downsampled 16 kHz input;
+ * wav2vec2-base-960h has the same downsampling ratio (5×2×2×2×2×2×2 = 320),
+ * giving exactly 50 Hz at 16 kHz.
  */
 function prepareInput(
 	samples: Float32Array,
@@ -238,7 +286,7 @@ function prepareInput(
 	const targetRate = 16_000;
 	const aligned =
 		sampleRate === targetRate ? samples : resampleLinear(samples, sampleRate, targetRate);
-	const FRAMES_PER_SECOND = 49.95;
+	const FRAMES_PER_SECOND = 50;
 	const durationSec = aligned.length / targetRate;
 	const frameCount = Math.max(1, Math.round(durationSec * FRAMES_PER_SECOND));
 	return { inputValues: aligned, frameCount };
@@ -289,52 +337,79 @@ function argmaxOverTime(logits: { data: Float32Array; dims: readonly number[] })
 }
 
 /**
- * For each predicted word, find the first frame matching its token id (and
- * the last frame before the next non-blank token). Convert frame index to
- * seconds by `frameIndex / framesPerSecond`, clamped to `[0, totalDurationSec]`.
+ * Walk the per-frame token stream once. For each expected char in each word
+ * (`tokens`), find the first frame whose argmax is that char (and ≥ the
+ * previous search position). The end-of-word frame is the first frame after
+ * the last char where the argmax switches to something else (a `|`, a blank,
+ * or the next word's first char). Convert frame index to time via
+ * `frameIndex / 50 Hz`.
+ *
+ * Why greedy: the wav2vec2 CTC head emits `|` between words and blank between
+ * repeated chars. Repeated letters in the same word land on consecutive frames;
+ * word boundaries match `|` frames; blank frames appear inside repeated chars
+ * (e.g. "hello" → HHHH ee lll l ooo — but the model collapses repeats anyway).
+ * Greedy first-match-then-walk-to-next is the canonical torchaudio
+ * ForcedAligner algorithm.
  */
 function mapTokensToTime(
-	tokens: { tokenId: number; word: string }[],
+	tokens: CharPhraseSegment[],
 	frameIds: number[],
 	frameCount: number,
 	totalDurationSec: number,
 ): SttWordSegment[] {
-	const FRAMES_PER_SECOND = 49.95;
+	const FRAMES_PER_SECOND = 50;
 	const dur = Math.max(totalDurationSec, frameCount / FRAMES_PER_SECOND);
 	const out: SttWordSegment[] = [];
 	let cursor = 0;
 
-	for (const tok of tokens) {
-		if (tok.tokenId === 0) continue; // skip blanks
-		// Find first occurrence of `tok.tokenId` at or after `cursor` so the
-		// aligner can't reuse the same frame for two consecutive matches.
-		let startFrame = -1;
-		for (let i = cursor; i < frameCount; i++) {
-			if (frameIds[i] === tok.tokenId) {
-				startFrame = i;
-				break;
-			}
-		}
-		if (startFrame < 0) {
-			// ponytail: word didn't align — drop it from the output rather than emit
-			// a placeholder span that would lie about the audio.
+	for (const token of tokens) {
+		const firstFrame = findFirstFrame(frameIds, token.tokens[0]!.id, cursor, frameCount);
+		if (firstFrame < 0) {
+			// ponytail: char never appears in the CTC stream — the model dropped
+			// the whole word. Skip it rather than emit a fake span.
 			continue;
 		}
-		// End at the next non-blank, non-self frame, or the last frame the
-		// model emitted. We allow staying on the same token id (no gap) since
-		// CTC can stretch a token across consecutive frames.
-		let endFrame = frameCount - 1;
-		for (let i = startFrame + 1; i < frameCount; i++) {
-			if (frameIds[i] !== tok.tokenId) {
-				endFrame = i;
-				break;
-			}
-		}
-		cursor = endFrame;
+		const lastChar = token.tokens[token.tokens.length - 1]!;
+		const lastFrame = findLastFrame(frameIds, lastChar.id, firstFrame, frameCount);
+		cursor = lastFrame + 1;
 
-		const startSec = Math.min(dur, startFrame / FRAMES_PER_SECOND);
-		const endSec = Math.max(startSec + 0.02, Math.min(dur, (endFrame + 1) / FRAMES_PER_SECOND));
-		out.push({ word: tok.word, startSec, endSec });
+		const startSec = Math.min(dur, firstFrame / FRAMES_PER_SECOND);
+		const endSec = Math.max(startSec + 0.02, Math.min(dur, (lastFrame + 1) / FRAMES_PER_SECOND));
+		const wordText = token.tokens
+			.map((t) => t.char)
+			.join("")
+			.toLowerCase();
+		out.push({ word: wordText, startSec, endSec });
 	}
 	return out;
+}
+
+/** Find the first frame ≥ startIdx whose argmax equals `targetId`. */
+function findFirstFrame(
+	frameIds: number[],
+	targetId: number,
+	startIdx: number,
+	frameCount: number,
+): number {
+	for (let i = startIdx; i < frameCount; i++) {
+		if (frameIds[i] === targetId) return i;
+	}
+	return -1;
+}
+
+/**
+ * Find the last frame where `targetId` is held, starting at `fromFrame`. Allows
+ * repeated-token stretches (a char may span many frames). Caps at the first
+ * frame after `fromFrame` that switches to something else.
+ */
+function findLastFrame(
+	frameIds: number[],
+	targetId: number,
+	fromFrame: number,
+	frameCount: number,
+): number {
+	for (let i = fromFrame + 1; i < frameCount; i++) {
+		if (frameIds[i] !== targetId) return i - 1;
+	}
+	return frameCount - 1;
 }

@@ -49,7 +49,7 @@ vi.mock("./modelManager", () => ({
 	ensureModels: vi.fn(async () => undefined),
 	modelPaths: (base: string) => ({
 		whisper: `${base}/whisper/ggml-medium.bin`,
-		"mms-alignment": `${base}/mms-alignment/model.onnx`,
+		wav2vec2: `${base}/wav2vec2/model.onnx`,
 	}),
 }));
 

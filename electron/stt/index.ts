@@ -77,6 +77,7 @@ export class SttManager {
 		this.emit({ phase: "model", model: "whisper", downloadedBytes: 0, totalBytes: 0 });
 		await ensureModels({
 			baseDir: modelsDir,
+			withWav2vec2Companions: true,
 			onProgress: (event) => {
 				this.emit({
 					phase: "model",
@@ -91,7 +92,10 @@ export class SttManager {
 		const paths = modelPaths(modelsDir);
 		await this.server.start({ modelPath: paths.whisper });
 
-		this.aligner = new ForcedAligner({ modelPath: paths["mms-alignment"] });
+		// ponytail: pass the vocab path explicitly so the aligner can verify SHA-256
+		// at load time — defense in depth against a corrupt cache from a previous run.
+		const vocabPath = path.join(path.dirname(paths.wav2vec2), "vocab.json");
+		this.aligner = new ForcedAligner({ modelPath: paths.wav2vec2, vocabPath });
 		await this.aligner.ready();
 		this.emit({ phase: "transcribe" });
 		void probe; // backend is reported through the whisper-server manager status

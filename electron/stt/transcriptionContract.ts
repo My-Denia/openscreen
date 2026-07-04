@@ -38,8 +38,8 @@ export interface SttStatusEvent {
 	downloadedBytes?: number;
 	/** Total bytes for the in-flight download. */
 	totalBytes?: number;
-	/** Which model is downloading: whisper or mms-alignment. */
-	model?: "whisper" | "mms-alignment";
+	/** Which model is downloading: whisper or wav2vec2. */
+	model?: "whisper" | "wav2vec2";
 }
 
 /** IPC request: renderer → main. */

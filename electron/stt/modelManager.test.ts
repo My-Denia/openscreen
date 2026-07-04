@@ -23,20 +23,22 @@ describe("modelManager", () => {
 
 	it("exposes both required models", () => {
 		expect(STT_MODELS.whisper.file).toBe("ggml-medium.bin");
-		expect(STT_MODELS["mms-alignment"].file).toBe("model.onnx");
+		expect(STT_MODELS.wav2vec2.file).toBe("model.onnx");
+		expect(STT_MODELS.wav2vec2.expectedSha256).not.toBeNull();
 		expect(STT_MODELS.whisper.approximateBytes).toBeGreaterThan(0);
 	});
 
 	it("modelPaths places files under per-model directories", () => {
 		const paths = modelPaths(dir);
 		expect(paths.whisper).toBe(path.join(dir, "whisper", "ggml-medium.bin"));
-		expect(paths["mms-alignment"]).toBe(path.join(dir, "mms-alignment", "model.onnx"));
+		expect(paths.wav2vec2).toBe(path.join(dir, "wav2vec2", "model.onnx"));
 	});
 
-	it("expectedSha256For reports null until pinning", () => {
-		// ponytail: pin per release; production builds must not ship null.
+	it("expectedSha256For reports wav2vec2 as pinned and whisper as null until release", () => {
+		// whisper SHA is per-release (size matters for the ggml-format upgrade path);
+		// wav2vec2 is pinned at export time. Production builds must ship a real whisper hash.
 		expect(expectedSha256For("whisper")).toBeNull();
-		expect(expectedSha256For("mms-alignment")).toBeNull();
+		expect(expectedSha256For("wav2vec2")).not.toBeNull();
 	});
 
 	it("areModelsPresent returns false when nothing has been downloaded", async () => {
@@ -46,10 +48,10 @@ describe("modelManager", () => {
 	it("areModelsPresent returns true only when both files exist", async () => {
 		const paths = modelPaths(dir);
 		await mkdir(path.dirname(paths.whisper), { recursive: true });
-		await mkdir(path.dirname(paths["mms-alignment"]), { recursive: true });
+		await mkdir(path.dirname(paths.wav2vec2), { recursive: true });
 		await writeFile(paths.whisper, "placeholder contents");
 		expect(await areModelsPresent(dir)).toBe(false);
-		await writeFile(paths["mms-alignment"], "placeholder contents");
+		await writeFile(paths.wav2vec2, "placeholder contents");
 		expect(await areModelsPresent(dir)).toBe(true);
 	});
 
@@ -108,8 +110,8 @@ describe("modelManager", () => {
 			fetcher,
 			onProgress: () => undefined,
 		});
-		// Whisper cache hit: no fetch fires for it, then mms-alignment fetches once.
-		// We only requested only:["whisper"], so fetches should be 0.
+		// Whisper cache hit: no fetch fires for it. We only requested
+		// only:["whisper"], so wav2vec2 never gets touched — fetches should be 0.
 		expect(fetches).toBe(0);
 	});
 
