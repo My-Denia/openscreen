@@ -5,12 +5,12 @@
  * cheap to share with renderer + main + test code.
  */
 
-/** A word-aligned segment with timestamps from forced alignment. */
+/** A word-level segment with timestamps from whisper.cpp's own per-word output. */
 export interface SttWordSegment {
 	word: string;
 	startSec: number;
 	endSec: number;
-	/** Confidence in `[0, 1]` when the aligner exposes one; otherwise `undefined`. */
+	/** Confidence in `[0, 1]` when the recognizer exposes one; otherwise `undefined`. */
 	confidence?: number;
 }
 
@@ -38,8 +38,8 @@ export interface SttStatusEvent {
 	downloadedBytes?: number;
 	/** Total bytes for the in-flight download. */
 	totalBytes?: number;
-	/** Which model is downloading: whisper or wav2vec2. */
-	model?: "whisper" | "wav2vec2";
+	/** Which model is downloading. */
+	model?: "whisper";
 }
 
 /** IPC request: renderer → main. */

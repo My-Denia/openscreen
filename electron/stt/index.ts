@@ -1,25 +1,24 @@
 import path from "node:path";
 import { app, type IpcMain } from "electron";
 
-import { ForcedAligner } from "./forcedAlignment";
-import { detectGpuBackend } from "./gpuDetector";
 import { ensureModels, modelPaths } from "./modelManager";
 import type {
 	SttStatusEvent,
 	SttTranscribeRequest,
 	SttTranscribeResponse,
-	SttWordSegment,
 } from "./transcriptionContract";
+import { resolveVadModelPath } from "./vadModel";
 import { WhisperServerManager } from "./whisperServer";
 
 /**
  * Owner of the long-lived STT pipeline. One instance per Electron app.
  *
  * Workflow:
- *   1. `init()` spawns `whisper-server` (or queues the call if it's busy)
- *      and loads the aligner's ONNX model.
+ *   1. `init()` spawns `whisper-server` (or queues the call if it's busy).
  *   2. `transcribe()` proxies the renderer's `Float32Array` through
- *      whisper-server's HTTP `/inference` then runs forced alignment.
+ *      whisper-server's HTTP `/inference`, which returns both phrase- and
+ *      word-level segments in one pass (see whisperServer.ts) — no separate
+ *      forced-alignment step.
  *   3. `shutdown()` tears down on app quit.
  *
  * Status events fan out via `statusSink` so the renderer can drive its
@@ -34,7 +33,6 @@ export interface SttManagerInitOptions {
 
 export class SttManager {
 	private readonly server = new WhisperServerManager();
-	private aligner: ForcedAligner | null = null;
 	private modelsBaseDir: string | null = null;
 	private statusSink: ((event: SttStatusEvent) => void) | null = null;
 	private initPromise: Promise<void> | null = null;
@@ -77,7 +75,6 @@ export class SttManager {
 		this.emit({ phase: "model", model: "whisper", downloadedBytes: 0, totalBytes: 0 });
 		await ensureModels({
 			baseDir: modelsDir,
-			withWav2vec2Companions: true,
 			onProgress: (event) => {
 				this.emit({
 					phase: "model",
@@ -88,20 +85,23 @@ export class SttManager {
 			},
 		});
 
-		const probe = await detectGpuBackend();
 		const paths = modelPaths(modelsDir);
-		await this.server.start({ modelPath: paths.whisper });
-
-		// ponytail: pass the vocab path explicitly so the aligner can verify SHA-256
-		// at load time — defense in depth against a corrupt cache from a previous run.
-		const vocabPath = path.join(path.dirname(paths.wav2vec2), "vocab.json");
-		this.aligner = new ForcedAligner({ modelPath: paths.wav2vec2, vocabPath });
-		await this.aligner.ready();
+		// ponytail: VAD is a bundled, install-time artifact — never downloaded,
+		// never lazily fetched. If resolveVadModelPath returns null here, the
+		// build pipeline missed a step (the model isn't under `electron/native/models/silero/`
+		// in the checkout, or `extraResources` didn't ship it in the installer).
+		// Fail loud — transcription refuses to start. See `electron/stt/vadModel.ts`.
+		const vadModelPath = resolveVadModelPath();
+		if (!vadModelPath) {
+			throw new Error(
+				"Silero VAD model not found in the install tree; reinstall the application or run scripts/fetch-vad-model.sh",
+			);
+		}
+		await this.server.start({ modelPath: paths.whisper, vadModelPath });
 		this.emit({ phase: "transcribe" });
-		void probe; // backend is reported through the whisper-server manager status
 	}
 
-	/** Run one transcription request through whisper → forced alignment. */
+	/** Run one transcription request through whisper-server. */
 	async transcribe(req: SttTranscribeRequest): Promise<SttTranscribeResponse> {
 		await this.init();
 		this.emit({ phase: "transcribe" });
@@ -109,24 +109,10 @@ export class SttManager {
 			samples: req.samples,
 			language: req.language,
 		});
-		let wordSegments: SttWordSegment[] = [];
-		if (this.aligner) {
-			try {
-				wordSegments = await this.aligner.align({
-					samples: req.samples,
-					sampleRate: 16_000,
-					phraseSegments: phrase.segments,
-				});
-			} catch (err) {
-				// ponytail: forced alignment is best-effort — if it fails (e.g. ONNX
-				// session broken), the renderer still gets usable phrase-level segments.
-				console.error("[stt] forced alignment failed, returning phrase-only segments:", err);
-			}
-		}
 		const backend = this.server.status.backend ?? "whisper-cpu";
 		return {
 			segments: phrase.segments,
-			wordSegments,
+			wordSegments: phrase.wordSegments,
 			detectedLanguage: phrase.detectedLanguage,
 			backend,
 		};
@@ -134,8 +120,6 @@ export class SttManager {
 
 	/** Best-effort shutdown; safe to call from `before-quit` hooks. */
 	async shutdown(): Promise<void> {
-		await this.aligner?.dispose();
-		this.aligner = null;
 		await this.server.stop();
 	}
 }

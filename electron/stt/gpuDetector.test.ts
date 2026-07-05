@@ -19,24 +19,43 @@ describe("gpuDetector", () => {
 		expect(result.reason.length).toBeGreaterThan(0);
 	});
 
-	it("binaryNameForBackend returns a stable name per backend", () => {
-		expect(binaryNameForBackend("whisper-metal")).toBe("whisper-server-whisper-metal");
-		expect(binaryNameForBackend("whisper-cuda")).toBe("whisper-server-whisper-cuda");
-		expect(binaryNameForBackend("whisper-vulkan")).toBe("whisper-server-whisper-vulkan");
-		expect(binaryNameForBackend("whisper-cpu")).toBe("whisper-server-whisper-cpu");
+	it("binaryNameForBackend returns a stable name per backend, with .exe on win32", () => {
+		// Save + restore platform to keep this test host-agnostic.
+		const originalPlatform = process.platform;
+		Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+		try {
+			expect(binaryNameForBackend("whisper-metal")).toBe("whisper-server-whisper-metal");
+			expect(binaryNameForBackend("whisper-cuda")).toBe("whisper-server-whisper-cuda");
+			expect(binaryNameForBackend("whisper-vulkan")).toBe("whisper-server-whisper-vulkan");
+			expect(binaryNameForBackend("whisper-cpu")).toBe("whisper-server-whisper-cpu");
+		} finally {
+			Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+		}
+		Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+		try {
+			expect(binaryNameForBackend("whisper-cpu")).toBe("whisper-server-whisper-cpu.exe");
+			expect(binaryNameForBackend("whisper-cuda")).toBe("whisper-server-whisper-cuda.exe");
+		} finally {
+			Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+		}
 	});
 
-	it("candidateBinaryPaths surfaces bin candidates under the repo root", () => {
-		const here = "/fake/repo";
-		const paths = candidateBinaryPaths("whisper-cpu", here);
-		// No env override: the env entry is filtered, leaving only the bin paths.
-		expect(paths.length).toBeGreaterThanOrEqual(2);
-		// Compare via path.resolve/normalize so the assertion holds on both
-		// POSIX and Windows hosts (Windows turns /fake/repo into \fake\repo).
-		const expectedFlat = path.resolve(
-			path.join(here, "electron", "native", "bin", "whisper-server-whisper-cpu"),
-		);
-		expect(paths.map((p) => path.resolve(p))).toContain(expectedFlat);
+	it("candidateBinaryPaths surfaces bin candidates under the repo root, .exe-aware on win32", () => {
+		const originalPlatform = process.platform;
+		Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+		try {
+			const here = "C:/fake/repo";
+			const paths = candidateBinaryPaths("whisper-cpu", here);
+			// Both .exe and bare names appear, on every base dir, so a checkout
+			// with either naming convention still resolves.
+			expect(paths.length).toBeGreaterThanOrEqual(2);
+			const resolved = paths.map((p) => p.replace(/\\/g, "/"));
+			expect(resolved).toContain(
+				`${here}/electron/native/bin/win32-x64/whisper-server-whisper-cpu.exe`,
+			);
+		} finally {
+			Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+		}
 	});
 
 	it("candidateBinaryPaths prepends env override when set", () => {

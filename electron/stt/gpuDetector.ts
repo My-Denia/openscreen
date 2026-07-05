@@ -92,26 +92,47 @@ function darwinBackend(): GpuProbeResult {
  * Probe the host for GPU acceleration. Returns the chosen `SttBackend` plus a
  * short reason for log lines. Cheap to call: all probes run with a hard
  * timeout and the worst total wait is ~3s (nvidia + vulkan probes sequenced).
+ *
+ * ponytail: the binary's `candidateBinaryPaths` is consulted before claiming
+ * a backend is available. The user might have an NVIDIA driver installed but
+ * not the matching whisper-server CUDA binary (build is 30+ min + CUDA SDK);
+ * in that case we drop to CPU rather than failing at spawn time.
  */
 export async function detectGpuBackend(): Promise<GpuProbeResult> {
 	if (process.platform === "darwin") {
 		return darwinBackend();
 	}
 
-	if (await probeNvidia()) {
-		return { backend: "whisper-cuda", reason: "nvidia-smi present → cuda" };
+	if ((await probeNvidia()) && binaryAvailable("whisper-cuda", process.cwd())) {
+		return { backend: "whisper-cuda", reason: "nvidia-smi present + binary built → cuda" };
 	}
 
-	if (await probeVulkan()) {
-		return { backend: "whisper-vulkan", reason: "vulkan loader present → vulkan" };
+	if ((await probeVulkan()) && binaryAvailable("whisper-vulkan", process.cwd())) {
+		return { backend: "whisper-vulkan", reason: "vulkan loader present + binary built → vulkan" };
 	}
 
-	return { backend: "whisper-cpu", reason: "no GPU detected → cpu" };
+	return { backend: "whisper-cpu", reason: "no usable GPU backend → cpu" };
 }
 
-/** Conventional bin name for the chosen backend; matches `build-whisper-binaries.sh`. */
+/** True if at least one of the candidate paths for this backend exists on disk. */
+function binaryAvailable(backend: SttBackend, here: string): boolean {
+	const paths = candidateBinaryPaths(backend, here);
+	return paths.some((p) => {
+		try {
+			return require("node:fs").existsSync(p);
+		} catch {
+			return false;
+		}
+	});
+}
+
+/** Conventional bin name for the chosen backend; matches `build-whisper-binaries.sh`.
+ * Includes the `.exe` suffix on Windows so the OS can execute the file — without
+ * it, `fs.access(X_OK)` reports "not executable" because Win32's spawn shell
+ * can't resolve a bare name to an executable image. */
 export function binaryNameForBackend(backend: SttBackend): string {
-	return `whisper-server-${backend}`;
+	const suffix = process.platform === "win32" ? ".exe" : "";
+	return `whisper-server-${backend}${suffix}`;
 }
 
 /**
@@ -119,25 +140,34 @@ export function binaryNameForBackend(backend: SttBackend): string {
  *   1. `OPENSCREEN_WHISPER_SERVER_EXE` env override (debug builds)
  *   2. `electron/native/bin/<os>-<arch>/<binaryName>` (packaged + local cross-builds)
  *   3. `electron/native/bin/<binaryName>` (bare checkout, e.g. tests)
+ *
+ * ponytail: on Windows, accept both the .exe-suffixed and bare names so a
+ * checkout that pre-dates the suffix fix still resolves to a valid file.
  */
 export function candidateBinaryPaths(backend: SttBackend, here: string = process.cwd()): string[] {
 	const tag = `${process.platform}-${process.arch}`;
 	const name = binaryNameForBackend(backend);
 	const envPath = process.env.OPENSCREEN_WHISPER_SERVER_EXE?.trim();
+	const names = name.endsWith(".exe") ? [name, name.replace(/\.exe$/, "")] : [name];
 	return [
-		envPath,
-		path.join(here, "electron", "native", "bin", tag, name),
-		path.join(here, "electron", "native", "bin", name),
+		...names.map((n) => (envPath ? envPath : n)),
+		...names.map((n) => path.join(here, "electron", "native", "bin", tag, n)),
+		...names.map((n) => path.join(here, "electron", "native", "bin", n)),
 	].filter((p): p is string => Boolean(p));
 }
 
-/** Probe → first existing candidate → null if none. */
+/** Probe → first existing candidate → null if none.
+ *
+ * ponytail: `resolveBinaryPath` verifies each candidate via `existsSync` (sync
+ * filesystem probe, no I/O stall). The earlier "return the first string" was
+ * shipping the bare `OPENSCREEN_WHISPER_SERVER_EXE` style path when no env
+ * override is set, which is a bare filename that doesn't resolve — causing
+ * "is not executable" downstream. Real check, not string-only. */
 export async function resolveBinaryPath(here: string = process.cwd()): Promise<ResolvedBinary> {
+	const { existsSync } = await import("node:fs");
 	const probe = await detectGpuBackend();
 	for (const candidate of candidateBinaryPaths(probe.backend, here)) {
-		// Light probe — we do not require exec here; the supervisor does the X_OK check.
-		// Returning the path is enough; the spawn will fail loudly if not executable.
-		if (candidate) {
+		if (candidate && existsSync(candidate)) {
 			return { backend: probe.backend, path: candidate };
 		}
 	}

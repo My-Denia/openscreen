@@ -1,6 +1,7 @@
-// Smoke-test the full STT pipeline (whisper-server + wav2vec2 forced alignment)
-// by calling the same modules the IPC handler calls. Skips the Electron
-// boilerplate (BrowserWindow, IPC plumbing) — runs in plain Node.
+// Smoke-test the full STT pipeline (whisper-server, including its own
+// per-word timestamps) by calling the same modules the IPC handler calls.
+// Skips the Electron boilerplate (BrowserWindow, IPC plumbing) — runs in
+// plain Node.
 //
 // Run: node scripts/e2e-pipeline-smoke.mjs
 
@@ -33,23 +34,7 @@ const MODEL_PATH = join(
 	"Electron",
 	"stt-models",
 	"whisper",
-	"ggml-medium.bin",
-);
-const WAV2VEC2_MODEL = join(
-	ROOT,
-	"electron",
-	"native",
-	"models",
-	"wav2vec2-base-960h",
-	"model.onnx",
-);
-const WAV2VEC2_VOCAB = join(
-	ROOT,
-	"electron",
-	"native",
-	"models",
-	"wav2vec2-base-960h",
-	"vocab.json",
+	"ggml-small-q5_1.bin",
 );
 
 // Lazy import — only the type module + the bits we need. The main thing
@@ -141,6 +126,7 @@ async function main() {
 	console.log(`Inference took ${Date.now() - t0}ms`);
 
 	const phrases = [];
+	const words = [];
 	if (Array.isArray(json.segments)) {
 		for (const seg of json.segments) {
 			phrases.push({
@@ -148,75 +134,24 @@ async function main() {
 				startSec: Number(seg.start),
 				endSec: Number(seg.end),
 			});
+			for (const w of seg.words ?? []) {
+				words.push({
+					text: w.word?.trim() ?? "",
+					startSec: Number(w.start),
+					endSec: Number(w.end),
+				});
+			}
 		}
 	}
 	console.log(`Phrases: ${phrases.length}`);
 	for (const p of phrases)
 		console.log(`  [${p.startSec.toFixed(2)}-${p.endSec.toFixed(2)}] ${JSON.stringify(p.text)}`);
 
-	// Stage 2: forced alignment (matches SttManager.prepare() -> ForcedAligner + align()).
-	console.log("\n=== Forced alignment ===");
-	const ort = await import("onnxruntime-node");
-	const sess = await ort.InferenceSession.create(WAV2VEC2_MODEL, {
-		executionProviders: ["cpuExecutionProvider"],
-		graphOptimizationLevel: "all",
-	});
-	const logits = (
-		await sess.run({ input_values: { type: "float32", data: samples, dims: [1, samples.length] } })
-	).logits;
-	const log = logits[Object.keys(logits)[0]];
-	const tokenIds = Array.from(
-		log.dims[0] === log.dims[0]
-			? (() => {
-					const out = new Array(log.dims[1]);
-					for (let t = 0; t < log.dims[1]; t++) {
-						let bestId = 0;
-						let bestVal = log.data[t * log.dims[2]];
-						for (let v = 1; v < log.dims[2]; v++) {
-							const val = log.data[t * log.dims[2] + v];
-							if (val > bestVal) {
-								bestVal = val;
-								bestId = v;
-							}
-						}
-						out[t] = bestId;
-					}
-					return out;
-				})()
-			: [],
-	);
-
-	const vocab = JSON.parse(await readFile(WAV2VEC2_VOCAB, "utf8"));
-	const idToToken = Object.fromEntries(Object.entries(vocab).map(([k, v]) => [v, k]));
-	console.log(`token stream (first 60): ${tokenIds.slice(0, 60).join(",")}`);
-
-	const segments = [];
-	let word = [];
-	let wordStart = null;
-	for (let i = 0; i < tokenIds.length; i++) {
-		const tid = tokenIds[i];
-		const sec = i / 50;
-		if (tid === 0) continue; // <pad>
-		if (tid === 4) {
-			// `|` word delimiter
-			if (word.length > 0) {
-				segments.push({ startSec: wordStart, endSec: sec, text: word.join("") });
-			}
-			word = [];
-			wordStart = null;
-			continue;
-		}
-		const tok = idToToken[tid];
-		if (tok === undefined) continue;
-		if (wordStart === null) wordStart = sec;
-		word.push(tok);
-	}
-	console.log(`Word segments: ${segments.length}`);
-	for (const seg of segments) {
-		console.log(
-			`  [${seg.startSec.toFixed(2)}-${seg.endSec.toFixed(2)}] ${JSON.stringify(seg.text)}`,
-		);
-	}
+	// Word-level timestamps come straight from whisper-server's own output
+	// (segments[].words[]) — no separate forced-alignment pass.
+	console.log(`\nWords: ${words.length}`);
+	for (const w of words)
+		console.log(`  [${w.startSec.toFixed(2)}-${w.endSec.toFixed(2)}] ${JSON.stringify(w.text)}`);
 
 	server.kill("SIGTERM");
 	await new Promise((res) => setTimeout(res, 1500));

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
-import { copyFile as copyFileAsync, mkdir, rename, stat } from "node:fs/promises";
+import { mkdir, rename, stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -8,23 +8,44 @@ import { pipeline } from "node:stream/promises";
 /**
  * Manages the lifetime of the on-disk model artifacts used by the STT stack.
  *
- *  - Whisper: ggml-medium.bin (~1.5 GB), MIT-licensed (OpenAI Whisper via
+ *  - Whisper: ggml-small-q5_1.bin (~190 MB), MIT-licensed (OpenAI Whisper via
  *    ggerganov/whisper.cpp). Downloaded on first transcription.
- *  - Forced alignment: facebook/wav2vec2-base-960h (~377 MB), Apache 2.0.
- *    Char-level English vocab (32 tokens: 26 letters + apostrophe + word
- *    delimiter + 4 special tokens). Suitable for English forced alignment;
- *    non-English content falls back to whisper.cpp's per-token timestamps.
+ *    ponytail: was `ggml-medium.bin` (fp16, ~1.5 GB) — measured 16s to
+ *    transcribe a 12s clip on an 8-core CPU (no GPU backend ships on
+ *    Windows; see gpuDetector.ts). `small` q5_1 quantization measured 3.5-4.2s
+ *    for the same clip with identical transcribed text, at 1/8th the download
+ *    size. `q5_1` (not a more aggressive quantization) to keep quality close
+ *    to fp16 while still shrinking the file substantially.
  *
- * SHA-256 verification is in place so an interrupted or tampered download
- * can't pass as a valid model. Vocab + config files ship alongside.
+ *  - VAD (Silero, ggml-silero-v6.2.0.bin, ~2 MB): **bundled** with the
+ *    installer, not downloaded at runtime — resolved from
+ *    `electron/native/models/silero/` via `vadModel.resolveVadModelPath` and
+ *    passed to whisper-server as `--vad-model`. whisper.cpp ships Silero as a
+ *    native VAD, the ggml model is portable across platforms, and bundling
+ *    avoids any "first-run download" UX for the load-bearing piece that
+ *    keeps word timestamps accurate after leading silence.
  *
- * ponytail: the original spec pointed at `facebook/mms-alignment` (CC-BY-NC-4.0,
- * gated, 401) which would have been both a license violation and a download
- * blocker. The current entry is the spec's documented fallback, lifted from
- * "verify before bundle" into "ship by default" after verification failed.
+ * SHA-256 verification is in place for the downloadable models so an
+ * interrupted or tampered download can't pass as a valid model.
+ *
+ * ponytail: word-level timestamps come from whisper.cpp's own per-word
+ * output (`segments[].words[]` in its `verbose_json` response) rather than a
+ * separate forced-alignment pass. An earlier iteration ran
+ * `facebook/wav2vec2-base-960h` through `onnxruntime-node` for word-level CTC
+ * alignment, but that added a whole extra model + dependency, ran the full
+ * (unchunked) audio through a second forward pass — expensive on long
+ * recordings — and its greedy char-matching turned out to be fragile in
+ * practice. whisper.cpp's own word timestamps are already computed as part
+ * of decoding (no extra cost) and are less precise (~±50-200ms) but always
+ * real, never fabricated. Built-in Silero VAD runs before the ASR decoder
+ * and offsets each region's timestamps to its position in the original
+ * audio, so leading silence no longer distorts the first phrase. If even
+ * tighter precision is needed later, whisper.cpp supports `--dtw <model>`
+ * for its own (still native, no separate model/dependency) DTW-based token
+ * alignment — not currently enabled; see `whisperServer.ts`.
  */
 
-export type SttModelId = "whisper" | "wav2vec2";
+export type SttModelId = "whisper";
 
 export interface SttModelDescriptor {
 	/** Display + cache directory name. */
@@ -46,72 +67,12 @@ export interface SttModelDescriptor {
 export const STT_MODELS: Record<SttModelId, SttModelDescriptor> = {
 	whisper: {
 		cacheDir: "whisper",
-		file: "ggml-medium.bin",
-		url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
-		expectedSha256: null,
-		approximateBytes: 1_500_000_000,
-	},
-	wav2vec2: {
-		cacheDir: "wav2vec2",
-		file: "model.onnx",
-		// ponytail: facebook/wav2vec2-base-960h ships on HF as PyTorch only —
-		// no pre-exported ONNX. We export once (see scripts/export-wav2vec2-onnx.py)
-		// and host the result on a GitHub release to avoid checking 360 MB into
-		// git. Override via the OPENSCREEN_WAV2VEC2_URL env var to point at a
-		// self-hosted mirror, or run a build step that pre-populates the user
-		// cache from the local file at electron/native/models/.
-		url:
-			process.env.OPENSCREEN_WAV2VEC2_URL ??
-			"https://github.com/getopenscreen/openscreen/releases/download/v0.0.0-stt-models/model.onnx",
-		// ponytail: SHA pinned at export time. Re-derive by re-exporting
-		// facebook/wav2vec2-base-960h and updating if HF upstream changes.
-		expectedSha256: "8a278b42db089ddbc955152646575d439b31cca547cead37891f57c374451b36",
-		approximateBytes: 380_000_000,
+		file: "ggml-small-q5_1.bin",
+		url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
+		expectedSha256: "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
+		approximateBytes: 190_000_000,
 	},
 };
-
-/** Companion files for the wav2vec2 alignment model. Required by the ORT session
- * to map logit indices → characters and to know the audio preprocessing params. */
-export const WAV2VEC2_VOCAB_URL =
-	"https://huggingface.co/facebook/wav2vec2-base-960h/resolve/main/vocab.json";
-export const WAV2VEC2_VOCAB_SHA256 =
-	"8ae64b2ec10a2ea5c4416ed0394dcad8643b764ef979109fbf5261cb88eb836f";
-export const WAV2VEC2_CONFIG_URL =
-	"https://huggingface.co/facebook/wav2vec2-base-960h/resolve/main/config.json";
-export const WAV2VEC2_CONFIG_SHA256 =
-	"38bbf4840796b025902fd2a9fbbe8b6bf59eb262eb55c935b1e2ac5ea068a3ec";
-
-/**
- * ponytail: facebook/wav2vec2-base-960h ships on HuggingFace as PyTorch
- * (.bin / .safetensors) only — no pre-exported ONNX file. We export once
- * via `optimum` and bundle the resulting .onnx alongside the app for
- * offline operation. `ensureModels` looks for the bundled file first,
- * downloads + SHA-verifies only when not found.
- */
-function bundledWav2vec2Candidates(): string[] {
-	const out: string[] = [];
-	// Production: extraResources copies `electron/native/models/` into resourcesPath.
-	const resources = process.env.OPENSCREEN_RESOURCES_PATH;
-	if (resources) {
-		out.push(path.join(resources, "models", "wav2vec2-base-960h", "model.onnx"));
-	}
-	// Dev: file lives next to the bundled whisper-server binary, or in cwd.
-	const here = process.cwd();
-	out.push(path.join(here, "electron", "native", "models", "wav2vec2-base-960h", "model.onnx"));
-	return out;
-}
-
-/** Resolve the bundled wav2vec2 ONNX path; returns null when no candidate exists. */
-export function findBundledWav2vec2(): string | null {
-	for (const candidate of bundledWav2vec2Candidates()) {
-		try {
-			if (existsSync(candidate)) return candidate;
-		} catch {
-			// ignore — the candidate path may not exist yet
-		}
-	}
-	return null;
-}
 
 /** ponytail: pin SHA-256 per release and update this map before tagging. Stored in a
  * single source of truth so the build script + the runtime verifier read the same value. */
@@ -129,22 +90,18 @@ export interface ModelProgress {
 export function modelPaths(baseDir: string): Record<SttModelId, string> {
 	return {
 		whisper: path.join(baseDir, STT_MODELS.whisper.cacheDir, STT_MODELS.whisper.file),
-		wav2vec2: path.join(baseDir, STT_MODELS.wav2vec2.cacheDir, STT_MODELS.wav2vec2.file),
 	};
 }
 
-/** True when both model files exist and have non-zero size. */
+/** True when the whisper model file exists and has non-zero size. */
 export async function areModelsPresent(baseDir: string): Promise<boolean> {
 	const paths = modelPaths(baseDir);
-	for (const id of ["whisper", "wav2vec2"] as const) {
-		try {
-			const s = await stat(paths[id]);
-			if (!s.isFile() || s.size <= 0) return false;
-		} catch {
-			return false;
-		}
+	try {
+		const s = await stat(paths.whisper);
+		return s.isFile() && s.size > 0;
+	} catch {
+		return false;
 	}
-	return true;
 }
 
 /** Verify SHA-256 of a file in 64 KiB chunks; resolves to the lowercase hex digest. */
@@ -261,142 +218,33 @@ export async function downloadModel(
 	}
 }
 
-export interface CompanionFile {
-	/** HTTPS URL to download from. */
-	url: string;
-	/** Absolute destination path. */
-	dest: string;
-	/** Expected SHA-256 hex; throws on mismatch. */
-	expectedSha256: string;
-}
-
-/** Download a companion file (vocab, config) with SHA verification. Same retry policy as
- * the main model. Reuses the destination if it already exists with non-zero size. */
-export async function downloadCompanionFile(
-	file: CompanionFile,
-	options: DownloadOptions = {},
-): Promise<void> {
-	if (existsSync(file.dest)) {
-		const s = await stat(file.dest);
-		if (s.isFile() && s.size > 0) {
-			const actual = await sha256OfFile(file.dest);
-			if (actual.toLowerCase() === file.expectedSha256.toLowerCase()) {
-				options.onProgress?.(s.size);
-				return;
-			}
-			// ponytail: keep the bad file under .bad for diagnosis, but don't use it.
-			await rename(file.dest, `${file.dest}.bad`).catch(() => undefined);
-		}
-	}
-	await mkdir(path.dirname(file.dest), { recursive: true });
-	const fetcher = options.fetcher ?? fetch;
-	const res = await fetchWithRetry(file.url, fetcher);
-	const tmp = `${file.dest}.partial`;
-	let downloaded = 0;
-	const source = Readable.fromWeb(res.body as never);
-	source.on("data", (chunk: Buffer | Uint8Array) => {
-		downloaded += chunk.length;
-		options.onProgress?.(downloaded);
-	});
-	const { createWriteStream } = await import("node:fs");
-	await pipeline(source, createWriteStream(tmp));
-	await rename(tmp, file.dest);
-	const actual = await sha256OfFile(file.dest);
-	if (actual.toLowerCase() !== file.expectedSha256.toLowerCase()) {
-		await rename(file.dest, `${file.dest}.bad`).catch(() => undefined);
-		throw new Error(
-			`SHA-256 mismatch for ${path.basename(file.dest)}: expected ${file.expectedSha256}, got ${actual}`,
-		);
-	}
-}
-
 export interface EnsureModelsOptions {
 	baseDir: string;
-	/** Models to ensure; defaults to both. */
+	/** Models to ensure; defaults to all (currently just `whisper`). */
 	only?: SttModelId[];
-	/** Download wav2vec2 companion files (vocab.json + config.json) alongside the model. */
-	withWav2vec2Companions?: boolean;
 	onProgress?: (event: ModelProgress) => void;
 	fetcher?: typeof fetch;
 }
 
 /** Ensure every required model is present locally; downloads with progress + retry. */
 export async function ensureModels(opts: EnsureModelsOptions): Promise<void> {
-	const targets = (opts.only ?? (["whisper", "wav2vec2"] as SttModelId[])).map((id) => ({
+	const targets = (opts.only ?? (["whisper"] as SttModelId[])).map((id) => ({
 		id,
 		descriptor: STT_MODELS[id],
 		path: modelPaths(opts.baseDir)[id],
 	}));
 
 	for (const { id, descriptor, path: dest } of targets) {
-		if (!dest) continue;
-
-		// ponytail: wav2vec2-base-960h ships as PyTorch only on HF; the ONNX we
-		// need must come from a local export. Prefer the bundled copy in
-		// `electron/native/models/wav2vec2-base-960h/`, copy + SHA-verify it
-		// into the user-data cache, and skip the URL fallback entirely.
-		if (id === "wav2vec2") {
-			await ensureWav2vec2(dest, opts);
-		} else {
-			await downloadModel(descriptor, dest, {
-				onProgress: (bytes) => opts.onProgress?.({ id, downloadedBytes: bytes, totalBytes: 0 }),
-				fetcher: opts.fetcher,
-			});
-			// Pin the total post-hoc for progress event UIs that need it.
-			try {
-				const s = await stat(dest);
-				opts.onProgress?.({ id, downloadedBytes: s.size, totalBytes: s.size });
-			} catch {
-				// best-effort; subsequent reads will fail loudly if missing
-			}
-		}
-	}
-}
-
-/** Copy the bundled wav2vec2 ONNX + companions into the user-data cache, verify SHA. */
-async function ensureWav2vec2(dest: string, opts: EnsureModelsOptions): Promise<void> {
-	const id: SttModelId = "wav2vec2";
-	const bundled = findBundledWav2vec2();
-	if (!bundled) {
-		// ponytail: a build that strips `electron/native/models/` from extraResources
-		// (or a packaging error) ends up here. Surface a clear error rather than
-		// trying to download the ONNX from a URL that doesn't exist on HF.
-		throw new Error(
-			"wav2vec2-base-960h ONNX not bundled. Expected at electron/native/models/wav2vec2-base-960h/model.onnx. " +
-				"Re-run scripts/export-wav2vec2-onnx.py or restore the model.onnx artifact.",
-		);
-	}
-	await mkdir(path.dirname(dest), { recursive: true });
-	const baseDir = path.dirname(dest);
-
-	// Stream-copy the bundled ONNX to the user-data cache + verify SHA before the
-	// forced alignment ever tries to load it. Cheap, fail-fast.
-	const tmp = `${dest}.partial`;
-	await copyFileAsync(bundled, tmp);
-	await rename(tmp, dest);
-	const actual = await sha256OfFile(dest);
-	const expected = STT_MODELS.wav2vec2.expectedSha256;
-	if (expected && actual.toLowerCase() !== expected.toLowerCase()) {
-		await rename(dest, `${dest}.bad`).catch(() => undefined);
-		throw new Error(`SHA-256 mismatch for bundled wav2vec2: expected ${expected}, got ${actual}`);
-	}
-	opts.onProgress?.({
-		id,
-		downloadedBytes: (await stat(dest)).size,
-		totalBytes: (await stat(dest)).size,
-	});
-
-	// Companion files (vocab.json + config.json) sit next to model.onnx in the
-	// bundle. Copy them alongside so `forcedAlignment.ensureVocabLoaded` can SHA-verify
-	// the vocab at load time without a network round-trip.
-	if (opts.withWav2vec2Companions) {
-		const vocabSrc = `${bundled.replace(/model\.onnx$/, "")}vocab.json`;
-		const configSrc = `${bundled.replace(/model\.onnx$/, "")}config.json`;
-		if (existsSync(vocabSrc)) {
-			await copyFileAsync(vocabSrc, path.join(baseDir, "vocab.json"));
-		}
-		if (existsSync(configSrc)) {
-			await copyFileAsync(configSrc, path.join(baseDir, "config.json"));
+		await downloadModel(descriptor, dest, {
+			onProgress: (bytes) => opts.onProgress?.({ id, downloadedBytes: bytes, totalBytes: 0 }),
+			fetcher: opts.fetcher,
+		});
+		// Pin the total post-hoc for progress event UIs that need it.
+		try {
+			const s = await stat(dest);
+			opts.onProgress?.({ id, downloadedBytes: s.size, totalBytes: s.size });
+		} catch {
+			// best-effort; subsequent reads will fail loudly if missing
 		}
 	}
 }

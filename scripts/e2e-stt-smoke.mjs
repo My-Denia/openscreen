@@ -1,6 +1,6 @@
-// End-to-end STT smoke test for the Electron STT modules.
-// Loads modelManager + whisperServer + forcedAlignment (with ORT),
-// then transcribes the actual user recording (12-second webm).
+// End-to-end STT smoke test: spawns whisper-server directly (same binary/args
+// as whisperServer.ts) and transcribes the actual user recording (12-second
+// webm), same way the IPC handler does.
 //
 // Run: node scripts/e2e-stt-smoke.mjs
 
@@ -32,7 +32,7 @@ const MODEL_PATH = join(
 	"Electron",
 	"stt-models",
 	"whisper",
-	"ggml-medium.bin",
+	"ggml-small-q5_1.bin",
 );
 
 async function extractWav(src, dst) {

@@ -21,37 +21,30 @@ describe("modelManager", () => {
 		await rm(dir, { recursive: true, force: true });
 	});
 
-	it("exposes both required models", () => {
-		expect(STT_MODELS.whisper.file).toBe("ggml-medium.bin");
-		expect(STT_MODELS.wav2vec2.file).toBe("model.onnx");
-		expect(STT_MODELS.wav2vec2.expectedSha256).not.toBeNull();
+	it("exposes the whisper model", () => {
+		expect(STT_MODELS.whisper.file).toBe("ggml-small-q5_1.bin");
+		expect(STT_MODELS.whisper.expectedSha256).not.toBeNull();
 		expect(STT_MODELS.whisper.approximateBytes).toBeGreaterThan(0);
 	});
 
-	it("modelPaths places files under per-model directories", () => {
+	it("modelPaths places the whisper file under its cache directory", () => {
 		const paths = modelPaths(dir);
-		expect(paths.whisper).toBe(path.join(dir, "whisper", "ggml-medium.bin"));
-		expect(paths.wav2vec2).toBe(path.join(dir, "wav2vec2", "model.onnx"));
+		expect(paths.whisper).toBe(path.join(dir, "whisper", "ggml-small-q5_1.bin"));
 	});
 
-	it("expectedSha256For reports wav2vec2 as pinned and whisper as null until release", () => {
-		// whisper SHA is per-release (size matters for the ggml-format upgrade path);
-		// wav2vec2 is pinned at export time. Production builds must ship a real whisper hash.
-		expect(expectedSha256For("whisper")).toBeNull();
-		expect(expectedSha256For("wav2vec2")).not.toBeNull();
+	it("expectedSha256For reports the whisper model as pinned", () => {
+		expect(expectedSha256For("whisper")).not.toBeNull();
 	});
 
 	it("areModelsPresent returns false when nothing has been downloaded", async () => {
 		expect(await areModelsPresent(dir)).toBe(false);
 	});
 
-	it("areModelsPresent returns true only when both files exist", async () => {
+	it("areModelsPresent returns true once the whisper file exists", async () => {
 		const paths = modelPaths(dir);
 		await mkdir(path.dirname(paths.whisper), { recursive: true });
-		await mkdir(path.dirname(paths.wav2vec2), { recursive: true });
-		await writeFile(paths.whisper, "placeholder contents");
 		expect(await areModelsPresent(dir)).toBe(false);
-		await writeFile(paths.wav2vec2, "placeholder contents");
+		await writeFile(paths.whisper, "placeholder contents");
 		expect(await areModelsPresent(dir)).toBe(true);
 	});
 
@@ -81,7 +74,9 @@ describe("modelManager", () => {
 		const fakeResponse = new Response(body as unknown as BodyInit, { status: 200 });
 		const fetcher: typeof fetch = async () => fakeResponse;
 		const bytes: number[] = [];
-		await downloadModel(STT_MODELS.whisper, dest, {
+		// expectedSha256: null — this test is about streaming/progress mechanics,
+		// not hash verification, and the fake payload won't match the real model's hash.
+		await downloadModel({ ...STT_MODELS.whisper, expectedSha256: null }, dest, {
 			fetcher,
 			onProgress: (b) => bytes.push(b),
 		});
@@ -110,8 +105,7 @@ describe("modelManager", () => {
 			fetcher,
 			onProgress: () => undefined,
 		});
-		// Whisper cache hit: no fetch fires for it. We only requested
-		// only:["whisper"], so wav2vec2 never gets touched — fetches should be 0.
+		// Whisper cache hit: no fetch fires for it.
 		expect(fetches).toBe(0);
 	});
 
@@ -140,7 +134,9 @@ describe("modelManager", () => {
 				return new Response("busy", { status: 503, statusText: "Service Unavailable" });
 			return new Response(Readable.from(["payload"]) as unknown as BodyInit, { status: 200 });
 		};
-		await downloadModel(STT_MODELS.whisper, dest, { fetcher });
+		// expectedSha256: null — this test is about retry/backoff mechanics,
+		// not hash verification, and the fake payload won't match the real model's hash.
+		await downloadModel({ ...STT_MODELS.whisper, expectedSha256: null }, dest, { fetcher });
 		expect(fetches).toBe(2); // one retry, then success
 	});
 });
