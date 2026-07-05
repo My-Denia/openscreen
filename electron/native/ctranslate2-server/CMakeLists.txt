@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(openscreen-ctranslate2-server LANGUAGES CXX)
+project(openscreen-ctranslate2-server LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -59,22 +59,41 @@ set(CTRANS2_CPU_ONLY OFF CACHE BOOL "" FORCE)
 set(CTRANS2_INSTALL OFF CACHE BOOL "" FORCE)
 set(CTRANS2_SHARED_LIB OFF CACHE BOOL "" FORCE)
 set(CTRANS2_STATIC_LIB ON CACHE BOOL "" FORCE)
-set(CTRANS2_WITH_MKL ${WITH_MKL} CACHE BOOL "" FORCE)
-set(CTRANS2_WITH_OPENBLAS ${WITH_OPENBLAS} CACHE BOOL "" FORCE)
-set(CTRANS2_WITH_BLAS ${WITH_BLAS} CACHE BOOL "" FORCE)
-set(CTRANS2_WITH_CUDA ${ENABLE_CUDA} CACHE BOOL "" FORCE)
+set(CTRANS2_WITH_MKL OFF CACHE BOOL "" FORCE)
+set(CTRANS2_WITH_DNNL OFF CACHE BOOL "" FORCE)
+set(CTRANS2_WITH_ACCELERATE OFF CACHE BOOL "" FORCE)
+set(CTRANS2_WITH_OPENBLAS OFF CACHE BOOL "" FORCE)
+# ponytail: Ruy is the only bundled CPU GEMM backend that doesn't pull in a
+# system BLAS — it ships a portable kernel that works on stock Windows
+# without any oneAPI/MKL/OpenBLAS installs. Without it, fp16 inference on
+# CPU throws "No SGEMM backend on CPU" the moment we try to call into the
+# decoder — confirmed empirically on 2026-07-05. Ruy only supports fp32 +
+# int8; we lose fp16 perf but keep the no-deps binary layout.
+set(CTRANS2_WITH_RUY ON CACHE BOOL "" FORCE)
+set(CTRANS2_WITH_BLAS OFF CACHE BOOL "" FORCE)
+set(CTRANS2_OPENMP_RUNTIME "NONE" CACHE STRING "" FORCE)
+set(CTRANS2_BUILD_CLI OFF CACHE BOOL "" FORCE)
+set(CTRANS2_WITH_CUDA OFF CACHE BOOL "" FORCE)
 set(CTRANS2_WITH_TENSOR_PARALLEL OFF CACHE BOOL "" FORCE)
-set(CTRANS2_WITH_RUY OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(ctranslate2 httplib json)
 
 add_executable(ctranslate2-server
   src/main.cpp
+  src/mel.cpp
 )
-target_include_directories(ctranslate2-server PRIVATE include)
+target_include_directories(ctranslate2-server PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
 target_link_libraries(ctranslate2-server PRIVATE
-  ctranslate2::ctranslate2
+  ctranslate2
   httplib::httplib
   nlohmann_json::nlohmann_json
+)
+# ponytail: compile the vendored KissFFT .c alongside our own sources.
+# Public-domain BSD-3-Clause code lives at third_party/kissfft/.
+target_sources(ctranslate2-server PRIVATE
+  third_party/kissfft/kiss_fft.c
 )
 
 if(WIN32)
