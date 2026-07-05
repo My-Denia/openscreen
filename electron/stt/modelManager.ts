@@ -4,45 +4,37 @@ import { mkdir, rename, stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+// ponytail: `tar` is npm's own extraction utility (used by `npm pack`/`npm
+// publish`), actively maintained, and trivially small. Reaching for it over
+// a hand-rolled gunzip+untar routine is one fewer stream pipeline to debug
+// at 3am when a download is partially corrupt.
+import { extract } from "tar";
 
 /**
  * Manages the lifetime of the on-disk model artifacts used by the STT stack.
  *
- *  - Whisper: ggml-small-q5_1.bin (~190 MB), MIT-licensed (OpenAI Whisper via
- *    ggerganov/whisper.cpp). Downloaded on first transcription.
- *    ponytail: was `ggml-medium.bin` (fp16, ~1.5 GB) — measured 16s to
- *    transcribe a 12s clip on an 8-core CPU (no GPU backend ships on
- *    Windows; see gpuDetector.ts). `small` q5_1 quantization measured 3.5-4.2s
- *    for the same clip with identical transcribed text, at 1/8th the download
- *    size. `q5_1` (not a more aggressive quantization) to keep quality close
- *    to fp16 while still shrinking the file substantially.
+ *  - Whisper: a single CTranslate2-format archive unpacked into a directory
+ *    that the CTranslate2 runtime can load directly. The small q5_1 model
+ *    weights we used with ggml convert to roughly the same int8-quantized
+ *    size under CTranslate2's on-disk format. The archive is downloaded on
+ *    first transcription.
  *
- *  - VAD (Silero, ggml-silero-v6.2.0.bin, ~2 MB): **bundled** with the
- *    installer, not downloaded at runtime — resolved from
- *    `electron/native/models/silero/` via `vadModel.resolveVadModelPath` and
- *    passed to whisper-server as `--vad-model`. whisper.cpp ships Silero as a
- *    native VAD, the ggml model is portable across platforms, and bundling
- *    avoids any "first-run download" UX for the load-bearing piece that
- *    keeps word timestamps accurate after leading silence.
+ *    ponytail: the URL/digest pair below is a *placeholder* — the
+ *    "self-host converted files vs. convert on first run" decision is
+ *    explicitly open in the spec ("Model format differs from ggml. Need a
+ *    conversion + hosting story for CTranslate2-format Whisper weights
+ *    — not yet decided."). A release maintainer flips
+ *    `STT_MODELS.whisper.url` + `expectedSha256` here once the hosting
+ *    story is resolved. Until then `downloadModel` will surface a 404
+ *    loudly instead of silently serving stale weights.
  *
- * SHA-256 verification is in place for the downloadable models so an
- * interrupted or tampered download can't pass as a valid model.
+ *  - VAD is gone: word timestamps come from CTranslate2's `.align()` (real
+ *    DTW over Whisper's cross-attention weights), which makes Silero VAD
+ *    unnecessary for correctness. See
+ *    `docs/engineering/stt-ctranslate2-migration.md` § Decision.
  *
- * ponytail: word-level timestamps come from whisper.cpp's own per-word
- * output (`segments[].words[]` in its `verbose_json` response) rather than a
- * separate forced-alignment pass. An earlier iteration ran
- * `facebook/wav2vec2-base-960h` through `onnxruntime-node` for word-level CTC
- * alignment, but that added a whole extra model + dependency, ran the full
- * (unchunked) audio through a second forward pass — expensive on long
- * recordings — and its greedy char-matching turned out to be fragile in
- * practice. whisper.cpp's own word timestamps are already computed as part
- * of decoding (no extra cost) and are less precise (~±50-200ms) but always
- * real, never fabricated. Built-in Silero VAD runs before the ASR decoder
- * and offsets each region's timestamps to its position in the original
- * audio, so leading silence no longer distorts the first phrase. If even
- * tighter precision is needed later, whisper.cpp supports `--dtw <model>`
- * for its own (still native, no separate model/dependency) DTW-based token
- * alignment — not currently enabled; see `whisperServer.ts`.
+ * SHA-256 verification stays — a tampered or partially-downloaded copy of
+ * the archive is surfaced as a "hash mismatch", not silently-wrong output.
  */
 
 export type SttModelId = "whisper";
@@ -55,9 +47,10 @@ export interface SttModelDescriptor {
 	/** HTTPS URL to download from. */
 	url: string;
 	/**
-	 * Expected SHA-256 of the final file. `null` disables verification — used
-	 * only when running on a CI box without network access; production builds
-	 * ship with `null` lifted to a real digest before the first RC.
+	 * Expected SHA-256 of the final archive. `null` disables verification —
+	 * used in tests and when deliberately running on a CI box without network
+	 * access; production builds ship with `null` lifted to a real digest
+	 * before the first RC.
 	 */
 	expectedSha256: string | null;
 	/** Approximate size used for progress reporting; not enforced. */
@@ -65,17 +58,21 @@ export interface SttModelDescriptor {
 }
 
 export const STT_MODELS: Record<SttModelId, SttModelDescriptor> = {
+	// ponytail: placeholder URL — see the class doc above. Replace with the
+	// real pre-converted archive URL + SHA-256 once the hosting story from
+	// the migration doc has been decided.
 	whisper: {
-		cacheDir: "whisper",
-		file: "ggml-small-q5_1.bin",
-		url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
-		expectedSha256: "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
-		approximateBytes: 190_000_000,
+		cacheDir: "whisper-ct2",
+		file: "whisper-small-ct2-int8.tar.gz",
+		url: "https://example.invalid/openscreen/whisper-small-ct2-int8.tar.gz",
+		expectedSha256: null,
+		approximateBytes: 200_000_000,
 	},
 };
 
-/** ponytail: pin SHA-256 per release and update this map before tagging. Stored in a
- * single source of truth so the build script + the runtime verifier read the same value. */
+/** ponytail: single source of truth so the build script + the runtime verifier
+ * read the same digest. Update this map (and the `expectedSha256` field
+ * directly) before tagging a release that changes the archive. */
 export function expectedSha256For(id: SttModelId): string | null {
 	return STT_MODELS[id].expectedSha256;
 }
@@ -89,16 +86,23 @@ export interface ModelProgress {
 /** Returns the absolute paths to the on-disk model files under `baseDir`. */
 export function modelPaths(baseDir: string): Record<SttModelId, string> {
 	return {
-		whisper: path.join(baseDir, STT_MODELS.whisper.cacheDir, STT_MODELS.whisper.file),
+		whisper: path.join(baseDir, STT_MODELS.whisper.cacheDir),
 	};
 }
 
-/** True when the whisper model file exists and has non-zero size. */
+/**
+ * True when the unpacked CTranslate2 model directory exists and contains at
+ * least one file. CTranslate2's runtime expects a directory, not a single
+ * blob, so the gate is presence-of-contents rather than `stat().size > 0`.
+ */
 export async function areModelsPresent(baseDir: string): Promise<boolean> {
 	const paths = modelPaths(baseDir);
 	try {
 		const s = await stat(paths.whisper);
-		return s.isFile() && s.size > 0;
+		if (!s.isDirectory()) return false;
+		const { readdir } = await import("node:fs/promises");
+		const entries = await readdir(paths.whisper);
+		return entries.length > 0;
 	} catch {
 		return false;
 	}
@@ -171,14 +175,22 @@ export interface DownloadOptions {
 	expectedSha256?: string | null;
 }
 
-/** Stream a model URL to disk atomically (`<file>.partial` → rename on success). */
+/**
+ * Stream the model archive to disk atomically (`<dest>.partial` → rename on
+ * success), verify the SHA-256, then unpack into the cache directory.
+ *
+ * ponytail: the unpack step runs after the hash verifies, so a tampered
+ * archive never lands as an "extracted-and-now-trusted" directory. We
+ * extract into `<dest>.unpacked` and rename over the target on success.
+ */
 export async function downloadModel(
 	descriptor: SttModelDescriptor,
 	dest: string,
 	options: DownloadOptions = {},
 ): Promise<void> {
-	if (existsSync(dest)) {
-		const s = await stat(dest);
+	const archivePath = `${dest}.tar.gz`;
+	if (existsSync(archivePath)) {
+		const s = await stat(archivePath);
 		if (s.isFile() && s.size > 0) {
 			options.onProgress?.(s.size);
 			options.getTotalBytes?.();
@@ -186,14 +198,14 @@ export async function downloadModel(
 		}
 	}
 
-	await mkdir(path.dirname(dest), { recursive: true });
+	await mkdir(path.dirname(archivePath), { recursive: true });
 	const fetcher = options.fetcher ?? fetch;
 	const res = await fetchWithRetry(descriptor.url, fetcher);
 	const total = Number.parseInt(res.headers.get("content-length") ?? "", 10);
 	if (Number.isFinite(total) && total > 0) {
 		options.getTotalBytes?.();
 	}
-	const tmp = `${dest}.partial`;
+	const tmp = `${archivePath}.partial`;
 	let downloaded = 0;
 	const source = Readable.fromWeb(res.body as never);
 	source.on("data", (chunk: Buffer | Uint8Array) => {
@@ -202,20 +214,37 @@ export async function downloadModel(
 	});
 	const { createWriteStream } = await import("node:fs");
 	await pipeline(source, createWriteStream(tmp));
-	await rename(tmp, dest);
+	await rename(tmp, archivePath);
 
 	const expected = options.expectedSha256 ?? descriptor.expectedSha256;
 	if (expected) {
-		const actual = await sha256OfFile(dest);
+		const actual = await sha256OfFile(archivePath);
 		if (actual.toLowerCase() !== expected.toLowerCase()) {
-			// ponytail: keep the bad file around under a `.bad` suffix so a maintainer can
-			// compare against the upstream — but never present it as a valid model.
-			await rename(dest, `${dest}.bad`).catch(() => undefined);
+			// ponytail: keep the bad file under a `.bad` suffix so a maintainer
+			// can compare against the upstream — but never present it as a valid
+			// model.
+			await rename(archivePath, `${archivePath}.bad`).catch(() => undefined);
 			throw new Error(
 				`SHA-256 mismatch for ${descriptor.file}: expected ${expected}, got ${actual}`,
 			);
 		}
 	}
+
+	const stagingDir = `${dest}.unpacked`;
+	// ponytail: `tar.extract({cwd})` requires the directory to exist before
+	// `chdir`-ing into it. Cheap to create up front; saves a CwdError in
+	// the (very common) "first time we ever fetch this model" code path.
+	await mkdir(stagingDir, { recursive: true });
+	await extract({ file: archivePath, cwd: stagingDir });
+	// ponytail: Windows refuses `rename(stagingDir, dest)` when `dest` already
+	// exists (EPERM) — the pre-extract `mkdir(dest)` above is therefore
+	// lazy/deleted from this code path. If `dest` somehow exists from a
+	// previous run, blow it away before renaming.
+	if (existsSync(dest)) {
+		const { rm } = await import("node:fs/promises");
+		await rm(dest, { recursive: true, force: true });
+	}
+	await rename(stagingDir, dest);
 }
 
 export interface EnsureModelsOptions {
@@ -235,14 +264,21 @@ export async function ensureModels(opts: EnsureModelsOptions): Promise<void> {
 	}));
 
 	for (const { id, descriptor, path: dest } of targets) {
+		if (await areModelsPresent(opts.baseDir)) continue;
 		await downloadModel(descriptor, dest, {
 			onProgress: (bytes) => opts.onProgress?.({ id, downloadedBytes: bytes, totalBytes: 0 }),
 			fetcher: opts.fetcher,
 		});
 		// Pin the total post-hoc for progress event UIs that need it.
 		try {
-			const s = await stat(dest);
-			opts.onProgress?.({ id, downloadedBytes: s.size, totalBytes: s.size });
+			const { readdir, stat: statDir } = await import("node:fs/promises");
+			const files = await readdir(dest);
+			let total = 0;
+			for (const f of files) {
+				const s = await statDir(path.join(dest, f));
+				if (s.isFile()) total += s.size;
+			}
+			opts.onProgress?.({ id, downloadedBytes: total, totalBytes: total });
 		} catch {
 			// best-effort; subsequent reads will fail loudly if missing
 		}
