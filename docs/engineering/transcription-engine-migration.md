@@ -1,4 +1,57 @@
-# Native STT migration: from `@xenova/transformers` (browser WASM) to `whisper.cpp` + forced alignment
+# Native STT migration: from `@xenova/transformers` (browser WASM) to `whisper.cpp` + bundled Silero VAD
+
+> **Status update:** the forced-alignment layer described below (`onnxruntime-node`
+> + a wav2vec2/mms-alignment ONNX model) was implemented, then removed.
+> `onnxruntime-node` was the only consumer of the wav2vec2 model, and the
+> forced-alignment path had two blocking bugs (a mis-pinned vocab SHA-256 that
+> made it throw on every call, and a missing ONNX `Tensor` construction that
+> crashed once that was fixed) plus a fragile greedy CTC word-matching
+> algorithm that misplaced words even once those were fixed. It also ran the
+> *entire* recording through a second, unchunked forward pass — expensive on
+> long videos.
+>
+> **Current state:** whisper.cpp's own per-word timestamps
+> (`segments[].words[]` in its `verbose_json` response), computed as part of
+> normal decoding at no extra cost: less precise (~±50-200ms vs the
+> frame-level resolution forced alignment could theoretically reach) but
+> always real data, never fabricated.
+>
+> **Leading-silence handling:** whisper.cpp's word-timestamp heuristic
+> misjudges the first ~5 words after a long silent stretch (verified by
+> prepending 5 s of silence to a known-good clip — first words compressed
+> into 0.00–7.62 s instead of correctly starting ~5 s in). Two paths were
+> tried and the right one shipped:
+>
+> 1. ❌ **Renderer-side peak detector** that trimmed leading silence and
+>    re-added the offset to every returned timestamp. Worked, but the peak
+>    detector had false positives on quiet music intros / room tone — and
+>    silently shipping those wrong cuts is exactly the failure mode
+>    transcription can't survive.
+> 2. ✅ **`whisper-server --vad --vad-model`** with the bundled Silero VAD
+>    model. whisper.cpp's built-in Silero VAD runs *before* the ASR decoder,
+>    splits the audio into speech regions, and offsets each region's
+>    timestamps to its position in the original audio. No manual offset math
+>    on our side. Whichever path produced the model path is
+>    `electron/stt/vadModel.ts`.
+>
+> **Bundle model:** `ggml-silero-v6.2.0.bin` (885 098 bytes, ggml magic
+> verified; ggml is portable across
+> platforms — no per-arch variant). Source:
+> `https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin`
+> (the `whisper-vad` repo ships the ggml port; the original `silero-vad` HF
+> repo only carries the PyTorch JIT checkpoints). Fetched by
+> `scripts/fetch-vad-model.sh` / `.ps1` at install / release-prep time and
+> shipped in the installer via `electron-builder.json5`'s existing
+> `extraResources: [electron/native/models]` entry. There is no lazy
+> download pathway on purpose — VAD is the load-bearing piece for accurate
+> word timestamps, and a first-run network step is the kind of fallback that
+> has failed in the wild.
+>
+> whisper-server's native `--dtw <model>` flag is still available if even
+> tighter precision is ever needed — not currently enabled. See
+> `electron/stt/whisperServer.ts` and `electron/stt/modelManager.ts`.
+> The rest of this document is kept for historical context on the original
+> design tradeoffs.
 
 ## Goal
 

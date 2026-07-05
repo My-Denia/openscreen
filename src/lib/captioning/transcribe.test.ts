@@ -8,9 +8,16 @@ import { transcribeMono16kToSegments } from "./transcribe";
  *  - emit each word from `wordSegments` as a single-token `CaptionSegment`,
  *  - tag the run `granularity: "word"`,
  *  - fall back to phrase segments with `granularity: "phrase"` when the
- *    aligner returned nothing (e.g. OOV-heavy speech),
+ *    decoder returned no words (e.g. OOV-heavy speech),
  *  - drop the temporary `stt:status` listener as soon as IPC settles,
  *  - tolerate `window.electronAPI.stt` being absent (browser-only tests/dev).
+ *
+ * Word timestamps come back absolute from whisper.cpp (its built-in Silero
+ * VAD, started in `electron/stt/whisperServer.ts`, offsets each speech
+ * region's timestamps to its position in the original audio), so this
+ * adapter does *not* apply any leading-silence trim + offset arithmetic.
+ * That pathway was deleted because the peak detector had false positives on
+ * quiet music intros / room tone.
  *
  * These tests mock the global API directly; they don't exercise the renderer
  * worker that the previous Web-Worker pipeline owned, so they run in any env.

@@ -9,9 +9,9 @@ export interface CaptionSegment {
 
 /**
  * How caption layout should interpret `CaptionSegment` times from
- * `transcribeMono16kToSegments`. The native pipeline always emits per-word
- * timestamps (forced alignment over whisper phrases), so the only value here
- * is `"word"`.
+ * `transcribeMono16kToSegments`. The native pipeline gets per-word timestamps
+ * from whisper.cpp's own output; `"phrase"` is a fallback for the rare case
+ * where whisper reports zero words for a segment.
  */
 export type CaptionTimestampGranularity = "word" | "phrase";
 
@@ -41,7 +41,8 @@ interface RendererSttApi {
 /**
  * Transcribes mono 16 kHz audio into per-word timed caption segments. The
  * renderer is a thin IPC adapter: it forwards the audio to the Electron main
- * process where `whisper-server` + `onnxruntime-node` forced alignment run.
+ * process where `whisper-server` runs recognition and emits its own
+ * per-word timestamps in the same pass.
  *
  * The previous in-Web-Worker implementation (Transformers.js + ORT-WASM) was
  * 0.5× realtime on tiny models and had no word-level accuracy under 50 ms;
@@ -70,6 +71,13 @@ export function transcribeMono16kToSegments(
 		options?.onStatus && api.onStatus?.((event) => options.onStatus?.(event.phase));
 	const forcedLanguage =
 		options?.language && options.language !== "auto" ? options.language : undefined;
+	// ponytail: word timestamps come back already absolute from whisper.cpp
+	// because its built-in Silero VAD (started on the server with
+	// `--vad --vad-model`) splits audio into speech regions *before* the ASR
+	// decoder runs and offsets each region's timestamps to its position in the
+	// original audio. No trim + offset math here on purpose: an earlier
+	// iteration trimmed leading silence with a peak detector and got false
+	// positives on quiet music intros / room tone. VAD or nothing.
 	return api
 		.transcribe({ samples, language: forcedLanguage })
 		.then((result) => {
@@ -84,9 +92,14 @@ export function transcribeMono16kToSegments(
 				}));
 				granularity = "word";
 			} else {
-				// ponytail: aligner dropped every word (e.g. OOV heavy); fall back to
-				// raw phrase spans so the user still gets captions to edit.
-				segments = result.segments ?? [];
+				// ponytail: whisper dropped every word for a segment (e.g. OOV
+				// heavy); fall back to raw phrase spans so the user still gets
+				// captions to edit.
+				segments = (result.segments ?? []).map((s) => ({
+					startSec: s.startSec,
+					endSec: s.endSec,
+					text: s.text,
+				}));
 				granularity = "phrase";
 			}
 			return { segments, granularity, detectedLanguage: result.detectedLanguage };
