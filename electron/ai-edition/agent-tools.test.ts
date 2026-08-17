@@ -885,6 +885,23 @@ describe("executeAgentTool", () => {
 			executeAgentTool(fixtureDocument(), "removeClip", JSON.stringify({ clipId: "nope" })).ok,
 		).toBe(false);
 	});
+
+	it("setClipRange and removeClip survive a non-array legacyEditor envelope", () => {
+		const broken = {
+			...fixtureDocument(),
+			legacyEditor: { speedRegions: "oops", cameraFullscreenRegions: { not: "an array" } },
+		};
+		const trimmed = executeAgentTool(
+			broken,
+			"setClipRange",
+			JSON.stringify({ clipId: "clip_1", sourceStartSec: 0, sourceEndSec: 20 }),
+		);
+		expect(trimmed.ok).toBe(true);
+		expect(JSON.parse(trimmed.resultJson).droppedModifierIds).toEqual([]);
+		const removed = executeAgentTool(broken, "removeClip", JSON.stringify({ clipId: "clip_1" }));
+		expect(removed.ok).toBe(true);
+		expect(JSON.parse(removed.resultJson).removed).toBe("clip_1");
+	});
 });
 
 // ─── What the snapshot says the project IS ─────────────────────────────────

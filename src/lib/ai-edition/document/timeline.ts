@@ -246,8 +246,12 @@ type StoredRegion = {
 };
 
 /** Apply `fn` to all four modifier collections (document-level + legacyEditor envelopes). */
+export function asRegionArray(value: unknown): unknown[] | undefined {
+	return Array.isArray(value) ? value : undefined;
+}
+
 function asStoredRegions(value: unknown): StoredRegion[] | undefined {
-	return Array.isArray(value) ? (value as StoredRegion[]) : undefined;
+	return asRegionArray(value) as StoredRegion[] | undefined;
 }
 
 function mapAllRegionCollections(

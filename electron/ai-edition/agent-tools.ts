@@ -18,6 +18,7 @@
 import { z } from "zod";
 import { createId } from "../../src/lib/ai-edition/document/ids";
 import {
+	asRegionArray,
 	moveClip,
 	planTimelineReplacement,
 	type RegionKind,
@@ -292,18 +293,19 @@ function landingSuffix(
 	return parts.length ? ` (${parts.join(", ")})` : "";
 }
 
+function asIdRegions(value: unknown): Array<{ id: string }> {
+	return (asRegionArray(value) as Array<{ id: string }> | undefined) ?? [];
+}
+
 /** Ids of every modifier in the document, all four families at once — the basis
  * for naming what a destructive edit took with it. */
 function modifierIdsOf(document: AxcutDocument): string[] {
 	const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
-	const speedRegions = (legacy.speedRegions as Array<{ id: string }> | undefined) ?? [];
-	const cameraFullscreenRegions =
-		(legacy.cameraFullscreenRegions as Array<{ id: string }> | undefined) ?? [];
 	return [
 		...document.zoomRanges.map((r) => r.id),
 		...document.annotations.map((r) => r.id),
-		...speedRegions.map((r) => r.id),
-		...cameraFullscreenRegions.map((r) => r.id),
+		...asIdRegions(legacy.speedRegions).map((r) => r.id),
+		...asIdRegions(legacy.cameraFullscreenRegions).map((r) => r.id),
 	];
 }
 
@@ -569,14 +571,17 @@ export function documentSnapshotForModel(
 ): Record<string, unknown> {
 	const availability = cursorTelemetry?.availableByAssetId;
 	const legacy = document.legacyEditor as Record<string, unknown> | null;
-	const speedRegions =
-		(legacy?.speedRegions as
-			| Array<{ id: string; startMs: number; endMs: number; speed: number }>
-			| undefined) ?? [];
-	const cameraFullscreenRegions =
-		(legacy?.cameraFullscreenRegions as
-			| Array<{ id: string; startMs: number; endMs: number }>
-			| undefined) ?? [];
+	const speedRegions = asIdRegions(legacy?.speedRegions) as Array<{
+		id: string;
+		startMs: number;
+		endMs: number;
+		speed: number;
+	}>;
+	const cameraFullscreenRegions = asIdRegions(legacy?.cameraFullscreenRegions) as Array<{
+		id: string;
+		startMs: number;
+		endMs: number;
+	}>;
 	// The global Auto-Focus toggle OVERRIDES each region's own focusMode at
 	// render (sceneDescription.ts:703) and the inspector disables the per-region
 	// control while it is on. Reporting the stored mode would hand the model a
@@ -1626,9 +1631,8 @@ export function executeAgentTool(
 			if (!parsed.success) return failure(parsed.error.message);
 			const { id } = parsed.data;
 			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
-			const speedRegions = (legacy.speedRegions as Array<{ id: string }> | undefined) ?? [];
-			const cameraFullscreenRegions =
-				(legacy.cameraFullscreenRegions as Array<{ id: string }> | undefined) ?? [];
+			const speedRegions = asIdRegions(legacy.speedRegions);
+			const cameraFullscreenRegions = asIdRegions(legacy.cameraFullscreenRegions);
 			let kind: RegionKind | null = null;
 			if (document.zoomRanges.some((z) => z.id === id)) kind = "zoom";
 			else if (document.annotations.some((a) => a.id === id)) kind = "annotation";
