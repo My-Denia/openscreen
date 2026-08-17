@@ -1014,6 +1014,20 @@ describe("documentSnapshotForModel", () => {
 		expect(snapshotOf(unplaced).assets[0].hasCameraTrack).toBe(true);
 		expect(snapshotOf(unplaced).hasAnyCamera).toBe(false);
 	});
+
+	it("hasAnyCamera is false when every placed camera is hidden", () => {
+		const hidden = documentSchema.parse({
+			...withCameraTrack(fixtureDocument()),
+			assets: withCameraTrack(fixtureDocument()).assets.map((a) => ({
+				...a,
+				cameraTrack: { sourcePath: "C:/videos/cam.mp4", startMs: 0, offsetMs: 0, visible: false },
+			})),
+		});
+		const snapshot = snapshotOf(hidden);
+		expect(snapshot.assets[0].hasCameraTrack).toBe(true);
+		expect(snapshot.assets[0].cameraVisible).toBe(false);
+		expect(snapshot.hasAnyCamera).toBe(false);
+	});
 });
 
 describe("zoom strength is written, not just stored", () => {

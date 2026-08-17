@@ -620,7 +620,7 @@ export function documentSnapshotForModel(
 		project: { id: document.project.id, title: document.project.title },
 		primaryAssetId: document.project.primaryAssetId ?? document.assets[0]?.id ?? null,
 		autoFocusAll,
-		hasAnyCamera: hasAnyClipWithCamera(document.assets, document.timeline.clips),
+		hasAnyCamera: hasAnyRenderableCamera(document.assets, document.timeline.clips),
 		cursorNote:
 			"assets[].hasCursorTelemetry says whether recorded pointer telemetry exists for that " +
 			"asset. true — call getCursorTrack to read the recorded pointer track. " +
