@@ -693,9 +693,11 @@ describe("useTimeline.addCameraFullscreen", () => {
 			error: null,
 		});
 		const { result } = renderTimeline();
+		let wrote = true;
 		await act(async () => {
-			await result.current.addCameraFullscreen();
+			wrote = await result.current.addCameraFullscreen();
 		});
+		expect(wrote).toBe(false);
 		expect(bridgeMocks.save).not.toHaveBeenCalled();
 		expect(
 			(useProjectStore.getState().document?.legacyEditor as { cameraFullscreenRegions?: unknown })
@@ -727,9 +729,11 @@ describe("useTimeline.addCameraFullscreen", () => {
 			error: null,
 		});
 		const { result } = renderTimeline();
+		let wrote = false;
 		await act(async () => {
-			await result.current.addCameraFullscreen();
+			wrote = await result.current.addCameraFullscreen();
 		});
+		expect(wrote).toBe(true);
 		expect(bridgeMocks.save).toHaveBeenCalledTimes(1);
 		const regions = (
 			useProjectStore.getState().document?.legacyEditor as {
@@ -786,9 +790,11 @@ describe("useTimeline.addCameraFullscreen", () => {
 			error: null,
 		});
 		const { result } = renderTimeline();
+		let wrote = true;
 		await act(async () => {
-			await result.current.addCameraFullscreen();
+			wrote = await result.current.addCameraFullscreen();
 		});
+		expect(wrote).toBe(false);
 		expect(bridgeMocks.save).not.toHaveBeenCalled();
 	});
 
@@ -838,9 +844,12 @@ describe("useTimeline.addCameraFullscreen", () => {
 			error: null,
 		});
 		const { result } = renderTimeline();
+		let wrote = true;
 		await act(async () => {
-			await result.current.addCameraFullscreen();
+			// Paste keeps the copied length; the gate must still be playhead-only.
+			wrote = await result.current.addCameraFullscreen(3);
 		});
+		expect(wrote).toBe(false);
 		expect(bridgeMocks.save).not.toHaveBeenCalled();
 	});
 });

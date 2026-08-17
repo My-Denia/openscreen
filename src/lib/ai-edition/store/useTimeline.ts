@@ -348,12 +348,12 @@ export function useTimeline() {
 	// Full Camera: a plain time span (no value) during which the preview/export
 	// grows the webcam overlay to (almost) fill the canvas and eases it back.
 	const addCameraFullscreen = useCallback(
-		async (durationSec = DEFAULT_NEW_REGION_SEC) => {
-			if (!document) return;
+		async (durationSec = DEFAULT_NEW_REGION_SEC): Promise<boolean> => {
+			if (!document) return false;
 			const playhead = playheadSec();
 			const { startMs, endMs } = playheadRegionWindow(playhead, durationSec);
 			if (!hasCameraAtPlayhead(document.assets, document.timeline.clips, playhead)) {
-				return;
+				return false;
 			}
 			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
 			const prev = Array.isArray(legacy.cameraFullscreenRegions)
@@ -374,6 +374,7 @@ export function useTimeline() {
 				},
 			};
 			await saveDocument(next);
+			return true;
 		},
 		[document, saveDocument],
 	);

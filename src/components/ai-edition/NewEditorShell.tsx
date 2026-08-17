@@ -737,6 +737,17 @@ export function NewEditorShell() {
 			return;
 		}
 
+		// Full Camera paste must use the same playhead gate as the toolbar and
+		// the C shortcut. Writing legacyEditor.cameraFullscreenRegions here
+		// would land a region on a camera-less clip that cannot render.
+		if (snapshot.kind === "cameraFullscreen") {
+			const src = snapshot.region as { startMs: number; endMs: number };
+			const durationSec = (Number(src.endMs) - Number(src.startMs)) / 1000;
+			const wrote = await tl.addCameraFullscreen(durationSec);
+			if (wrote) toast.success("Region pasted");
+			return;
+		}
+
 		const { anchorRegionsWithDerivedMs } = await import("@/lib/ai-edition/timeline/timelineMap");
 		const { createId } = await import("@/lib/ai-edition/document/ids");
 
@@ -771,13 +782,11 @@ export function NewEditorShell() {
 				annotations: [...doc.annotations, ...anchored] as typeof doc.annotations,
 			});
 		} else {
-			// speed and cameraFullscreen are both plain spans on legacyEditor.
-			const key = snapshot.kind === "speed" ? "speedRegions" : "cameraFullscreenRegions";
 			const legacy = (doc.legacyEditor as Record<string, unknown>) ?? {};
-			const prev = (legacy[key] as unknown[]) ?? [];
+			const prev = (legacy.speedRegions as unknown[]) ?? [];
 			await saveDocument({
 				...doc,
-				legacyEditor: { ...legacy, [key]: [...prev, ...anchored] },
+				legacyEditor: { ...legacy, speedRegions: [...prev, ...anchored] },
 			});
 		}
 		toast.success("Region pasted");
