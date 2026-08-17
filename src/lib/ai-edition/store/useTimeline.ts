@@ -21,7 +21,7 @@ import {
 	setClipSourceRange,
 } from "../document/timeline";
 import type { AxcutClipCropRegion, AxcutDocument } from "../schema";
-import { hasCameraUnderSpan, playheadRegionWindow } from "../timeline/camera";
+import { hasCameraAtPlayhead, playheadRegionWindow } from "../timeline/camera";
 import { probeVideoDimensions, probeVideoDuration } from "../timeline/duration";
 import {
 	anchorRegionsWithDerivedMs,
@@ -350,8 +350,9 @@ export function useTimeline() {
 	const addCameraFullscreen = useCallback(
 		async (durationSec = DEFAULT_NEW_REGION_SEC) => {
 			if (!document) return;
-			const { startMs, endMs, startSec, endSec } = playheadRegionWindow(playheadSec(), durationSec);
-			if (!hasCameraUnderSpan(document.assets, document.timeline.clips, startSec, endSec)) {
+			const playhead = playheadSec();
+			const { startMs, endMs } = playheadRegionWindow(playhead, durationSec);
+			if (!hasCameraAtPlayhead(document.assets, document.timeline.clips, playhead)) {
 				return;
 			}
 			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};

@@ -30,6 +30,11 @@ export function hasAnyRenderableCamera(assets: AxcutAsset[], clips: AxcutClip[])
 	);
 }
 
+/** True when any asset — placed or not — would draw a webcam. */
+export function hasAnyRenderableAsset(assets: AxcutAsset[]): boolean {
+	return assets.some((asset) => assetCameraSource(asset).path !== "");
+}
+
 /** Clips overlapping `[startSec, endSec)` and how many of those carry a camera. */
 export function cameraCoverageUnderSpan(
 	assets: AxcutAsset[],

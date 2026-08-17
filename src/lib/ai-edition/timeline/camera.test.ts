@@ -4,6 +4,7 @@ import {
 	assetCameraSource,
 	cameraCoverageUnderSpan,
 	hasAnyClipWithCamera,
+	hasAnyRenderableAsset,
 	hasAnyRenderableCamera,
 	hasCameraAtPlayhead,
 	hasCameraUnderSpan,
@@ -149,6 +150,15 @@ describe("hasCameraUnderSpan", () => {
 		});
 		expect(hasAnyRenderableCamera([assetWithHiddenCamera], [hiddenClip])).toBe(false);
 		expect(hasAnyClipWithCamera([assetWithHiddenCamera], [hiddenClip])).toBe(true);
+	});
+});
+
+describe("hasAnyRenderableAsset", () => {
+	it("is true for an unused visible camera, unlike the placed-clip helpers", () => {
+		expect(hasAnyRenderableAsset([assetWithCamera])).toBe(true);
+		expect(hasAnyRenderableCamera([assetWithCamera], [])).toBe(false);
+		expect(hasAnyRenderableAsset([assetWithHiddenCamera])).toBe(false);
+		expect(hasAnyRenderableAsset([assetWithoutCamera])).toBe(false);
 	});
 });
 

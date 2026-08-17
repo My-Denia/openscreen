@@ -114,7 +114,7 @@ const BASE_SYSTEM_PROMPT = [
 	"How the tools map to intent — pick the most specific one, and prefer the smallest edit that satisfies the request:",
 	"- Silences, pauses and dead stretches are removed as trims INSIDE the placed clip. Send them together with addTrims once you know the ranges; addTrim is for a single cut or a correction. The placed clip stays the canonical cut; it is not rebuilt to drop them.",
 	"- Changing where a clip starts or ends within its source is setClipRange — the clip's in/out, distinct from a trim.",
-	`- addZoom takes a virtual-timeline span (depth is an ordinal 1–6 selecting from a fixed table — ${ZOOM_DEPTH_LEGEND} — never a multiplier; focus in 0–1 frame fractions). addSpeed changes pacing over a span. addAnnotation puts text on screen. addCameraFullscreen enlarges the webcam, and only does something where assets[].hasCameraTrack is true.`,
+	`- addZoom takes a virtual-timeline span (depth is an ordinal 1–6 selecting from a fixed table — ${ZOOM_DEPTH_LEGEND} — never a multiplier; focus in 0–1 frame fractions). addSpeed changes pacing over a span. addAnnotation puts text on screen. addCameraFullscreen enlarges the webcam, and only does something where assets[].cameraVisible is true (hasAnyCamera in getCurrentDocument).`,
 	"- moveClip changes the order of placed clips, one call per clip that moves, preserving ids, source ranges, trims and anchored effects. replaceTimeline rebuilds the timeline from kept intervals and sorts them, so it cannot reorder anything.",
 	"- Deleting is a first-class action, not a workaround: removeTrim, removeModifier, removeClip. Never fake a deletion by re-adding an element or zeroing it out (span 0, speed 1×) — that leaves it in the document and misreports what you did.",
 	"If nothing in the list does what was asked, say so; do not approximate it with a bigger tool.",
@@ -167,7 +167,7 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 	setAnnotation:
 		"Move, resize, or edit the text of an existing annotation by id (virtual-timeline seconds). Only the fields you pass are changed.",
 	addCameraFullscreen:
-		"Add a camera-fullscreen region over a span of the edited timeline (virtual seconds): the webcam fills the frame for that span. This only does something when the footage under that span comes from an asset with a linked webcam — check assets[].hasCameraTrack (or hasAnyCamera) in getCurrentDocument first. On footage with no camera the call is refused rather than storing a region that would render nothing; say so instead of retrying.",
+		"Add a camera-fullscreen region over a span of the edited timeline (virtual seconds): the webcam fills the frame for that span. This only does something when the footage under that span has a visible webcam — check assets[].cameraVisible (or hasAnyCamera) in getCurrentDocument first. hasCameraTrack can be true for a hidden webcam that will not render. On footage with no visible camera the call is refused rather than storing a region that would render nothing; say so instead of retrying.",
 	setCameraFullscreen:
 		"Move or resize an existing camera-fullscreen region by id (virtual-timeline seconds). Only the fields you pass are changed. Refused if the new span lands on footage with no linked webcam.",
 	removeTrim:

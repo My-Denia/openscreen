@@ -383,9 +383,9 @@ describe("what the descriptions say about zoom strength", () => {
 		expect(ZOOM_DEPTH_LEGEND).toContain(`3=${ZOOM_DEPTH_SCALES[3].toFixed(2)}×`);
 	});
 
-	it("tells the model a full-camera region needs a linked webcam", () => {
-		expect(TOOL_DESCRIPTIONS.addCameraFullscreen).toMatch(/hasCameraTrack/);
-		expect(SYSTEM_PROMPT).toMatch(/hasCameraTrack/);
+	it("tells the model a full-camera region needs a visible webcam", () => {
+		expect(TOOL_DESCRIPTIONS.addCameraFullscreen).toMatch(/cameraVisible/);
+		expect(SYSTEM_PROMPT).toMatch(/cameraVisible/);
 	});
 });
 

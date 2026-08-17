@@ -791,6 +791,58 @@ describe("useTimeline.addCameraFullscreen", () => {
 		});
 		expect(bridgeMocks.save).not.toHaveBeenCalled();
 	});
+
+	it("does not write when the playhead is on a screen clip even if the default span reaches a later camera", async () => {
+		const mixed: AxcutDocument = {
+			...sampleDoc,
+			assets: [
+				sampleDoc.assets[0],
+				{
+					...sampleDoc.assets[0],
+					id: "asset_cam",
+					cameraTrack: {
+						sourcePath: "/tmp/cam.mp4",
+						startMs: 0,
+						offsetMs: 0,
+						visible: true,
+					},
+				},
+			],
+			timeline: {
+				...sampleDoc.timeline,
+				clips: [
+					{
+						...sampleDoc.timeline.clips[0],
+						id: "clip_screen",
+						timelineStartSec: 0,
+						timelineEndSec: 5,
+						sourceEndSec: 5,
+					},
+					{
+						...sampleDoc.timeline.clips[0],
+						id: "clip_cam",
+						assetId: "asset_cam",
+						timelineStartSec: 5,
+						timelineEndSec: 10,
+						sourceEndSec: 5,
+					},
+				],
+			},
+		};
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: mixed,
+			currentTimeSec: 4,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+		const { result } = renderTimeline();
+		await act(async () => {
+			await result.current.addCameraFullscreen();
+		});
+		expect(bridgeMocks.save).not.toHaveBeenCalled();
+	});
 });
 
 describe("useTimeline.applyClipEdit", () => {

@@ -31,6 +31,7 @@ import type { AxcutDocument } from "../../src/lib/ai-edition/schema";
 import {
 	cameraCoverageUnderSpan,
 	hasAnyClipWithCamera,
+	hasAnyRenderableAsset,
 	hasAnyRenderableCamera,
 } from "../../src/lib/ai-edition/timeline/camera";
 import {
@@ -228,7 +229,7 @@ function noCameraUnderSpan(
 		return failure(
 			`No webcam is linked to the footage under ${span}, ` +
 				nothingWritten +
-				"Other clips in this project do carry a camera — check assets[].hasCameraTrack in getCurrentDocument and pick a span over one of those.",
+				"Other clips in this project do carry a visible camera — check assets[].cameraVisible in getCurrentDocument and pick a span over one of those.",
 		);
 	}
 	if (anywhereTrack) {
@@ -236,6 +237,20 @@ function noCameraUnderSpan(
 			`No webcam is linked to the footage under ${span}, ` +
 				nothingWritten +
 				"Other clips have a cameraTrack but it is hidden (assets[].cameraVisible is false). Tell the user instead of retrying spans.",
+		);
+	}
+	if (hasAnyRenderableAsset(document.assets)) {
+		return failure(
+			`No placed clip has a visible camera under ${span}, ` +
+				nothingWritten +
+				"An unused asset does (assets[].cameraVisible). Place that clip or tell the user — do not retry other spans on the current timeline.",
+		);
+	}
+	if (document.assets.some((a) => a.cameraTrack != null)) {
+		return failure(
+			`No placed clip has a camera under ${span}, ` +
+				nothingWritten +
+				"An unused asset has a hidden cameraTrack (assets[].cameraVisible is false). Tell the user instead of retrying spans.",
 		);
 	}
 	return failure(

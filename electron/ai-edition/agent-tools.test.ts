@@ -1170,6 +1170,35 @@ describe("a full-camera region needs a camera", () => {
 		expect(error).toMatch(/no clip in this project has a visible camera/i);
 	});
 
+	it("does not claim the project has no cameraTrack when an unused asset has a visible camera", () => {
+		const document = fixtureDocument();
+		const unusedCam = documentSchema.parse({
+			...document,
+			assets: [
+				document.assets[0],
+				{
+					id: "asset_unused_cam",
+					kind: "video",
+					label: "Unused webcam",
+					originalPath: "C:/videos/unused.mp4",
+					durationSec: 60,
+					cameraTrack: { sourcePath: "C:/videos/cam.mp4", startMs: 0, offsetMs: 0, visible: true },
+				},
+			],
+		});
+		const result = executeAgentTool(
+			unusedCam,
+			"addCameraFullscreen",
+			JSON.stringify({ startSec: 0, endSec: 5 }),
+		);
+		expect(result.ok).toBe(false);
+		const error = JSON.parse(result.resultJson).error as string;
+		expect(error).toMatch(/unused asset/i);
+		expect(error).toMatch(/cameraVisible/);
+		expect(error).not.toMatch(/hasCameraTrack is false everywhere/i);
+		expect(error).not.toMatch(/this recording has no webcam/i);
+	});
+
 	it("does not claim the project has no cameraTrack when only other clips are hidden", () => {
 		const document = withCameraTrack(fixtureDocument());
 		const mixed = documentSchema.parse({
