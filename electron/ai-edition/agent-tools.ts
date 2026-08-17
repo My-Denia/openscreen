@@ -199,11 +199,7 @@ function landingAfterPillEdit<T extends { id: string; startMs: number; endMs: nu
  * carries `hasCameraTrack`, and this is the other half: a region that can only
  * render nothing is not written, and the refusal names the reason.
  */
-function cameraUnderSpan(
-	document: AxcutDocument,
-	startSec: number,
-	endSec: number,
-): { clips: number; withCamera: number } {
+function cameraUnderSpan(document: AxcutDocument, startSec: number, endSec: number) {
 	return cameraCoverageUnderSpan(document.assets, document.timeline.clips, startSec, endSec);
 }
 
