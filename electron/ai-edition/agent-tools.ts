@@ -214,23 +214,38 @@ function noCameraUnderSpan(
 ): AgentToolExecution | null {
 	const coverage = cameraUnderSpan(document, startSec, endSec);
 	if (coverage.clips === 0 || coverage.withCamera > 0) return null;
-	const anywhere = hasAnyRenderableCamera(document.assets, document.timeline.clips);
+	const anywhereVisible = hasAnyRenderableCamera(document.assets, document.timeline.clips);
+	const anywhereTrack = hasAnyClipWithCamera(document.assets, document.timeline.clips);
 	const span = `${startSec.toFixed(1)}–${endSec.toFixed(1)} s`;
+	const nothingWritten =
+		"so a full-camera region there would render nothing and none was written. ";
 	if (coverage.withTrack > 0) {
 		return failure(
 			`The webcam under ${span} is hidden (cameraTrack.visible is false), ` +
-				"so a full-camera region there would render nothing and none was written. " +
-				(anywhere
+				nothingWritten +
+				(anywhereVisible
 					? "Other clips have a visible camera — check assets[].cameraVisible in getCurrentDocument and pick a span over one of those."
 					: "No clip in this project has a visible camera. Tell the user instead of retrying spans."),
 		);
 	}
+	if (anywhereVisible) {
+		return failure(
+			`No webcam is linked to the footage under ${span}, ` +
+				nothingWritten +
+				"Other clips in this project do carry a camera — check assets[].hasCameraTrack in getCurrentDocument and pick a span over one of those.",
+		);
+	}
+	if (anywhereTrack) {
+		return failure(
+			`No webcam is linked to the footage under ${span}, ` +
+				nothingWritten +
+				"Other clips have a cameraTrack but it is hidden (assets[].cameraVisible is false). Tell the user instead of retrying spans.",
+		);
+	}
 	return failure(
 		`No webcam is linked to the footage under ${span}, ` +
-			"so a full-camera region there would render nothing and none was written. " +
-			(anywhere
-				? "Other clips in this project do carry a camera — check assets[].hasCameraTrack in getCurrentDocument and pick a span over one of those."
-				: "No asset in this project carries a cameraTrack at all (assets[].hasCameraTrack is false everywhere): this recording has no webcam. Tell the user instead of placing a region."),
+			nothingWritten +
+			"No asset in this project carries a cameraTrack at all (assets[].hasCameraTrack is false everywhere): this recording has no webcam. Tell the user instead of placing a region.",
 	);
 }
 

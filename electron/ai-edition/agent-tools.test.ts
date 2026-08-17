@@ -1155,6 +1155,40 @@ describe("a full-camera region needs a camera", () => {
 		expect(error).not.toMatch(/other clips/i);
 		expect(error).toMatch(/no clip in this project has a visible camera/i);
 	});
+
+	it("does not claim the project has no cameraTrack when only other clips are hidden", () => {
+		const document = withCameraTrack(fixtureDocument());
+		const mixed = documentSchema.parse({
+			...document,
+			assets: [
+				{ ...document.assets[0], cameraTrack: null },
+				{
+					id: "asset_2",
+					kind: "video",
+					label: "Hidden cam",
+					originalPath: "C:/videos/screen.mp4",
+					durationSec: 60,
+					cameraTrack: { sourcePath: "C:/videos/cam.mp4", startMs: 0, offsetMs: 0, visible: false },
+				},
+			],
+			timeline: {
+				...document.timeline,
+				clips: document.timeline.clips.map((c) =>
+					c.id === "clip_2" ? { ...c, assetId: "asset_2" } : c,
+				),
+			},
+		});
+		const result = executeAgentTool(
+			mixed,
+			"addCameraFullscreen",
+			JSON.stringify({ startSec: 0, endSec: 5 }),
+		);
+		expect(result.ok).toBe(false);
+		const error = JSON.parse(result.resultJson).error as string;
+		expect(error).toMatch(/hidden/i);
+		expect(error).not.toMatch(/hasCameraTrack is false everywhere/i);
+		expect(error).not.toMatch(/this recording has no webcam/i);
+	});
 });
 
 // ── D-DESTRUCT ──────────────────────────────────────────────────────────────
