@@ -37,8 +37,9 @@ export function cameraCoverageUnderSpan(
 	);
 	return {
 		clips: covered.length,
-		withCamera: covered.filter((c) => assets.find((a) => a.id === c.assetId)?.cameraTrack != null)
-			.length,
+		withCamera: covered.filter(
+			(c) => assetCameraSource(assets.find((a) => a.id === c.assetId)).path !== "",
+		).length,
 	};
 }
 

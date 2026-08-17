@@ -132,6 +132,12 @@ describe("hasCameraUnderSpan", () => {
 	it("is false when the span covers no clip", () => {
 		expect(hasCameraUnderSpan([assetWithCamera], [clipWithCamera], 20, 22)).toBe(false);
 	});
+
+	it("is false for a hidden camera — preview and export would render nothing", () => {
+		const hiddenClip: AxcutClip = { ...clipWithCamera, assetId: "asset_hidden_camera" };
+		expect(hasCameraUnderSpan([assetWithHiddenCamera], [hiddenClip], 0, 2)).toBe(false);
+		expect(hasCameraAtPlayhead([assetWithHiddenCamera], [hiddenClip], 1)).toBe(false);
+	});
 });
 
 describe("hasCameraAtPlayhead", () => {
