@@ -23,6 +23,35 @@ export function hasAnyClipWithCamera(assets: AxcutAsset[], clips: AxcutClip[]): 
 	return clips.some((clip) => assets.find((a) => a.id === clip.assetId)?.cameraTrack != null);
 }
 
+/** Clips overlapping `[startSec, endSec)` and how many of those carry a camera. */
+export function cameraCoverageUnderSpan(
+	assets: AxcutAsset[],
+	clips: AxcutClip[],
+	startSec: number,
+	endSec: number,
+): { clips: number; withCamera: number } {
+	const lo = Math.min(startSec, endSec);
+	const hi = Math.max(startSec, endSec);
+	const covered = clips.filter(
+		(c) => Math.min(hi, c.timelineEndSec) - Math.max(lo, c.timelineStartSec) > 0,
+	);
+	return {
+		clips: covered.length,
+		withCamera: covered.filter((c) => assets.find((a) => a.id === c.assetId)?.cameraTrack != null)
+			.length,
+	};
+}
+
+/** True when the span overlaps at least one clip whose asset has a camera. */
+export function hasCameraUnderSpan(
+	assets: AxcutAsset[],
+	clips: AxcutClip[],
+	startSec: number,
+	endSec: number,
+): boolean {
+	return cameraCoverageUnderSpan(assets, clips, startSec, endSec).withCamera > 0;
+}
+
 /**
  * THE answer to "which camera file does this asset contribute, and where does it
  * start". Every producer of a `CompositorClipInput` — the scene, the preview

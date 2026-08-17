@@ -38,7 +38,7 @@ import { useTimelineTranscriptGate } from "@/lib/ai-edition/store/transcriptionS
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
-import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
+import { hasCameraUnderSpan } from "@/lib/ai-edition/timeline/camera";
 import { formatSec } from "@/lib/ai-edition/timeline/format";
 import {
 	newRegionDurationSec,
@@ -251,6 +251,40 @@ const PlayheadOverlay = memo(function PlayheadOverlay({
 	);
 });
 
+/** Isolated so playhead ticks only re-render this control, not the whole timeline. */
+const FullCameraToolButton = memo(function FullCameraToolButton({
+	label,
+	onAdd,
+}: {
+	label: string;
+	onAdd: (durationSec: number | undefined) => void;
+}) {
+	const document = useProjectStore((s) => s.document);
+	const currentTimeSec = useProjectStore((s) => s.currentTimeSec);
+	const durationSec = newRegionDurationSec() ?? 2;
+	const canAdd = Boolean(
+		document &&
+			hasCameraUnderSpan(
+				document.assets,
+				document.timeline.clips,
+				currentTimeSec,
+				currentTimeSec + durationSec,
+			),
+	);
+	return (
+		<button
+			type="button"
+			className={styles.tlToolBtn}
+			disabled={!canAdd}
+			title={label}
+			aria-label={label}
+			onClick={() => onAdd(newRegionDurationSec())}
+		>
+			<Maximize2 size={15} />
+		</button>
+	);
+});
+
 // Waveform preview bars inside a timeline clip. Derived from peaks data;
 // asset only decode once. Renders nothing while decoding or if the source has
 // no audio track, so the clip pill just shows its label until peaks arrive.
@@ -406,9 +440,6 @@ export function V4Timeline({
 	} | null>(null);
 	const { settings, set: setSettings } = useEditorSettings();
 	const document = useProjectStore((s) => s.document);
-	const canAddFullCamera = Boolean(
-		document && hasAnyClipWithCamera(document.assets, document.timeline.clips),
-	);
 	// The distinct native shapes of the clips actually on the timeline. "Original" used to be a
 	// single menu entry that silently resolved to whichever clip had the most pixels — so adding
 	// a 4K portrait rush flipped the whole project to portrait with no UI feedback. Enumerating
@@ -1365,16 +1396,10 @@ export function V4Timeline({
 						>
 							<Crosshair size={15} />
 						</button>
-						<button
-							type="button"
-							className={styles.tlToolBtn}
-							disabled={!canAddFullCamera}
-							title={t("buttons.addCameraFullscreen")}
-							aria-label={t("buttons.addCameraFullscreen")}
-							onClick={() => void tl.addCameraFullscreen(newRegionDurationSec())}
-						>
-							<Maximize2 size={15} />
-						</button>
+						<FullCameraToolButton
+							label={t("buttons.addCameraFullscreen")}
+							onAdd={(durationSec) => void tl.addCameraFullscreen(durationSec)}
+						/>
 						<span className={styles.tlToolSep} aria-hidden />
 						<Popover open={aspectMenuOpen} onOpenChange={setAspectMenuOpen}>
 							<PopoverTrigger asChild>

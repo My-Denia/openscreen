@@ -27,7 +27,10 @@ import {
 	setClipSourceRange,
 } from "../../src/lib/ai-edition/document/timeline";
 import type { AxcutDocument } from "../../src/lib/ai-edition/schema";
-import { hasAnyClipWithCamera } from "../../src/lib/ai-edition/timeline/camera";
+import {
+	cameraCoverageUnderSpan,
+	hasAnyClipWithCamera,
+} from "../../src/lib/ai-edition/timeline/camera";
 import {
 	buildCursorTrack,
 	type CursorTrackSample,
@@ -199,15 +202,7 @@ function cameraUnderSpan(
 	startSec: number,
 	endSec: number,
 ): { clips: number; withCamera: number } {
-	const covered = document.timeline.clips.filter(
-		(c) => Math.min(endSec, c.timelineEndSec) - Math.max(startSec, c.timelineStartSec) > 0,
-	);
-	return {
-		clips: covered.length,
-		withCamera: covered.filter(
-			(c) => document.assets.find((a) => a.id === c.assetId)?.cameraTrack != null,
-		).length,
-	};
+	return cameraCoverageUnderSpan(document.assets, document.timeline.clips, startSec, endSec);
 }
 
 function noCameraUnderSpan(

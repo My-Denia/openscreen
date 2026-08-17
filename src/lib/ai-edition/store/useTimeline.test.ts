@@ -739,6 +739,58 @@ describe("useTimeline.addCameraFullscreen", () => {
 		expect(regions).toHaveLength(1);
 		expect(regions[0]).toMatchObject({ startMs: 1000, endMs: 3000 });
 	});
+
+	it("does not write when the playhead span is over a camera-less clip in a mixed project", async () => {
+		const mixed: AxcutDocument = {
+			...sampleDoc,
+			assets: [
+				{
+					...sampleDoc.assets[0],
+					id: "asset_cam",
+					cameraTrack: {
+						sourcePath: "/tmp/cam.mp4",
+						startMs: 0,
+						offsetMs: 0,
+						visible: true,
+					},
+				},
+				sampleDoc.assets[0],
+			],
+			timeline: {
+				...sampleDoc.timeline,
+				clips: [
+					{
+						...sampleDoc.timeline.clips[0],
+						id: "clip_cam",
+						assetId: "asset_cam",
+						timelineStartSec: 0,
+						timelineEndSec: 5,
+						sourceEndSec: 5,
+					},
+					{
+						...sampleDoc.timeline.clips[0],
+						id: "clip_screen",
+						timelineStartSec: 5,
+						timelineEndSec: 10,
+						sourceEndSec: 5,
+					},
+				],
+			},
+		};
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: mixed,
+			currentTimeSec: 6,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+		const { result } = renderTimeline();
+		await act(async () => {
+			await result.current.addCameraFullscreen();
+		});
+		expect(bridgeMocks.save).not.toHaveBeenCalled();
+	});
 });
 
 describe("useTimeline.applyClipEdit", () => {

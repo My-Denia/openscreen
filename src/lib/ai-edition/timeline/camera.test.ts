@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { AxcutAsset, AxcutClip } from "../schema";
-import { assetCameraSource, hasAnyClipWithCamera, resolveActiveCameraTrack } from "./camera";
+import {
+	assetCameraSource,
+	cameraCoverageUnderSpan,
+	hasAnyClipWithCamera,
+	hasCameraUnderSpan,
+	resolveActiveCameraTrack,
+} from "./camera";
 
 const assetWithCamera: AxcutAsset = {
 	id: "asset_with_camera",
@@ -109,6 +115,20 @@ describe("hasAnyClipWithCamera", () => {
 
 	it("is false for an empty project", () => {
 		expect(hasAnyClipWithCamera([], [])).toBe(false);
+	});
+});
+
+describe("hasCameraUnderSpan", () => {
+	it("is true only for the part of a mixed timeline that actually has a camera", () => {
+		const assets = [assetWithCamera, assetWithoutCamera];
+		const clips = [clipWithCamera, clipWithoutCamera];
+		expect(hasCameraUnderSpan(assets, clips, 0, 2)).toBe(true);
+		expect(hasCameraUnderSpan(assets, clips, 6, 8)).toBe(false);
+		expect(cameraCoverageUnderSpan(assets, clips, 4, 7)).toEqual({ clips: 2, withCamera: 1 });
+	});
+
+	it("is false when the span covers no clip", () => {
+		expect(hasCameraUnderSpan([assetWithCamera], [clipWithCamera], 20, 22)).toBe(false);
 	});
 });
 
