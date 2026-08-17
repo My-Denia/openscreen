@@ -4,6 +4,7 @@ import {
 	assetCameraSource,
 	cameraCoverageUnderSpan,
 	hasAnyClipWithCamera,
+	hasAnyRenderableCamera,
 	hasCameraAtPlayhead,
 	hasCameraUnderSpan,
 	playheadRegionWindow,
@@ -126,7 +127,11 @@ describe("hasCameraUnderSpan", () => {
 		const clips = [clipWithCamera, clipWithoutCamera];
 		expect(hasCameraUnderSpan(assets, clips, 0, 2)).toBe(true);
 		expect(hasCameraUnderSpan(assets, clips, 6, 8)).toBe(false);
-		expect(cameraCoverageUnderSpan(assets, clips, 4, 7)).toEqual({ clips: 2, withCamera: 1 });
+		expect(cameraCoverageUnderSpan(assets, clips, 4, 7)).toEqual({
+			clips: 2,
+			withCamera: 1,
+			withTrack: 1,
+		});
 	});
 
 	it("is false when the span covers no clip", () => {
@@ -137,6 +142,13 @@ describe("hasCameraUnderSpan", () => {
 		const hiddenClip: AxcutClip = { ...clipWithCamera, assetId: "asset_hidden_camera" };
 		expect(hasCameraUnderSpan([assetWithHiddenCamera], [hiddenClip], 0, 2)).toBe(false);
 		expect(hasCameraAtPlayhead([assetWithHiddenCamera], [hiddenClip], 1)).toBe(false);
+		expect(cameraCoverageUnderSpan([assetWithHiddenCamera], [hiddenClip], 0, 2)).toEqual({
+			clips: 1,
+			withCamera: 0,
+			withTrack: 1,
+		});
+		expect(hasAnyRenderableCamera([assetWithHiddenCamera], [hiddenClip])).toBe(false);
+		expect(hasAnyClipWithCamera([assetWithHiddenCamera], [hiddenClip])).toBe(true);
 	});
 });
 

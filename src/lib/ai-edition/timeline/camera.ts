@@ -23,13 +23,20 @@ export function hasAnyClipWithCamera(assets: AxcutAsset[], clips: AxcutClip[]): 
 	return clips.some((clip) => assets.find((a) => a.id === clip.assetId)?.cameraTrack != null);
 }
 
+/** True when at least one placed clip would actually draw a webcam (visible + path). */
+export function hasAnyRenderableCamera(assets: AxcutAsset[], clips: AxcutClip[]): boolean {
+	return clips.some(
+		(clip) => assetCameraSource(assets.find((a) => a.id === clip.assetId)).path !== "",
+	);
+}
+
 /** Clips overlapping `[startSec, endSec)` and how many of those carry a camera. */
 export function cameraCoverageUnderSpan(
 	assets: AxcutAsset[],
 	clips: AxcutClip[],
 	startSec: number,
 	endSec: number,
-): { clips: number; withCamera: number } {
+): { clips: number; withCamera: number; withTrack: number } {
 	const lo = Math.min(startSec, endSec);
 	const hi = Math.max(startSec, endSec);
 	const covered = clips.filter(
@@ -40,6 +47,8 @@ export function cameraCoverageUnderSpan(
 		withCamera: covered.filter(
 			(c) => assetCameraSource(assets.find((a) => a.id === c.assetId)).path !== "",
 		).length,
+		withTrack: covered.filter((c) => assets.find((a) => a.id === c.assetId)?.cameraTrack != null)
+			.length,
 	};
 }
 
