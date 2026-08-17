@@ -4,7 +4,9 @@ import {
 	assetCameraSource,
 	cameraCoverageUnderSpan,
 	hasAnyClipWithCamera,
+	hasCameraAtPlayhead,
 	hasCameraUnderSpan,
+	playheadRegionWindow,
 	resolveActiveCameraTrack,
 } from "./camera";
 
@@ -129,6 +131,17 @@ describe("hasCameraUnderSpan", () => {
 
 	it("is false when the span covers no clip", () => {
 		expect(hasCameraUnderSpan([assetWithCamera], [clipWithCamera], 20, 22)).toBe(false);
+	});
+});
+
+describe("hasCameraAtPlayhead", () => {
+	it("does not depend on region duration — only the playhead millisecond", () => {
+		const assets = [assetWithCamera, assetWithoutCamera];
+		const clips = [clipWithCamera, clipWithoutCamera];
+		expect(hasCameraAtPlayhead(assets, clips, 2)).toBe(true);
+		expect(hasCameraAtPlayhead(assets, clips, 6)).toBe(false);
+		expect(playheadRegionWindow(1.0004, 2).startMs).toBe(1000);
+		expect(playheadRegionWindow(1.0004, 2).endMs).toBe(3000);
 	});
 });
 

@@ -38,7 +38,7 @@ import { useTimelineTranscriptGate } from "@/lib/ai-edition/store/transcriptionS
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
-import { hasCameraUnderSpan } from "@/lib/ai-edition/timeline/camera";
+import { hasCameraAtPlayhead } from "@/lib/ai-edition/timeline/camera";
 import { formatSec } from "@/lib/ai-edition/timeline/format";
 import {
 	newRegionDurationSec,
@@ -261,15 +261,8 @@ const FullCameraToolButton = memo(function FullCameraToolButton({
 }) {
 	const document = useProjectStore((s) => s.document);
 	const currentTimeSec = useProjectStore((s) => s.currentTimeSec);
-	const durationSec = newRegionDurationSec() ?? 2;
 	const canAdd = Boolean(
-		document &&
-			hasCameraUnderSpan(
-				document.assets,
-				document.timeline.clips,
-				currentTimeSec,
-				currentTimeSec + durationSec,
-			),
+		document && hasCameraAtPlayhead(document.assets, document.timeline.clips, currentTimeSec),
 	);
 	return (
 		<button

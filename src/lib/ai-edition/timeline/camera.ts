@@ -52,6 +52,26 @@ export function hasCameraUnderSpan(
 	return cameraCoverageUnderSpan(assets, clips, startSec, endSec).withCamera > 0;
 }
 
+/** Millisecond window `addCameraFullscreen` writes. Shared so the toolbar gate cannot drift. */
+export function playheadRegionWindow(
+	playheadSec: number,
+	durationSec: number,
+): { startMs: number; endMs: number; startSec: number; endSec: number } {
+	const startMs = Math.round(playheadSec * 1000);
+	const endMs = startMs + Math.round(durationSec * 1000);
+	return { startMs, endMs, startSec: startMs / 1000, endSec: endMs / 1000 };
+}
+
+/** Duration-independent enablement: the first millisecond at the playhead has a camera. */
+export function hasCameraAtPlayhead(
+	assets: AxcutAsset[],
+	clips: AxcutClip[],
+	playheadSec: number,
+): boolean {
+	const { startSec, endSec } = playheadRegionWindow(playheadSec, 0.001);
+	return hasCameraUnderSpan(assets, clips, startSec, endSec);
+}
+
 /**
  * THE answer to "which camera file does this asset contribute, and where does it
  * start". Every producer of a `CompositorClipInput` — the scene, the preview
