@@ -38,6 +38,7 @@ import { useTimelineTranscriptGate } from "@/lib/ai-edition/store/transcriptionS
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
+import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
 import { formatSec } from "@/lib/ai-edition/timeline/format";
 import {
 	newRegionDurationSec,
@@ -405,6 +406,9 @@ export function V4Timeline({
 	} | null>(null);
 	const { settings, set: setSettings } = useEditorSettings();
 	const document = useProjectStore((s) => s.document);
+	const canAddFullCamera = Boolean(
+		document && hasAnyClipWithCamera(document.assets, document.timeline.clips),
+	);
 	// The distinct native shapes of the clips actually on the timeline. "Original" used to be a
 	// single menu entry that silently resolved to whichever clip had the most pixels — so adding
 	// a 4K portrait rush flipped the whole project to portrait with no UI feedback. Enumerating
@@ -1364,6 +1368,7 @@ export function V4Timeline({
 						<button
 							type="button"
 							className={styles.tlToolBtn}
+							disabled={!canAddFullCamera}
 							title={t("buttons.addCameraFullscreen")}
 							aria-label={t("buttons.addCameraFullscreen")}
 							onClick={() => void tl.addCameraFullscreen(newRegionDurationSec())}

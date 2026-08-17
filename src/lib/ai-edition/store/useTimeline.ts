@@ -17,9 +17,11 @@ import {
 	removeClip as removeClipInDocument,
 	removeRegion as removeRegionInDocument,
 	resequenceClips,
+	setClipCrop,
 	setClipSourceRange,
 } from "../document/timeline";
 import type { AxcutClipCropRegion, AxcutDocument } from "../schema";
+import { hasAnyClipWithCamera } from "../timeline/camera";
 import { probeVideoDimensions, probeVideoDuration } from "../timeline/duration";
 import {
 	anchorRegionsWithDerivedMs,
@@ -348,10 +350,13 @@ export function useTimeline() {
 	const addCameraFullscreen = useCallback(
 		async (durationSec = DEFAULT_NEW_REGION_SEC) => {
 			if (!document) return;
+			if (!hasAnyClipWithCamera(document.assets, document.timeline.clips)) return;
 			const timeMs = Math.round(playheadSec() * 1000);
 			const endMs = timeMs + Math.round(durationSec * 1000);
 			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
-			const prev = (legacy.cameraFullscreenRegions as unknown[]) ?? [];
+			const prev = Array.isArray(legacy.cameraFullscreenRegions)
+				? (legacy.cameraFullscreenRegions as unknown[])
+				: [];
 			const next: AxcutDocument = {
 				...document,
 				legacyEditor: {
@@ -803,13 +808,26 @@ export function useTimeline() {
 	const updateClipCrop = useCallback(
 		async (clipId: string, region: AxcutClipCropRegion | null) => {
 			if (!document) return;
-			const arr = document.timeline.clips.map((c) =>
-				c.id === clipId ? { ...c, cropRegion: region ?? undefined } : c,
-			);
-			const next: AxcutDocument = {
-				...document,
-				timeline: { ...document.timeline, clips: arr },
-			};
+			await saveDocument(setClipCrop(document, clipId, region));
+		},
+		[document, saveDocument],
+	);
+
+	// Edit Clip Apply can change source range and crop in one click. Those used
+	// to be two independent saves from the same stale document, so the second
+	// write dropped the first (#355). Compose on one document, save once.
+	const applyClipEdit = useCallback(
+		async (
+			clipId: string,
+			sourceStartSec: number,
+			sourceEndSec: number,
+			cropRegion?: AxcutClipCropRegion | null,
+		) => {
+			if (!document) return;
+			let next = setClipSourceRange(document, clipId, sourceStartSec, sourceEndSec);
+			if (cropRegion !== undefined) {
+				next = setClipCrop(next, clipId, cropRegion);
+			}
 			await saveDocument(next);
 		},
 		[document, saveDocument],
@@ -994,22 +1012,24 @@ export function useTimeline() {
 		setMultiSelection([]);
 	}, []);
 
-	const speedRegions = hasDoc
-		? (((document.legacyEditor as Record<string, unknown> | null)?.speedRegions as Array<{
+	const legacyEditor = hasDoc
+		? ((document.legacyEditor as Record<string, unknown> | null) ?? null)
+		: null;
+	const speedRegions = Array.isArray(legacyEditor?.speedRegions)
+		? (legacyEditor.speedRegions as Array<{
 				id: string;
 				startMs: number;
 				endMs: number;
 				speed: number;
-			}>) ?? [])
+			}>)
 		: [];
 
-	const cameraFullscreenRegions = hasDoc
-		? (((document.legacyEditor as Record<string, unknown> | null)
-				?.cameraFullscreenRegions as Array<{
+	const cameraFullscreenRegions = Array.isArray(legacyEditor?.cameraFullscreenRegions)
+		? (legacyEditor.cameraFullscreenRegions as Array<{
 				id: string;
 				startMs: number;
 				endMs: number;
-			}>) ?? [])
+			}>)
 		: [];
 
 	return {
@@ -1036,6 +1056,7 @@ export function useTimeline() {
 		clearSelection,
 		updateClipSourceRange,
 		updateClipCrop,
+		applyClipEdit,
 		insertClipAt,
 		moveClip,
 		duplicateClip,

@@ -15,6 +15,8 @@ import commonJa from "../src/i18n/locales/ja-JP/common.json";
 import dialogsJa from "../src/i18n/locales/ja-JP/dialogs.json";
 import commonKo from "../src/i18n/locales/ko-KR/common.json";
 import dialogsKo from "../src/i18n/locales/ko-KR/dialogs.json";
+import commonPtBr from "../src/i18n/locales/pt-BR/common.json";
+import dialogsPtBr from "../src/i18n/locales/pt-BR/dialogs.json";
 import commonRu from "../src/i18n/locales/ru/common.json";
 import dialogsRu from "../src/i18n/locales/ru/dialogs.json";
 import commonTr from "../src/i18n/locales/tr/common.json";
@@ -34,6 +36,7 @@ type Locale =
 	| "it"
 	| "ja-JP"
 	| "ko-KR"
+	| "pt-BR"
 	| "ru"
 	| "tr"
 	| "vi"
@@ -50,6 +53,7 @@ const messages: Record<Locale, Record<Namespace, MessageMap>> = {
 	it: { common: commonIt, dialogs: dialogsIt },
 	"ja-JP": { common: commonJa, dialogs: dialogsJa },
 	"ko-KR": { common: commonKo, dialogs: dialogsKo },
+	"pt-BR": { common: commonPtBr, dialogs: dialogsPtBr },
 	ru: { common: commonRu, dialogs: dialogsRu },
 	tr: { common: commonTr, dialogs: dialogsTr },
 	vi: { common: commonVi, dialogs: dialogsVi },
@@ -59,21 +63,16 @@ const messages: Record<Locale, Record<Namespace, MessageMap>> = {
 
 let currentLocale: Locale = "en";
 
+export function listMainLocales(): Locale[] {
+	return Object.keys(messages) as Locale[];
+}
+
+function isMainLocale(locale: string): locale is Locale {
+	return (listMainLocales() as string[]).includes(locale);
+}
+
 export function setMainLocale(locale: string) {
-	if (
-		locale === "en" ||
-		locale === "ar" ||
-		locale === "es" ||
-		locale === "fr" ||
-		locale === "it" ||
-		locale === "ja-JP" ||
-		locale === "ko-KR" ||
-		locale === "ru" ||
-		locale === "tr" ||
-		locale === "vi" ||
-		locale === "zh-CN" ||
-		locale === "zh-TW"
-	) {
+	if (isMainLocale(locale)) {
 		currentLocale = locale;
 	}
 }

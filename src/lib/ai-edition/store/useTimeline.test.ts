@@ -669,3 +669,117 @@ describe("useTimeline selection", () => {
 		expect(result.current.clipSelection).toBeNull();
 	});
 });
+
+describe("useTimeline.addCameraFullscreen", () => {
+	beforeEach(() => {
+		useProjectStore.getState().clear();
+		for (const mock of Object.values(bridgeMocks)) mock.mockReset();
+		bridgeMocks.save.mockImplementation(async (doc: typeof sampleDoc) => ({
+			success: true,
+			document: doc,
+		}));
+	});
+
+	afterEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("does not write a region on a camera-less project", async () => {
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: sampleDoc,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+		const { result } = renderTimeline();
+		await act(async () => {
+			await result.current.addCameraFullscreen();
+		});
+		expect(bridgeMocks.save).not.toHaveBeenCalled();
+		expect(
+			(useProjectStore.getState().document?.legacyEditor as { cameraFullscreenRegions?: unknown })
+				?.cameraFullscreenRegions,
+		).toBeUndefined();
+	});
+
+	it("writes one region when a clip has a camera", async () => {
+		const withCamera: AxcutDocument = {
+			...sampleDoc,
+			assets: [
+				{
+					...sampleDoc.assets[0],
+					cameraTrack: {
+						sourcePath: "/tmp/cam.mp4",
+						startMs: 0,
+						offsetMs: 0,
+						visible: true,
+					},
+				},
+			],
+		};
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: withCamera,
+			currentTimeSec: 1,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+		const { result } = renderTimeline();
+		await act(async () => {
+			await result.current.addCameraFullscreen();
+		});
+		expect(bridgeMocks.save).toHaveBeenCalledTimes(1);
+		const regions = (
+			useProjectStore.getState().document?.legacyEditor as {
+				cameraFullscreenRegions: Array<{ startMs: number; endMs: number }>;
+			}
+		).cameraFullscreenRegions;
+		expect(regions).toHaveLength(1);
+		expect(regions[0]).toMatchObject({ startMs: 1000, endMs: 3000 });
+	});
+});
+
+describe("useTimeline.applyClipEdit", () => {
+	beforeEach(() => {
+		useProjectStore.getState().clear();
+		for (const mock of Object.values(bridgeMocks)) mock.mockReset();
+		bridgeMocks.save.mockImplementation(async (doc: typeof sampleDoc) => ({
+			success: true,
+			document: doc,
+		}));
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: sampleDoc,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+	});
+
+	afterEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("keeps source range and crop after one save", async () => {
+		const { result } = renderTimeline();
+		await act(async () => {
+			await result.current.applyClipEdit("clip_a", 1, 6, {
+				x: 0.1,
+				y: 0.2,
+				width: 0.5,
+				height: 0.4,
+			});
+		});
+		expect(bridgeMocks.save).toHaveBeenCalledTimes(1);
+		const clip = useProjectStore.getState().document?.timeline.clips[0];
+		expect(clip).toMatchObject({
+			sourceStartSec: 1,
+			sourceEndSec: 6,
+			timelineStartSec: 0,
+			timelineEndSec: 5,
+			cropRegion: { x: 0.1, y: 0.2, width: 0.5, height: 0.4 },
+		});
+	});
+});

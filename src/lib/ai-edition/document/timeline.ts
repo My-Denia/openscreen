@@ -3,7 +3,13 @@
 // (store, exporter, agent) feeds an AxcutDocument and gets back intervals
 // or a new document with updated clips.
 
-import type { AxcutClip, AxcutDocument, AxcutTranscript, AxcutTrimRange } from "../schema";
+import type {
+	AxcutClip,
+	AxcutClipCropRegion,
+	AxcutDocument,
+	AxcutTranscript,
+	AxcutTrimRange,
+} from "../schema";
 import {
 	anchoredToRawSpanSec,
 	anchorRegionsWithDerivedMs,
@@ -240,24 +246,28 @@ type StoredRegion = {
 };
 
 /** Apply `fn` to all four modifier collections (document-level + legacyEditor envelopes). */
+function asStoredRegions(value: unknown): StoredRegion[] | undefined {
+	return Array.isArray(value) ? (value as StoredRegion[]) : undefined;
+}
+
 function mapAllRegionCollections(
 	document: AxcutDocument,
 	fn: (regions: StoredRegion[], prefix: string) => StoredRegion[],
 ): AxcutDocument {
 	const legacy = document.legacyEditor as Record<string, unknown> | null;
-	const speedRegions = legacy?.speedRegions as StoredRegion[] | undefined;
-	const cameraFullscreenRegions = legacy?.cameraFullscreenRegions as StoredRegion[] | undefined;
+	const speedRegions = asStoredRegions(legacy?.speedRegions);
+	const cameraFullscreenRegions = asStoredRegions(legacy?.cameraFullscreenRegions);
+	const zoomRanges = asStoredRegions(document.zoomRanges);
+	const annotations = asStoredRegions(document.annotations);
 
 	return {
 		...document,
-		zoomRanges: fn(
-			document.zoomRanges as unknown as StoredRegion[],
-			"zoom",
-		) as unknown as AxcutDocument["zoomRanges"],
-		annotations: fn(
-			document.annotations as unknown as StoredRegion[],
-			"ann",
-		) as unknown as AxcutDocument["annotations"],
+		zoomRanges: zoomRanges
+			? (fn(zoomRanges, "zoom") as unknown as AxcutDocument["zoomRanges"])
+			: document.zoomRanges,
+		annotations: annotations
+			? (fn(annotations, "ann") as unknown as AxcutDocument["annotations"])
+			: document.annotations,
 		legacyEditor:
 			legacy && (speedRegions || cameraFullscreenRegions)
 				? {
@@ -853,6 +863,23 @@ export function setClipSourceRange(
 		timeline: { ...document.timeline, clips: newClips },
 	};
 	return rederiveRegionMs(next, newClips);
+}
+
+/** Per-clip crop. `null` clears the framing back to the full frame. Pure. */
+export function setClipCrop(
+	document: AxcutDocument,
+	clipId: string,
+	region: AxcutClipCropRegion | null,
+): AxcutDocument {
+	return {
+		...document,
+		timeline: {
+			...document.timeline,
+			clips: document.timeline.clips.map((c) =>
+				c.id === clipId ? { ...c, cropRegion: region ?? undefined } : c,
+			),
+		},
+	};
 }
 
 /**

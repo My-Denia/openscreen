@@ -20,6 +20,7 @@ import {
 	resequenceClips,
 	resolvePlaybackSegments,
 	restoreFullTimeline,
+	setClipCrop,
 	setClipSourceRange,
 	subtractInterval,
 	timelineIntervals,
@@ -1457,5 +1458,80 @@ describe("removeClip — delete a clip, close the gap, drop its pills", () => {
 		const next = removeClip(before, "clip_missing");
 		expect(next.timeline.clips.map((c) => c.id)).toEqual(["clip_a", "clip_b"]);
 		expect(next).toBe(before);
+	});
+});
+
+describe("malformed legacyEditor envelopes do not crash clip edits", () => {
+	const clip = {
+		id: "clip_a",
+		assetId: "asset_1",
+		sourceStartSec: 0,
+		sourceEndSec: 10,
+		timelineStartSec: 0,
+		timelineEndSec: 10,
+		wordRefs: [],
+		origin: "user" as const,
+		reason: "",
+	};
+
+	it("removeClip leaves a non-array speedRegions envelope untouched", () => {
+		const before = makeDoc({
+			timeline: {
+				...makeDoc().timeline,
+				clips: [clip],
+			},
+			legacyEditor: { speedRegions: "oops" },
+		});
+		expect(() => removeClip(before, "clip_a")).not.toThrow();
+		const next = removeClip(before, "clip_a");
+		expect(next.timeline.clips).toEqual([]);
+		expect((next.legacyEditor as { speedRegions: unknown }).speedRegions).toBe("oops");
+	});
+
+	it("rederiveRegionMs does not call filter on a non-array cameraFullscreen envelope", () => {
+		const before = makeDoc({
+			timeline: {
+				...makeDoc().timeline,
+				clips: [clip],
+			},
+			legacyEditor: { cameraFullscreenRegions: { not: "an array" } },
+		});
+		expect(() => rederiveRegionMs(before, before.timeline.clips)).not.toThrow();
+		const next = rederiveRegionMs(before, before.timeline.clips);
+		expect(
+			(next.legacyEditor as { cameraFullscreenRegions: unknown }).cameraFullscreenRegions,
+		).toEqual({ not: "an array" });
+	});
+});
+
+describe("setClipCrop", () => {
+	it("writes and clears a per-clip crop without touching source range", () => {
+		const before = makeDoc({
+			timeline: {
+				...makeDoc().timeline,
+				clips: [
+					{
+						id: "clip_a",
+						assetId: "asset_1",
+						sourceStartSec: 1,
+						sourceEndSec: 9,
+						timelineStartSec: 0,
+						timelineEndSec: 8,
+						wordRefs: [],
+						origin: "user",
+						reason: "",
+					},
+				],
+			},
+		});
+		const cropped = setClipCrop(before, "clip_a", { x: 0.1, y: 0.2, width: 0.5, height: 0.4 });
+		expect(cropped.timeline.clips[0]).toMatchObject({
+			sourceStartSec: 1,
+			sourceEndSec: 9,
+			cropRegion: { x: 0.1, y: 0.2, width: 0.5, height: 0.4 },
+		});
+		const cleared = setClipCrop(cropped, "clip_a", null);
+		expect(cleared.timeline.clips[0].cropRegion).toBeUndefined();
+		expect(cleared.timeline.clips[0].sourceStartSec).toBe(1);
 	});
 });

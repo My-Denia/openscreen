@@ -1304,8 +1304,7 @@ export function NewEditorShell() {
 				videoSources={videoSources}
 				onApply={(sStart, sEnd, cropRegion) => {
 					if (!editClipTarget) return;
-					void tl.updateClipSourceRange(editClipTarget.id, sStart, sEnd);
-					if (cropRegion !== undefined) void tl.updateClipCrop(editClipTarget.id, cropRegion);
+					void tl.applyClipEdit(editClipTarget.id, sStart, sEnd, cropRegion);
 					setEditClipTarget(null);
 				}}
 			/>
