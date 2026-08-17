@@ -213,16 +213,21 @@ function noCameraUnderSpan(
 	if (coverage.clips === 0 || coverage.withCamera > 0) return null;
 	const anywhereVisible = hasAnyRenderableCamera(document.assets, document.timeline.clips);
 	const anywhereTrack = hasAnyClipWithCamera(document.assets, document.timeline.clips);
+	const unusedVisible = hasAnyRenderableAsset(document.assets);
 	const span = `${startSec.toFixed(1)}–${endSec.toFixed(1)} s`;
 	const nothingWritten =
 		"so a full-camera region there would render nothing and none was written. ";
+	const placeUnused =
+		"An unused asset does (assets[].cameraVisible). Place that clip or tell the user — do not retry other spans on the current timeline.";
 	if (coverage.withTrack > 0) {
 		return failure(
 			`The webcam under ${span} is hidden (cameraTrack.visible is false), ` +
 				nothingWritten +
 				(anywhereVisible
 					? "Other clips have a visible camera — check assets[].cameraVisible in getCurrentDocument and pick a span over one of those."
-					: "No clip in this project has a visible camera. Tell the user instead of retrying spans."),
+					: unusedVisible
+						? placeUnused
+						: "No clip in this project has a visible camera. Tell the user instead of retrying spans."),
 		);
 	}
 	if (anywhereVisible) {
@@ -232,18 +237,16 @@ function noCameraUnderSpan(
 				"Other clips in this project do carry a visible camera — check assets[].cameraVisible in getCurrentDocument and pick a span over one of those.",
 		);
 	}
+	if (unusedVisible) {
+		return failure(
+			`No placed clip has a visible camera under ${span}, ` + nothingWritten + placeUnused,
+		);
+	}
 	if (anywhereTrack) {
 		return failure(
 			`No webcam is linked to the footage under ${span}, ` +
 				nothingWritten +
 				"Other clips have a cameraTrack but it is hidden (assets[].cameraVisible is false). Tell the user instead of retrying spans.",
-		);
-	}
-	if (hasAnyRenderableAsset(document.assets)) {
-		return failure(
-			`No placed clip has a visible camera under ${span}, ` +
-				nothingWritten +
-				"An unused asset does (assets[].cameraVisible). Place that clip or tell the user — do not retry other spans on the current timeline.",
 		);
 	}
 	if (document.assets.some((a) => a.cameraTrack != null)) {

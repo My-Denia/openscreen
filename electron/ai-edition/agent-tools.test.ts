@@ -1199,6 +1199,74 @@ describe("a full-camera region needs a camera", () => {
 		expect(error).not.toMatch(/this recording has no webcam/i);
 	});
 
+	it("mentions an unused visible camera even when placed cameras are only hidden", () => {
+		const document = withCameraTrack(fixtureDocument());
+		const hiddenPlusUnused = documentSchema.parse({
+			...document,
+			assets: [
+				{
+					...document.assets[0],
+					cameraTrack: { sourcePath: "C:/videos/cam.mp4", startMs: 0, offsetMs: 0, visible: false },
+				},
+				{
+					id: "asset_unused_cam",
+					kind: "video",
+					label: "Unused webcam",
+					originalPath: "C:/videos/unused.mp4",
+					durationSec: 60,
+					cameraTrack: { sourcePath: "C:/videos/cam2.mp4", startMs: 0, offsetMs: 0, visible: true },
+				},
+			],
+		});
+		const overHidden = executeAgentTool(
+			hiddenPlusUnused,
+			"addCameraFullscreen",
+			JSON.stringify({ startSec: 0, endSec: 5 }),
+		);
+		expect(overHidden.ok).toBe(false);
+		const hiddenError = JSON.parse(overHidden.resultJson).error as string;
+		expect(hiddenError).toMatch(/unused asset/i);
+		expect(hiddenError).not.toMatch(/tell the user instead of retrying spans/i);
+
+		const screenOnlyPlusHidden = documentSchema.parse({
+			...document,
+			assets: [
+				{ ...document.assets[0], cameraTrack: null },
+				{
+					id: "asset_2",
+					kind: "video",
+					label: "Hidden cam",
+					originalPath: "C:/videos/screen.mp4",
+					durationSec: 60,
+					cameraTrack: { sourcePath: "C:/videos/cam.mp4", startMs: 0, offsetMs: 0, visible: false },
+				},
+				{
+					id: "asset_unused_cam",
+					kind: "video",
+					label: "Unused webcam",
+					originalPath: "C:/videos/unused.mp4",
+					durationSec: 60,
+					cameraTrack: { sourcePath: "C:/videos/cam2.mp4", startMs: 0, offsetMs: 0, visible: true },
+				},
+			],
+			timeline: {
+				...document.timeline,
+				clips: document.timeline.clips.map((c) =>
+					c.id === "clip_2" ? { ...c, assetId: "asset_2" } : c,
+				),
+			},
+		});
+		const overScreen = executeAgentTool(
+			screenOnlyPlusHidden,
+			"addCameraFullscreen",
+			JSON.stringify({ startSec: 0, endSec: 5 }),
+		);
+		expect(overScreen.ok).toBe(false);
+		const screenError = JSON.parse(overScreen.resultJson).error as string;
+		expect(screenError).toMatch(/unused asset/i);
+		expect(screenError).not.toMatch(/tell the user instead of retrying spans/i);
+	});
+
 	it("does not claim the project has no cameraTrack when only other clips are hidden", () => {
 		const document = withCameraTrack(fixtureDocument());
 		const mixed = documentSchema.parse({
