@@ -10,6 +10,7 @@ import {
 	consumeFreshRecordingAutoZoomPending,
 	importPendingRecording,
 	markFreshRecordingAutoZoomPending,
+	maybeSaveFreshRecordingAutoZooms,
 } from "./recordingImport";
 
 // The first describe stubs the store actions, so the bridge is never reached
@@ -374,5 +375,89 @@ describe("fresh-recording auto-zoom", () => {
 		});
 		expect(next).toBe(other);
 		expect(consumeFreshRecordingAutoZoomPending()).toBe(true);
+	});
+
+	it("waits for a probed asset duration before generating zooms", async () => {
+		markFreshRecordingAutoZoomPending();
+		const placeholder = documentWithClip(60);
+		placeholder.assets[0].durationSec = undefined;
+		const first = await applyPendingFreshRecordingAutoZooms(placeholder, {
+			enabled: true,
+			getTelemetry: async () => dwell(4000, 0.4, 0.6),
+		});
+		expect(first).toBe(placeholder);
+		expect(first.zoomRanges).toEqual([]);
+		expect(consumeFreshRecordingAutoZoomPending()).toBe(true);
+	});
+
+	it("appends to the store document after telemetry, not the caller's snapshot", async () => {
+		const stale = documentWithClip(90);
+		const trimmed = {
+			...stale,
+			timeline: {
+				...stale.timeline,
+				clips: [
+					{
+						...stale.timeline.clips[0],
+						sourceEndSec: 80,
+						timelineEndSec: 80,
+					},
+				],
+			},
+		};
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		markFreshRecordingAutoZoomPending(stale.assets[0].originalPath);
+		useProjectStore.setState({ document: stale });
+		const pending = applyPendingFreshRecordingAutoZooms(stale, {
+			enabled: true,
+			getTelemetry: async () => {
+				await gate;
+				return dwell(4000, 0.4, 0.6);
+			},
+			createId: (prefix) => `${prefix}_live`,
+		});
+		useProjectStore.setState({ document: trimmed });
+		release();
+		const next = await pending;
+		expect(next.timeline.clips[0].sourceEndSec).toBe(80);
+		expect(next.zoomRanges).toHaveLength(1);
+	});
+
+	it("does not re-apply after a successful save once the user removes the zooms", async () => {
+		const document = documentWithClip();
+		const saveDocument = vi.fn(async (next: AxcutDocument) => {
+			useProjectStore.setState({ document: next });
+			return true;
+		});
+		useProjectStore.setState({
+			document,
+			// biome-ignore lint/suspicious/noExplicitAny: test-only save stub
+			saveDocument: saveDocument as any,
+		});
+		markFreshRecordingAutoZoomPending(document.assets[0].originalPath);
+		await expect(
+			maybeSaveFreshRecordingAutoZooms(document, {
+				enabled: true,
+				getTelemetry: async () => dwell(4000, 0.4, 0.6),
+				createId: (prefix) => `${prefix}_once`,
+			}),
+		).resolves.toBe(true);
+		expect(useProjectStore.getState().document?.zoomRanges).toHaveLength(1);
+
+		const cleared = {
+			...useProjectStore.getState().document,
+			zoomRanges: [],
+		} as AxcutDocument;
+		useProjectStore.setState({ document: cleared });
+		await expect(
+			maybeSaveFreshRecordingAutoZooms(cleared, {
+				enabled: true,
+				getTelemetry: async () => dwell(4000, 0.4, 0.6),
+			}),
+		).resolves.toBe(false);
+		expect(useProjectStore.getState().document?.zoomRanges).toEqual([]);
 	});
 });

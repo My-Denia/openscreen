@@ -734,10 +734,18 @@ export function LaunchWindow() {
 
 	const toggleAutoZoom = useCallback(() => {
 		if (controlsLocked) return;
+		if (supportsCursorModeToggle && cursorCaptureMode === "system") return;
 		const next = !autoZoomEnabled;
 		setAutoZoomEnabled(next);
 		persistRecordingPrefs({ autoZoomEnabled: next });
-	}, [autoZoomEnabled, controlsLocked, persistRecordingPrefs, setAutoZoomEnabled]);
+	}, [
+		autoZoomEnabled,
+		controlsLocked,
+		cursorCaptureMode,
+		persistRecordingPrefs,
+		setAutoZoomEnabled,
+		supportsCursorModeToggle,
+	]);
 
 	const toggleWebcam = useCallback(() => {
 		if (controlsLocked) return;
@@ -1021,9 +1029,17 @@ export function LaunchWindow() {
 						/>
 					</div>
 					<HudAutoZoomButton
-						enabled={autoZoomEnabled}
-						disabled={controlsLocked}
-						label={autoZoomEnabled ? t("autoZoom.disable") : t("autoZoom.enable")}
+						enabled={autoZoomEnabled && !(supportsCursorModeToggle && cursorCaptureMode === "system")}
+						disabled={
+							controlsLocked || (supportsCursorModeToggle && cursorCaptureMode === "system")
+						}
+						label={
+							supportsCursorModeToggle && cursorCaptureMode === "system"
+								? t("autoZoom.needsEditableCursor")
+								: autoZoomEnabled
+									? t("autoZoom.disable")
+									: t("autoZoom.enable")
+						}
 						onClick={toggleAutoZoom}
 					/>
 					{supportsCursorModeToggle && (

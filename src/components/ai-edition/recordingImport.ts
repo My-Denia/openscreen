@@ -28,13 +28,17 @@ import { nativeBridgeClient } from "@/native/client";
 // `autoZoomEnabled`, default on). The ai-edition import only seeded a clip, so
 // the wand still worked but a new take landed un-zoomed. This flag is the
 // one-shot hand-off: set as soon as the asset is on the document, then taken
-// only after a real apply attempt (clips exist and telemetry was readable, or
-// the toggle is off). Keeping it across an empty-clip / empty-sidecar pass is
-// what lets metadata win the race against the helper flush. The path stops a
-// leftover flag from decorating a later, unrelated project in the same window.
+// only after a real apply attempt (clips exist, duration is probed, and
+// telemetry was readable, or the toggle is off). Keeping it across an
+// empty-clip / empty-sidecar / placeholder-duration pass is what lets metadata
+// win the race against the helper flush. The path stops a leftover flag from
+// decorating a later, unrelated project in the same window. A successful save
+// records the project id so a later undo or delete cannot be silently re-seeded.
 let pendingFreshRecordingAutoZoom = false;
 let pendingFreshRecordingAutoZoomPath: string | null = null;
+let appliedFreshRecordingAutoZoomProjectId: string | null = null;
 let pendingFreshRecordingAutoZoomTimers: ReturnType<typeof setTimeout>[] = [];
+let freshRecordingAutoZoomSaveChain: Promise<void> = Promise.resolve();
 
 const FRESH_RECORDING_AUTO_ZOOM_RETRY_MS = [500, 1500, 3000];
 
@@ -63,6 +67,7 @@ function scheduleFreshRecordingAutoZoomRetries(): void {
 export function markFreshRecordingAutoZoomPending(assetPath?: string): void {
 	pendingFreshRecordingAutoZoom = true;
 	pendingFreshRecordingAutoZoomPath = assetPath ?? null;
+	appliedFreshRecordingAutoZoomProjectId = null;
 	scheduleFreshRecordingAutoZoomRetries();
 }
 
@@ -75,6 +80,8 @@ function clearFreshRecordingAutoZoomPending(): void {
 export function consumeFreshRecordingAutoZoomPending(): boolean {
 	const was = pendingFreshRecordingAutoZoom;
 	clearFreshRecordingAutoZoomPending();
+	appliedFreshRecordingAutoZoomProjectId = null;
+	freshRecordingAutoZoomSaveChain = Promise.resolve();
 	return was;
 }
 
@@ -109,28 +116,74 @@ export async function applyFreshRecordingAutoZooms(
 	return appendAutoZoomSuggestions(document, suggestions, deps.createId ?? createId);
 }
 
+function pendingFreshRecordingAsset(document: AxcutDocument) {
+	if (pendingFreshRecordingAutoZoomPath) {
+		return document.assets.find((asset) => asset.originalPath === pendingFreshRecordingAutoZoomPath);
+	}
+	const primaryId = document.project.primaryAssetId;
+	return document.assets.find((asset) => asset.id === primaryId) ?? document.assets[0];
+}
+
+function hasProbedDurationForPendingAsset(document: AxcutDocument): boolean {
+	const asset = pendingFreshRecordingAsset(document);
+	return (
+		asset != null &&
+		asset.durationSec != null &&
+		Number.isFinite(asset.durationSec) &&
+		asset.durationSec > 0
+	);
+}
+
+function clipExtentSignature(document: AxcutDocument): string {
+	return document.timeline.clips
+		.map(
+			(clip) =>
+				`${clip.id}:${clip.assetId}:${clip.sourceStartSec}:${clip.sourceEndSec ?? ""}:${clip.timelineStartSec}:${clip.timelineEndSec}`,
+		)
+		.join("|");
+}
+
+function canApplyFreshRecordingAutoZooms(document: AxcutDocument): boolean {
+	if (!pendingFreshRecordingAutoZoom) return false;
+	if (appliedFreshRecordingAutoZoomProjectId === document.project.id) return false;
+	if ((document.zoomRanges?.length ?? 0) > 0) return false;
+	if ((document.timeline?.clips?.length ?? 0) === 0) return false;
+	if (!hasProbedDurationForPendingAsset(document)) return false;
+	if (
+		pendingFreshRecordingAutoZoomPath &&
+		!document.assets.some((asset) => asset.originalPath === pendingFreshRecordingAutoZoomPath)
+	) {
+		return false;
+	}
+	return true;
+}
+
+function liveDocument(fallback: AxcutDocument): AxcutDocument {
+	return useProjectStore.getState().document ?? fallback;
+}
+
 export async function applyPendingFreshRecordingAutoZooms(
 	document: AxcutDocument,
 	deps: ApplyFreshRecordingAutoZoomsDeps = {},
 ): Promise<AxcutDocument> {
 	if (!pendingFreshRecordingAutoZoom) return document;
+	if (appliedFreshRecordingAutoZoomProjectId === document.project.id) {
+		clearFreshRecordingAutoZoomPending();
+		return document;
+	}
 	const enabled = deps.enabled ?? (await readAutoZoomPref());
 	if (!enabled) {
 		clearFreshRecordingAutoZoomPending();
-		return document;
+		return liveDocument(document);
 	}
-	if ((document.zoomRanges?.length ?? 0) > 0) {
+	const start = liveDocument(document);
+	if ((start.zoomRanges?.length ?? 0) > 0) {
 		clearFreshRecordingAutoZoomPending();
-		return document;
+		appliedFreshRecordingAutoZoomProjectId = start.project.id;
+		return start;
 	}
-	if ((document.timeline?.clips?.length ?? 0) === 0) {
-		return document;
-	}
-	if (
-		pendingFreshRecordingAutoZoomPath &&
-		!document.assets.some((asset) => asset.originalPath === pendingFreshRecordingAutoZoomPath)
-	) {
-		return document;
+	if (!canApplyFreshRecordingAutoZooms(start)) {
+		return start;
 	}
 	const inner =
 		deps.getTelemetry ?? ((videoPath: string) => nativeBridgeClient.cursor.getTelemetry(videoPath));
@@ -142,30 +195,70 @@ export async function applyPendingFreshRecordingAutoZooms(
 			return [];
 		}
 	};
-	const suggestions = await collectAutoZoomSuggestionsForDocument(document, getTelemetry);
+	const collectFrom = async (source: AxcutDocument) =>
+		collectAutoZoomSuggestionsForDocument(source, getTelemetry);
+
+	const firstSignature = clipExtentSignature(start);
+	let suggestions = await collectFrom(start);
+	let latest = liveDocument(start);
+	if (latest.project.id !== start.project.id) {
+		return latest;
+	}
+	if ((latest.zoomRanges?.length ?? 0) > 0) {
+		clearFreshRecordingAutoZoomPending();
+		appliedFreshRecordingAutoZoomProjectId = latest.project.id;
+		return latest;
+	}
+	if (!canApplyFreshRecordingAutoZooms(latest)) {
+		return latest;
+	}
+	if (clipExtentSignature(latest) !== firstSignature) {
+		suggestions = await collectFrom(latest);
+		latest = liveDocument(latest);
+		if (latest.project.id !== start.project.id) return latest;
+		if ((latest.zoomRanges?.length ?? 0) > 0) {
+			clearFreshRecordingAutoZoomPending();
+			appliedFreshRecordingAutoZoomProjectId = latest.project.id;
+			return latest;
+		}
+		if (!canApplyFreshRecordingAutoZooms(latest)) return latest;
+	}
 	if (suggestions.length === 0) {
 		// Do not consume: a mid-flush sidecar can have samples but no dwell yet
 		// (the qualifying sit is often the last second of the take).
-		return document;
+		return latest;
 	}
-	// Leave pending set until a later pass sees zoomRanges on the stored
-	// document. A overlapping `loadedmetadata` can still replace the timeline
-	// from a stale empty-clip snapshot and wipe this write.
-	return appendAutoZoomSuggestions(document, suggestions, deps.createId ?? createId);
+	return appendAutoZoomSuggestions(latest, suggestions, deps.createId ?? createId);
 }
 
 export async function maybeSaveFreshRecordingAutoZooms(
 	document: AxcutDocument,
 	deps: ApplyFreshRecordingAutoZoomsDeps = {},
 ): Promise<boolean> {
-	try {
-		const latest = useProjectStore.getState().document ?? document;
-		const next = await applyPendingFreshRecordingAutoZooms(latest, deps);
-		if (next === latest) return false;
-		return useProjectStore.getState().saveDocument(next, { history: true });
-	} catch {
-		return false;
-	}
+	const run = async (): Promise<boolean> => {
+		try {
+			const latest = liveDocument(document);
+			const next = await applyPendingFreshRecordingAutoZooms(latest, deps);
+			const current = liveDocument(latest);
+			if (next === latest || next === current) return false;
+			if (current.project.id !== latest.project.id) return false;
+			const saved = await useProjectStore.getState().saveDocument(next, { history: true });
+			const stored = useProjectStore.getState().document;
+			if (saved && stored && (stored.zoomRanges?.length ?? 0) > 0) {
+				appliedFreshRecordingAutoZoomProjectId = stored.project.id;
+				clearFreshRecordingAutoZoomPending();
+			}
+			return saved;
+		} catch {
+			return false;
+		}
+	};
+	const done = freshRecordingAutoZoomSaveChain.then(run, run);
+	freshRecordingAutoZoomSaveChain = done.then(
+		() => undefined,
+		() => undefined,
+	);
+	return done;
 }
 
 /**

@@ -429,7 +429,8 @@ export function NewEditorShell() {
 			// duration is unknown so the timeline never gets stuck on an empty
 			// placeholder. All store reads go through getState() to avoid
 			// stale-closure bugs.
-			const known = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : 60;
+			const finite = Number.isFinite(durationSec) && durationSec > 0;
+			const known = finite ? durationSec : 60;
 			setSourceDuration(known);
 			metadataChainRef.current = metadataChainRef.current
 				.catch(() => undefined)
@@ -443,15 +444,20 @@ export function NewEditorShell() {
 						// asset.durationSec, which import never populates — without this
 						// patch the first auto-created clip silently comes out empty
 						// (normalizeIntervals clamps against a 0 duration and drops it).
+						// A non-finite probe may seed a 60s clip, but that fallback
+						// must not be written to asset.durationSec: applyProbedDuration
+						// only overwrites a null duration, and auto-zoom waits for a
+						// real probe before suggesting.
 						const primaryAssetId = doc.project.primaryAssetId ?? doc.assets[0]?.id;
-						const docWithDuration = primaryAssetId
-							? {
-									...doc,
-									assets: doc.assets.map((a) =>
-										a.id === primaryAssetId ? { ...a, durationSec: known } : a,
-									),
-								}
-							: doc;
+						const docWithDuration =
+							primaryAssetId && finite
+								? {
+										...doc,
+										assets: doc.assets.map((a) =>
+											a.id === primaryAssetId ? { ...a, durationSec: known } : a,
+										),
+									}
+								: doc;
 						next = replaceTimelineOp(
 							docWithDuration,
 							[{ startSec: 0, endSec: known }],

@@ -111,6 +111,7 @@
 		"camera": "Camera",
 		"cursorHighlight": "Cursor highlight",
 		"autoZoom": "Auto-zoom after recording",
+		"autoZoomNeedsEditableCursor": "Auto-zoom needs the editable cursor. Switch cursor mode to enable.",
 		"on": "On",
 		"off": "Off",
 		"loading": "Loading…",
