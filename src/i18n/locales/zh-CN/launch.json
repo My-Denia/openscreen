@@ -56,6 +56,10 @@
 		"useEditableCursor": "使用可编辑光标",
 		"useSystemCursor": "使用系统光标"
 	},
+	"autoZoom": {
+		"enable": "启用录制后自动缩放",
+		"disable": "关闭录制后自动缩放"
+	},
 	"sourceSelector": {
 		"loading": "正在加载源...",
 		"screens": "屏幕 ({{count}})",

@@ -28,6 +28,7 @@ import {
 	withClipsChanged,
 } from "../document/timeline";
 import type { AxcutAudioTrack, AxcutClipCropRegion, AxcutDocument } from "../schema";
+import { appendAutoZoomSuggestions } from "../timeline/apply-auto-zooms";
 import { hasAnyClipWithCamera } from "../timeline/camera";
 import { probeAudioDuration, probeVideoDimensions, probeVideoDuration } from "../timeline/duration";
 import {
@@ -335,26 +336,7 @@ export function useTimeline() {
 	const addZoomsBulk = useCallback(
 		async (suggestions: AutoZoomSuggestion[]) => {
 			if (!document || suggestions.length === 0) return 0;
-			const anchored = suggestions.flatMap((s) =>
-				anchorRegionsWithDerivedMs(
-					[
-						{
-							id: createId("zoom"),
-							startMs: Math.round(s.span.start),
-							endMs: Math.round(s.span.end),
-							depth: 3 as const,
-							focus: { cx: s.focus.cx, cy: s.focus.cy },
-							focusMode: "auto" as const,
-						},
-					],
-					document.timeline.clips,
-					() => createId("zoom"),
-				),
-			);
-			const next: AxcutDocument = {
-				...document,
-				zoomRanges: [...document.zoomRanges, ...anchored] as AxcutDocument["zoomRanges"],
-			};
+			const next = appendAutoZoomSuggestions(document, suggestions);
 			if (!(await saveDocument(next, { history: true }))) return 0;
 			return suggestions.length;
 		},

@@ -61,7 +61,7 @@ import {
 	type UnsavedChoice,
 } from "./Modals";
 import { Preview } from "./Preview";
-import { importPendingRecording } from "./recordingImport";
+import { importPendingRecording, maybeSaveFreshRecordingAutoZooms } from "./recordingImport";
 import { AddAudioLayerDialog } from "./v4/AddAudioLayerDialog";
 import v4 from "./v4/EditorShellV4.module.css";
 import { type EditorMode, EditorTopBar } from "./v4/EditorTopBar";
@@ -421,6 +421,7 @@ export function NewEditorShell() {
 		}));
 	}, [document]);
 
+	const metadataChainRef = useRef(Promise.resolve());
 	const handleLoadedMetadata = useCallback(
 		(durationSec: number, assetId: string) => {
 			// ponytail: WebM recordings from MediaRecorder report NaN/Infinity
@@ -429,45 +430,51 @@ export function NewEditorShell() {
 			// placeholder. All store reads go through getState() to avoid
 			// stale-closure bugs.
 			const known = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : 60;
-			const state = useProjectStore.getState();
 			setSourceDuration(known);
-			const doc = state.document;
-			if (!doc || doc.assets.length === 0) return;
-			if (doc.timeline.clips.length === 0) {
-				// ponytail: replaceTimeline derives clip length from
-				// asset.durationSec, which import never populates — without this
-				// patch the first auto-created clip silently comes out empty
-				// (normalizeIntervals clamps against a 0 duration and drops it).
-				const primaryAssetId = doc.project.primaryAssetId ?? doc.assets[0]?.id;
-				const docWithDuration = primaryAssetId
-					? {
-							...doc,
-							assets: doc.assets.map((a) =>
-								a.id === primaryAssetId ? { ...a, durationSec: known } : a,
-							),
-						}
-					: doc;
-				const next = replaceTimelineOp(
-					docWithDuration,
-					[{ startSec: 0, endSec: known }],
-					"Auto-created full-duration clip",
-				);
-				// `history: false` for both writes in this callback: they are the probed
-				// duration being folded into the document on load, not something the user
-				// did — an undo landing on one of them would empty their timeline.
-				void state.saveDocument(next, { history: false });
-				return;
-			}
-			// Hand the probed duration to the pure document layer: it patches only the
-			// clips of THIS asset that are still waiting for a real length (the
-			// pre-probe placeholder, or the extent-less clip a legacy v2 import mints),
-			// shifts what follows, and brings the modifiers along — anchoring the ones
-			// migration had to leave unanchored. Returns the document untouched when
-			// nothing is waiting, so there is nothing to guard here.
-			const next = applyProbedDuration(doc, assetId, known);
-			if (next !== doc) {
-				void state.saveDocument(next, { history: false });
-			}
+			metadataChainRef.current = metadataChainRef.current
+				.catch(() => undefined)
+				.then(async () => {
+					const state = useProjectStore.getState();
+					const doc = state.document;
+					if (!doc || doc.assets.length === 0) return;
+					let next = doc;
+					if (doc.timeline.clips.length === 0) {
+						// ponytail: replaceTimeline derives clip length from
+						// asset.durationSec, which import never populates — without this
+						// patch the first auto-created clip silently comes out empty
+						// (normalizeIntervals clamps against a 0 duration and drops it).
+						const primaryAssetId = doc.project.primaryAssetId ?? doc.assets[0]?.id;
+						const docWithDuration = primaryAssetId
+							? {
+									...doc,
+									assets: doc.assets.map((a) =>
+										a.id === primaryAssetId ? { ...a, durationSec: known } : a,
+									),
+								}
+							: doc;
+						next = replaceTimelineOp(
+							docWithDuration,
+							[{ startSec: 0, endSec: known }],
+							"Auto-created full-duration clip",
+						);
+					} else {
+						// Hand the probed duration to the pure document layer: it patches only the
+						// clips of THIS asset that are still waiting for a real length (the
+						// pre-probe placeholder, or the extent-less clip a legacy v2 import mints),
+						// shifts what follows, and brings the modifiers along — anchoring the ones
+						// migration had to leave unanchored. Returns the document untouched when
+						// nothing is waiting, so there is nothing to guard here.
+						next = applyProbedDuration(doc, assetId, known);
+					}
+					// `history: false` for the duration write: it is the probed length being
+					// folded in on load, not something the user did — an undo landing on it
+					// would empty their timeline. Auto-zoom is a later, undoable suggestion.
+					if (next !== doc) {
+						await state.saveDocument(next, { history: false });
+						next = useProjectStore.getState().document ?? next;
+					}
+					await maybeSaveFreshRecordingAutoZooms(useProjectStore.getState().document ?? next);
+				});
 		},
 		[setSourceDuration],
 	);

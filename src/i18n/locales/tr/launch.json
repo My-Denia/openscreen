@@ -56,6 +56,10 @@
 		"useEditableCursor": "Düzenlenebilir imleci kullan",
 		"useSystemCursor": "Sistem imlecini kullan"
 	},
+	"autoZoom": {
+		"enable": "Kayıttan sonra otomatik yakınlaştırmayı aç",
+		"disable": "Kayıttan sonra otomatik yakınlaştırmayı kapat"
+	},
 	"sourceSelector": {
 		"loading": "Kaynaklar yükleniyor...",
 		"screens": "Ekranlar ({{count}})",

@@ -110,6 +110,7 @@
 		"microphone": "마이크",
 		"camera": "카메라",
 		"cursorHighlight": "커서 강조",
+		"autoZoom": "녹화 후 자동 확대",
 		"on": "켜짐",
 		"off": "꺼짐",
 		"loading": "로딩 중…",

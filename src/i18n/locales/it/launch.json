@@ -56,6 +56,10 @@
 		"useEditableCursor": "Usa cursore modificabile",
 		"useSystemCursor": "Usa cursore di sistema"
 	},
+	"autoZoom": {
+		"enable": "Attiva lo zoom automatico dopo la registrazione",
+		"disable": "Disattiva lo zoom automatico dopo la registrazione"
+	},
 	"sourceSelector": {
 		"loading": "Caricamento sorgenti...",
 		"screens": "Schermi ({{count}})",
