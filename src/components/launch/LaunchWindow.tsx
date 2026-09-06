@@ -1029,7 +1029,9 @@ export function LaunchWindow() {
 						/>
 					</div>
 					<HudAutoZoomButton
-						enabled={autoZoomEnabled && !(supportsCursorModeToggle && cursorCaptureMode === "system")}
+						enabled={
+							autoZoomEnabled && !(supportsCursorModeToggle && cursorCaptureMode === "system")
+						}
 						disabled={
 							controlsLocked || (supportsCursorModeToggle && cursorCaptureMode === "system")
 						}
