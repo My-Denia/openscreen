@@ -14,7 +14,159 @@
 // derived `currentVideoPath`); the only renderer that still needs the session
 // after this point is the CLI runner, which lives in its own process.
 
+import type { CursorTelemetryPoint } from "@/components/video-editor/types";
+import { createId } from "@/lib/ai-edition/document/ids";
+import type { AxcutDocument } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
+import {
+	appendAutoZoomSuggestions,
+	collectAutoZoomSuggestionsForDocument,
+} from "@/lib/ai-edition/timeline/apply-auto-zooms";
+import { nativeBridgeClient } from "@/native/client";
+
+// Fresh recordings used to get cursor-dwell zooms on load (legacy editor
+// `autoZoomEnabled`, default on). The ai-edition import only seeded a clip, so
+// the wand still worked but a new take landed un-zoomed. This flag is the
+// one-shot hand-off: set as soon as the asset is on the document, then taken
+// only after a real apply attempt (clips exist and telemetry was readable, or
+// the toggle is off). Keeping it across an empty-clip / empty-sidecar pass is
+// what lets metadata win the race against the helper flush. The path stops a
+// leftover flag from decorating a later, unrelated project in the same window.
+let pendingFreshRecordingAutoZoom = false;
+let pendingFreshRecordingAutoZoomPath: string | null = null;
+let pendingFreshRecordingAutoZoomTimers: ReturnType<typeof setTimeout>[] = [];
+
+const FRESH_RECORDING_AUTO_ZOOM_RETRY_MS = [500, 1500, 3000];
+
+function clearFreshRecordingAutoZoomTimers(): void {
+	for (const timer of pendingFreshRecordingAutoZoomTimers) {
+		clearTimeout(timer);
+	}
+	pendingFreshRecordingAutoZoomTimers = [];
+}
+
+function scheduleFreshRecordingAutoZoomRetries(): void {
+	clearFreshRecordingAutoZoomTimers();
+	for (const delayMs of FRESH_RECORDING_AUTO_ZOOM_RETRY_MS) {
+		pendingFreshRecordingAutoZoomTimers.push(
+			setTimeout(() => {
+				if (!pendingFreshRecordingAutoZoom) return;
+				const document = useProjectStore.getState().document;
+				if (document) {
+					void maybeSaveFreshRecordingAutoZooms(document);
+				}
+			}, delayMs),
+		);
+	}
+}
+
+export function markFreshRecordingAutoZoomPending(assetPath?: string): void {
+	pendingFreshRecordingAutoZoom = true;
+	pendingFreshRecordingAutoZoomPath = assetPath ?? null;
+	scheduleFreshRecordingAutoZoomRetries();
+}
+
+function clearFreshRecordingAutoZoomPending(): void {
+	pendingFreshRecordingAutoZoom = false;
+	pendingFreshRecordingAutoZoomPath = null;
+	clearFreshRecordingAutoZoomTimers();
+}
+
+export function consumeFreshRecordingAutoZoomPending(): boolean {
+	const was = pendingFreshRecordingAutoZoom;
+	clearFreshRecordingAutoZoomPending();
+	return was;
+}
+
+export type ApplyFreshRecordingAutoZoomsDeps = {
+	enabled?: boolean;
+	getTelemetry?: (videoPath: string) => Promise<CursorTelemetryPoint[] | null | undefined>;
+	createId?: (prefix: string) => string;
+};
+
+async function readAutoZoomPref(): Promise<boolean> {
+	try {
+		const prefs = await window.electronAPI?.getRecordingPrefs?.();
+		return prefs?.autoZoomEnabled !== false;
+	} catch {
+		return true;
+	}
+}
+
+export async function applyFreshRecordingAutoZooms(
+	document: AxcutDocument,
+	deps: ApplyFreshRecordingAutoZoomsDeps = {},
+): Promise<AxcutDocument> {
+	const enabled = deps.enabled ?? (await readAutoZoomPref());
+	if (!enabled) return document;
+	if (document.zoomRanges.length > 0 || document.timeline.clips.length === 0) {
+		return document;
+	}
+	const getTelemetry =
+		deps.getTelemetry ?? ((videoPath: string) => nativeBridgeClient.cursor.getTelemetry(videoPath));
+	const suggestions = await collectAutoZoomSuggestionsForDocument(document, getTelemetry);
+	if (suggestions.length === 0) return document;
+	return appendAutoZoomSuggestions(document, suggestions, deps.createId ?? createId);
+}
+
+export async function applyPendingFreshRecordingAutoZooms(
+	document: AxcutDocument,
+	deps: ApplyFreshRecordingAutoZoomsDeps = {},
+): Promise<AxcutDocument> {
+	if (!pendingFreshRecordingAutoZoom) return document;
+	const enabled = deps.enabled ?? (await readAutoZoomPref());
+	if (!enabled) {
+		clearFreshRecordingAutoZoomPending();
+		return document;
+	}
+	if ((document.zoomRanges?.length ?? 0) > 0) {
+		clearFreshRecordingAutoZoomPending();
+		return document;
+	}
+	if ((document.timeline?.clips?.length ?? 0) === 0) {
+		return document;
+	}
+	if (
+		pendingFreshRecordingAutoZoomPath &&
+		!document.assets.some((asset) => asset.originalPath === pendingFreshRecordingAutoZoomPath)
+	) {
+		return document;
+	}
+	const inner =
+		deps.getTelemetry ?? ((videoPath: string) => nativeBridgeClient.cursor.getTelemetry(videoPath));
+	const getTelemetry = async (videoPath: string) => {
+		try {
+			return await inner(videoPath);
+		} catch {
+			// Sidecar may not be readable yet. Keep pending for the delayed retries.
+			return [];
+		}
+	};
+	const suggestions = await collectAutoZoomSuggestionsForDocument(document, getTelemetry);
+	if (suggestions.length === 0) {
+		// Do not consume: a mid-flush sidecar can have samples but no dwell yet
+		// (the qualifying sit is often the last second of the take).
+		return document;
+	}
+	// Leave pending set until a later pass sees zoomRanges on the stored
+	// document. A overlapping `loadedmetadata` can still replace the timeline
+	// from a stale empty-clip snapshot and wipe this write.
+	return appendAutoZoomSuggestions(document, suggestions, deps.createId ?? createId);
+}
+
+export async function maybeSaveFreshRecordingAutoZooms(
+	document: AxcutDocument,
+	deps: ApplyFreshRecordingAutoZoomsDeps = {},
+): Promise<boolean> {
+	try {
+		const latest = useProjectStore.getState().document ?? document;
+		const next = await applyPendingFreshRecordingAutoZooms(latest, deps);
+		if (next === latest) return false;
+		return useProjectStore.getState().saveDocument(next, { history: true });
+	} catch {
+		return false;
+	}
+}
 
 /**
  * Imports the recording the HUD handed over into a new project, and consumes the
@@ -35,6 +187,10 @@ export async function importPendingRecording(): Promise<boolean> {
 	const label = screenPath.split(/[\\/]/).pop() || "Recording";
 	await useProjectStore.getState().createProject(`Recording ${new Date().toLocaleString()}`);
 	await useProjectStore.getState().addAsset(screenPath, label);
+	// Mark before the video element can fire `loadedmetadata`. The asset path is
+	// already on the document; waiting until the 60s seed finished let the first
+	// metadata pass consume nothing and the second never arrive.
+	markFreshRecordingAutoZoomPending(screenPath);
 	// Consumed: the recording now lives in a project. Cleared here rather than
 	// after the timeline seed below so a failure down there can't hand the same
 	// recording to the next editor window.
@@ -57,6 +213,10 @@ export async function importPendingRecording(): Promise<boolean> {
 			.replaceTimeline([{ startSec: 0, endSec: 60 }], "Auto-imported recording", {
 				history: false,
 			});
+	}
+	const latest = useProjectStore.getState().document;
+	if (latest) {
+		await maybeSaveFreshRecordingAutoZooms(latest);
 	}
 	return true;
 }

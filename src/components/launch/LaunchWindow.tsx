@@ -9,6 +9,7 @@ import { usePortalOwnsSource } from "../../hooks/usePortalOwnsSource";
 import { useScreenRecorder } from "../../hooks/useScreenRecorder";
 import { requestCameraAccess } from "../../lib/requestCameraAccess";
 import {
+	HudAutoZoomButton,
 	HudCameraButton,
 	HudCursorButton,
 	HudDivider,
@@ -105,6 +106,8 @@ export function LaunchWindow() {
 		setWebcamDeviceName,
 		cursorCaptureMode,
 		setCursorCaptureMode,
+		autoZoomEnabled,
+		setAutoZoomEnabled,
 		softwareEncoderFallbackNoticeVisible,
 		dismissSoftwareEncoderFallbackNotice,
 	} = useScreenRecorder();
@@ -720,6 +723,7 @@ export function LaunchWindow() {
 			camDeviceId?: string;
 			micDeviceId?: string;
 			micDeviceName?: string;
+			autoZoomEnabled?: boolean;
 		}) => {
 			void window.electronAPI?.setRecordingPrefs?.(patch).catch((error) => {
 				console.warn("Failed to persist the device preference:", error);
@@ -727,6 +731,13 @@ export function LaunchWindow() {
 		},
 		[],
 	);
+
+	const toggleAutoZoom = useCallback(() => {
+		if (controlsLocked) return;
+		const next = !autoZoomEnabled;
+		setAutoZoomEnabled(next);
+		persistRecordingPrefs({ autoZoomEnabled: next });
+	}, [autoZoomEnabled, controlsLocked, persistRecordingPrefs, setAutoZoomEnabled]);
 
 	const toggleWebcam = useCallback(() => {
 		if (controlsLocked) return;
@@ -1009,6 +1020,12 @@ export function LaunchWindow() {
 							onClick={toggleDeviceSettings}
 						/>
 					</div>
+					<HudAutoZoomButton
+						enabled={autoZoomEnabled}
+						disabled={controlsLocked}
+						label={autoZoomEnabled ? t("autoZoom.disable") : t("autoZoom.enable")}
+						onClick={toggleAutoZoom}
+					/>
 					{supportsCursorModeToggle && (
 						<HudCursorButton
 							editableOverlay={cursorCaptureMode === "editable-overlay"}

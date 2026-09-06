@@ -110,6 +110,7 @@
 		"microphone": "Micrófono",
 		"camera": "Cámara",
 		"cursorHighlight": "Resaltar cursor",
+		"autoZoom": "Zoom automático tras grabar",
 		"on": "Activado",
 		"off": "Desactivado",
 		"loading": "Cargando…",

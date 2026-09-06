@@ -123,9 +123,8 @@ const DECLARED: WritePath[] = [
 	w("src/components/ai-edition/NewEditorShell.tsx", "NewEditorShell", "save", "automatic"),
 	// "Save" on the unsaved-changes prompt.
 	w("src/components/ai-edition/NewEditorShell.tsx", "handleConfirmUnsaved", "save", "gesture"),
-	// The probed duration folded into the document when the <video> loads. Twice:
-	// the first clip seed, and the backfill for clips still on a placeholder length.
-	w("src/components/ai-edition/NewEditorShell.tsx", "handleLoadedMetadata", "save", "automatic"),
+	// The probed duration folded into the document when the <video> loads. One
+	// call now covers both the first-clip seed and the placeholder-length backfill.
 	w("src/components/ai-edition/NewEditorShell.tsx", "handleLoadedMetadata", "save", "automatic"),
 	// Renaming the project from the title field.
 	w("src/components/ai-edition/NewEditorShell.tsx", "handleRenameProject", "save", "gesture"),
@@ -156,6 +155,15 @@ const DECLARED: WritePath[] = [
 	w("src/components/ai-edition/NewEditorShell.tsx", "pasteRegion", "save", "gesture"),
 	// The window is closing and the user answered "save".
 	w("src/components/ai-edition/NewEditorShell.tsx", "unsubSaveBeforeClose", "save", "gesture"),
+
+	// Cursor-dwell zooms suggested after a fresh recording. Unattended, but
+	// recorded so the first Ctrl+Z removes the suggestion rather than the clip.
+	w(
+		"src/components/ai-edition/recordingImport.ts",
+		"maybeSaveFreshRecordingAutoZooms",
+		"save",
+		"gesture",
+	),
 
 	// The agent's document. The optimistic write is not the edit — the save is, and
 	// it names the pre-agent document as what Ctrl+Z returns to.

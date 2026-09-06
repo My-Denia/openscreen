@@ -59,6 +59,8 @@ const recorderState = vi.hoisted(() => ({
 		setSystemAudioEnabled: vi.fn(),
 		cursorCaptureMode: "editable-overlay",
 		setCursorCaptureMode: vi.fn(),
+		autoZoomEnabled: true,
+		setAutoZoomEnabled: vi.fn(),
 		softwareEncoderFallbackNoticeVisible: false,
 		dismissSoftwareEncoderFallbackNotice: vi.fn(),
 	},
@@ -171,6 +173,8 @@ vi.mock("@/contexts/I18nContext", () => ({
 			"webcam.cameraDevice": "Camera device",
 			"cursor.useEditableCursor": "Use editable cursor",
 			"cursor.useSystemCursor": "Use system cursor",
+			"autoZoom.enable": "Enable auto-zoom after recording",
+			"autoZoom.disable": "Disable auto-zoom after recording",
 			"tooltips.openStudio": "Open Studio",
 			"tooltips.hideHUD": "Hide HUD",
 			"tooltips.closeApp": "Close App",
@@ -237,6 +241,7 @@ function stubElectronAPI(getSelectedSource: Window["electronAPI"]["getSelectedSo
 		endHudOverlayDrag: vi.fn(),
 		hudOverlayHide: vi.fn(),
 		hudOverlayClose: vi.fn(),
+		setRecordingPrefs: vi.fn(async (prefs) => prefs),
 		openNotes: vi.fn(),
 		switchToEditor: vi.fn(async () => undefined),
 		onSelectedSourceChanged: vi.fn((callback) => {
@@ -336,6 +341,18 @@ describe("LaunchWindow record button", () => {
 			expect(window.electronAPI.openSourceSelector).toHaveBeenCalledTimes(1);
 		});
 		expect(recorderState.value.toggleRecording).not.toHaveBeenCalled();
+	});
+
+	it("toggles post-record auto-zoom without touching cursor capture", () => {
+		renderLaunchWindow();
+
+		const button = screen.getByTestId("launch-auto-zoom-button");
+		expect(button).toHaveAttribute("title", "Disable auto-zoom after recording");
+		fireEvent.click(button);
+
+		expect(recorderState.value.setAutoZoomEnabled).toHaveBeenCalledWith(false);
+		expect(window.electronAPI.setRecordingPrefs).toHaveBeenCalledWith({ autoZoomEnabled: false });
+		expect(recorderState.value.setCursorCaptureMode).not.toHaveBeenCalled();
 	});
 
 	it("records immediately after source selection when the record button opened the picker", async () => {

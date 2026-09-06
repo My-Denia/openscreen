@@ -5,7 +5,12 @@ import { type AxcutDocument, createEmptyDocument } from "@/lib/ai-edition/schema
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { undo } from "@/lib/ai-edition/store/undo";
 import { clearHistory, past } from "@/lib/ai-edition/store/undoStack";
-import { importPendingRecording } from "./recordingImport";
+import {
+	applyPendingFreshRecordingAutoZooms,
+	consumeFreshRecordingAutoZoomPending,
+	importPendingRecording,
+	markFreshRecordingAutoZoomPending,
+} from "./recordingImport";
 
 // The first describe stubs the store actions, so the bridge is never reached
 // there. The second one runs the REAL store against these, which is the only way
@@ -14,8 +19,14 @@ const bridge = vi.hoisted(() => ({
 	create: vi.fn(),
 	addAsset: vi.fn(),
 	save: vi.fn(),
+	getTelemetry: vi.fn(async () => []),
 }));
-vi.mock("@/native/client", () => ({ nativeBridgeClient: { aiEdition: bridge } }));
+vi.mock("@/native/client", () => ({
+	nativeBridgeClient: {
+		aiEdition: bridge,
+		cursor: { getTelemetry: bridge.getTelemetry },
+	},
+}));
 
 const createProject = vi.fn(async () => undefined);
 const addAsset = vi.fn(async () => null);
@@ -49,6 +60,7 @@ function stubElectronApi(screenVideoPath: string | null) {
 describe("importPendingRecording", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		consumeFreshRecordingAutoZoomPending();
 		useProjectStore.setState({
 			document: null,
 			// biome-ignore lint/suspicious/noExplicitAny: partial action stubs, the rest of the store is untouched
@@ -144,6 +156,7 @@ describe("what the recording import leaves on the undo stack", () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks();
+		consumeFreshRecordingAutoZoomPending();
 		useProjectStore.getState().clear();
 		useProjectStore.setState(realActions);
 		clearHistory();
@@ -185,5 +198,181 @@ describe("what the recording import leaves on the undo stack", () => {
 		undo();
 
 		expect(useProjectStore.getState().document?.timeline.clips).toHaveLength(1);
+	});
+});
+
+function dwell(
+	centerMs: number,
+	cx: number,
+	cy: number,
+	count = 6,
+	spanMs = 900,
+): Array<{ timeMs: number; cx: number; cy: number }> {
+	const step = spanMs / (count - 1);
+	return Array.from({ length: count }, (_, i) => ({
+		timeMs: centerMs - spanMs / 2 + i * step,
+		cx,
+		cy,
+	}));
+}
+
+function documentWithClip(durationSec = 10): AxcutDocument {
+	const doc = createEmptyDocument({ projectId: "p_autozoom", title: "Recording" });
+	return {
+		...doc,
+		assets: [
+			{
+				id: "asset_1",
+				kind: "video",
+				label: "rec.mp4",
+				originalPath: "C:\\recordings\\rec.mp4",
+				cameraTrack: null,
+				durationSec,
+			},
+		],
+		project: { ...doc.project, primaryAssetId: "asset_1" },
+		timeline: {
+			...doc.timeline,
+			clips: [
+				{
+					id: "clip_1",
+					assetId: "asset_1",
+					sourceStartSec: 0,
+					sourceEndSec: durationSec,
+					timelineStartSec: 0,
+					timelineEndSec: durationSec,
+					wordRefs: [],
+					origin: "system",
+					reason: "",
+				},
+			],
+		},
+	};
+}
+
+describe("fresh-recording auto-zoom", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		consumeFreshRecordingAutoZoomPending();
+		useProjectStore.setState({
+			document: null,
+			// biome-ignore lint/suspicious/noExplicitAny: partial action stubs
+			createProject: createProject as any,
+			// biome-ignore lint/suspicious/noExplicitAny: partial action stubs
+			addAsset: addAsset as any,
+			replaceTimeline,
+		});
+	});
+
+	it("marks a successful import as waiting when the document is not ready yet", async () => {
+		stubElectronApi("C:\\recordings\\recording-1.mp4");
+		await importPendingRecording();
+		expect(consumeFreshRecordingAutoZoomPending()).toBe(true);
+	});
+
+	it("does not mark when nothing is waiting", async () => {
+		stubElectronApi(null);
+		await importPendingRecording();
+		expect(consumeFreshRecordingAutoZoomPending()).toBe(false);
+	});
+
+	it("applies cursor-dwell zooms once, after duration is known", async () => {
+		markFreshRecordingAutoZoomPending();
+		const next = await applyPendingFreshRecordingAutoZooms(documentWithClip(), {
+			enabled: true,
+			getTelemetry: async () => dwell(4000, 0.4, 0.6),
+			createId: (prefix) => `${prefix}_test`,
+		});
+		expect(next.zoomRanges).toHaveLength(1);
+		expect(next.zoomRanges[0]).toMatchObject({
+			startMs: 3000,
+			endMs: 5000,
+			focusMode: "auto",
+		});
+		expect(await applyPendingFreshRecordingAutoZooms(next, { enabled: true })).toBe(next);
+	});
+
+	it("skips when the HUD toggle is off", async () => {
+		markFreshRecordingAutoZoomPending();
+		const document = documentWithClip();
+		const next = await applyPendingFreshRecordingAutoZooms(document, {
+			enabled: false,
+			getTelemetry: async () => dwell(4000, 0.5, 0.5),
+		});
+		expect(next).toBe(document);
+		expect(next.zoomRanges).toEqual([]);
+	});
+
+	it("keeps the pending flag when the sidecar is still empty, then applies on retry", async () => {
+		markFreshRecordingAutoZoomPending();
+		const document = documentWithClip();
+		const first = await applyPendingFreshRecordingAutoZooms(document, {
+			enabled: true,
+			getTelemetry: async () => [],
+		});
+		expect(first).toBe(document);
+		const next = await applyPendingFreshRecordingAutoZooms(document, {
+			enabled: true,
+			getTelemetry: async () => dwell(4000, 0.4, 0.6),
+			createId: (prefix) => `${prefix}_retry`,
+		});
+		expect(next.zoomRanges).toHaveLength(1);
+		expect(await applyPendingFreshRecordingAutoZooms(next, { enabled: true })).toBe(next);
+	});
+
+	it("keeps the pending flag when clips are not on the document yet", async () => {
+		markFreshRecordingAutoZoomPending();
+		const document = createEmptyDocument({ projectId: "p_empty", title: "Recording" });
+		const next = await applyPendingFreshRecordingAutoZooms(document, {
+			enabled: true,
+			getTelemetry: async () => dwell(4000, 0.5, 0.5),
+		});
+		expect(next).toBe(document);
+		expect(consumeFreshRecordingAutoZoomPending()).toBe(true);
+	});
+
+	it("keeps pending when telemetry is present but no dwell has landed yet", async () => {
+		markFreshRecordingAutoZoomPending();
+		const document = documentWithClip();
+		const moving = Array.from({ length: 8 }, (_, i) => ({
+			timeMs: 1000 + i * 80,
+			cx: 0.2 + i * 0.08,
+			cy: 0.3,
+		}));
+		const first = await applyPendingFreshRecordingAutoZooms(document, {
+			enabled: true,
+			getTelemetry: async () => moving,
+		});
+		expect(first).toBe(document);
+		const next = await applyPendingFreshRecordingAutoZooms(document, {
+			enabled: true,
+			getTelemetry: async () => dwell(4000, 0.4, 0.6),
+			createId: (prefix) => `${prefix}_late`,
+		});
+		expect(next.zoomRanges).toHaveLength(1);
+	});
+
+	it("keeps pending when telemetry read throws", async () => {
+		markFreshRecordingAutoZoomPending();
+		const document = documentWithClip();
+		const next = await applyPendingFreshRecordingAutoZooms(document, {
+			enabled: true,
+			getTelemetry: async () => {
+				throw new Error("sidecar missing");
+			},
+		});
+		expect(next).toBe(document);
+		expect(consumeFreshRecordingAutoZoomPending()).toBe(true);
+	});
+
+	it("does not decorate a different project's asset after a leftover pending flag", async () => {
+		markFreshRecordingAutoZoomPending("C:\\recordings\\fresh.mp4");
+		const other = documentWithClip();
+		const next = await applyPendingFreshRecordingAutoZooms(other, {
+			enabled: true,
+			getTelemetry: async () => dwell(4000, 0.4, 0.6),
+		});
+		expect(next).toBe(other);
+		expect(consumeFreshRecordingAutoZoomPending()).toBe(true);
 	});
 });
