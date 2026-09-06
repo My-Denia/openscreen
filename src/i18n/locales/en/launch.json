@@ -58,7 +58,8 @@
 	},
 	"autoZoom": {
 		"enable": "Enable auto-zoom after recording",
-		"disable": "Disable auto-zoom after recording"
+		"disable": "Disable auto-zoom after recording",
+		"needsEditableCursor": "Auto-zoom needs the editable cursor. Switch cursor mode to enable."
 	},
 	"sourceSelector": {
 		"loading": "Loading sources...",

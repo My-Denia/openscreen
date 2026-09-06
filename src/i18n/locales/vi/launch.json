@@ -80,7 +80,8 @@
 	},
 	"autoZoom": {
 		"enable": "Bật tự động phóng to sau khi ghi",
-		"disable": "Tắt tự động phóng to sau khi ghi"
+		"disable": "Tắt tự động phóng to sau khi ghi",
+		"needsEditableCursor": "Tự động phóng to cần con trỏ chỉnh sửa được. Hãy đổi chế độ con trỏ."
 	},
 	"softwareEncoderFallback": {
 		"title": "Đã chuyển sang mã hóa bằng phần mềm",

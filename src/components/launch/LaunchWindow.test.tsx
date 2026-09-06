@@ -175,6 +175,8 @@ vi.mock("@/contexts/I18nContext", () => ({
 			"cursor.useSystemCursor": "Use system cursor",
 			"autoZoom.enable": "Enable auto-zoom after recording",
 			"autoZoom.disable": "Disable auto-zoom after recording",
+			"autoZoom.needsEditableCursor":
+				"Auto-zoom needs the editable cursor. Switch cursor mode to enable.",
 			"tooltips.openStudio": "Open Studio",
 			"tooltips.hideHUD": "Hide HUD",
 			"tooltips.closeApp": "Close App",
@@ -292,6 +294,10 @@ function emitSourceSelectorClosed() {
 function resetLaunchMocks() {
 	vi.stubGlobal("ResizeObserver", StubResizeObserver);
 	recorderState.value.toggleRecording.mockClear();
+	recorderState.value.cursorCaptureMode = "editable-overlay";
+	recorderState.value.autoZoomEnabled = true;
+	recorderState.value.setAutoZoomEnabled.mockClear();
+	recorderState.value.setCursorCaptureMode.mockClear();
 	recorderState.value.softwareEncoderFallbackNoticeVisible = false;
 	recorderState.value.dismissSoftwareEncoderFallbackNotice.mockClear();
 	recorderState.value.recording = false;
@@ -353,6 +359,23 @@ describe("LaunchWindow record button", () => {
 		expect(recorderState.value.setAutoZoomEnabled).toHaveBeenCalledWith(false);
 		expect(window.electronAPI.setRecordingPrefs).toHaveBeenCalledWith({ autoZoomEnabled: false });
 		expect(recorderState.value.setCursorCaptureMode).not.toHaveBeenCalled();
+	});
+
+	it("disables auto-zoom while the HUD is in system-cursor mode", async () => {
+		recorderState.value.cursorCaptureMode = "system";
+		renderLaunchWindow();
+
+		const button = await waitFor(() => {
+			const el = screen.getByTestId("launch-auto-zoom-button");
+			expect(el).toBeDisabled();
+			return el;
+		});
+		expect(button).toHaveAttribute(
+			"title",
+			"Auto-zoom needs the editable cursor. Switch cursor mode to enable.",
+		);
+		fireEvent.click(button);
+		expect(recorderState.value.setAutoZoomEnabled).not.toHaveBeenCalled();
 	});
 
 	it("records immediately after source selection when the record button opened the picker", async () => {

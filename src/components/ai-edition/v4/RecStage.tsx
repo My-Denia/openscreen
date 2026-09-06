@@ -384,11 +384,16 @@ export function RecStage({
 						</div>
 						<button
 							type="button"
-							className={`${styles.recToggleBtn}${prefs.autoZoomEnabled !== false ? ` ${styles.on}` : ""}`}
-							aria-pressed={prefs.autoZoomEnabled !== false}
-							onClick={() => updatePrefs({ autoZoomEnabled: prefs.autoZoomEnabled === false })}
+							className={`${styles.recToggleBtn}${prefs.autoZoomEnabled !== false && cursorHighlight ? ` ${styles.on}` : ""}`}
+							aria-pressed={prefs.autoZoomEnabled !== false && cursorHighlight}
+							disabled={!cursorHighlight}
+							title={cursorHighlight ? undefined : t("rec.autoZoomNeedsEditableCursor")}
+							onClick={() => {
+								if (!cursorHighlight) return;
+								updatePrefs({ autoZoomEnabled: prefs.autoZoomEnabled === false });
+							}}
 						>
-							{prefs.autoZoomEnabled !== false ? t("rec.on") : t("rec.off")}
+							{prefs.autoZoomEnabled !== false && cursorHighlight ? t("rec.on") : t("rec.off")}
 						</button>
 					</div>
 				</div>
