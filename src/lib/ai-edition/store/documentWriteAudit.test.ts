@@ -158,9 +158,10 @@ const DECLARED: WritePath[] = [
 
 	// Cursor-dwell zooms suggested after a fresh recording. Unattended, but
 	// recorded so the first Ctrl+Z removes the suggestion rather than the clip.
+	// The write lives on the serialized inner function, not the queue wrapper.
 	w(
 		"src/components/ai-edition/recordingImport.ts",
-		"maybeSaveFreshRecordingAutoZooms",
+		"writeFreshRecordingAutoZooms",
 		"save",
 		"gesture",
 	),

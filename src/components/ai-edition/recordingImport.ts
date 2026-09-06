@@ -118,7 +118,9 @@ export async function applyFreshRecordingAutoZooms(
 
 function pendingFreshRecordingAsset(document: AxcutDocument) {
 	if (pendingFreshRecordingAutoZoomPath) {
-		return document.assets.find((asset) => asset.originalPath === pendingFreshRecordingAutoZoomPath);
+		return document.assets.find(
+			(asset) => asset.originalPath === pendingFreshRecordingAutoZoomPath,
+		);
 	}
 	const primaryId = document.project.primaryAssetId;
 	return document.assets.find((asset) => asset.id === primaryId) ?? document.assets[0];
@@ -235,7 +237,7 @@ export async function maybeSaveFreshRecordingAutoZooms(
 	document: AxcutDocument,
 	deps: ApplyFreshRecordingAutoZoomsDeps = {},
 ): Promise<boolean> {
-	const run = async (): Promise<boolean> => {
+	const writeFreshRecordingAutoZooms = async (): Promise<boolean> => {
 		try {
 			const latest = liveDocument(document);
 			const next = await applyPendingFreshRecordingAutoZooms(latest, deps);
@@ -253,7 +255,10 @@ export async function maybeSaveFreshRecordingAutoZooms(
 			return false;
 		}
 	};
-	const done = freshRecordingAutoZoomSaveChain.then(run, run);
+	const done = freshRecordingAutoZoomSaveChain.then(
+		writeFreshRecordingAutoZooms,
+		writeFreshRecordingAutoZooms,
+	);
 	freshRecordingAutoZoomSaveChain = done.then(
 		() => undefined,
 		() => undefined,
