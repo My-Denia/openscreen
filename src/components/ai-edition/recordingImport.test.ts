@@ -43,8 +43,15 @@ const realActions = {
 };
 
 /** Stands in for the main-process recording slot: one value, set and read. */
-function stubElectronApi(screenVideoPath: string | null) {
-	let session = screenVideoPath ? { screenVideoPath, createdAt: 0 } : null;
+function stubElectronApi(
+	screenVideoPath: string | null,
+	cursorCaptureMode: "editable-overlay" | "system" = "editable-overlay",
+) {
+	let session: {
+		screenVideoPath: string;
+		createdAt: number;
+		cursorCaptureMode: "editable-overlay" | "system";
+	} | null = screenVideoPath ? { screenVideoPath, createdAt: 0, cursorCaptureMode } : null;
 	const api = {
 		getCurrentRecordingSession: vi.fn(async () =>
 			session ? { success: true, session } : { success: false },
@@ -276,6 +283,21 @@ describe("fresh-recording auto-zoom", () => {
 		stubElectronApi(null);
 		await importPendingRecording();
 		expect(consumeFreshRecordingAutoZoomPending()).toBe(false);
+	});
+
+	// A system-cursor take writes no `.cursor.json`, so there is never a dwell to
+	// find. Marking it pending anyway left the flag set for the life of the window
+	// and burned all three retries on an empty sidecar.
+	it("does not mark a system-cursor take as waiting", async () => {
+		stubElectronApi("C:\\recordings\\recording-1.mp4", "system");
+		await importPendingRecording();
+		expect(consumeFreshRecordingAutoZoomPending()).toBe(false);
+	});
+
+	it("still marks an editable-cursor take from the same import path", async () => {
+		stubElectronApi("C:\\recordings\\recording-1.mp4", "editable-overlay");
+		await importPendingRecording();
+		expect(consumeFreshRecordingAutoZoomPending()).toBe(true);
 	});
 
 	it("applies cursor-dwell zooms once, after duration is known", async () => {
@@ -557,6 +579,48 @@ describe("fresh-recording auto-zoom", () => {
 		const stored = useProjectStore.getState().document;
 		expect(stored?.timeline.clips[0].sourceEndSec).toBe(80);
 		expect(stored?.zoomRanges).toHaveLength(1);
+	});
+
+	// Contention is an exit, not a rebase: recomputing onto the document the other
+	// writer just produced only races that writer again. The attempt is dropped
+	// with pending intact so a retry runs against a settled document.
+	it("exits without writing when a user save lands mid-attempt", async () => {
+		const stale = documentWithClip(90);
+		const trimmed = {
+			...stale,
+			timeline: {
+				...stale.timeline,
+				clips: [{ ...stale.timeline.clips[0], sourceEndSec: 80, timelineEndSec: 80 }],
+			},
+		};
+		bridge.save.mockImplementation(async (document: unknown) => ({ success: true, document }));
+		useProjectStore.setState({ document: stale, saveDocument: realActions.saveDocument });
+		markFreshRecordingAutoZoomPending(stale.assets[0].originalPath);
+		let userSaveLanded = false;
+
+		const result = await maybeSaveFreshRecordingAutoZooms(stale, {
+			enabled: true,
+			// Runs between the two `waitForDocumentSaves` calls, which is exactly the
+			// window a rebase would have gone through. The save fires ONCE: if it
+			// fired again on a second suggestion pass, a rebasing implementation
+			// would bail on the newer write instead of on the contention itself, and
+			// this test would pass against the behaviour it exists to rule out.
+			getTelemetry: async () => {
+				if (!userSaveLanded) {
+					userSaveLanded = true;
+					await useProjectStore.getState().saveDocument(trimmed, { history: true });
+				}
+				return dwell(4000, 0.4, 0.6);
+			},
+			createId: (prefix) => `${prefix}_contended`,
+		});
+
+		expect(result).toBe(false);
+		const stored = useProjectStore.getState().document;
+		expect(stored?.timeline.clips[0].sourceEndSec).toBe(80);
+		expect(stored?.zoomRanges).toEqual([]);
+		// Still pending: the retries are what eventually apply the zooms.
+		expect(consumeFreshRecordingAutoZoomPending()).toBe(true);
 	});
 
 	it("keeps pending when a later user save wipes zooms before they settle", async () => {

@@ -13,6 +13,12 @@ import { clearHistory, currentWriteEpoch, pushHistory } from "./undoStack";
 let documentSavesInFlight = 0;
 const documentSavesIdle: Array<() => void> = [];
 
+/** Outcome of `waitForDocumentSaves`: saves drained, or the wait gave up. */
+export type DocumentSavesWait = "idle" | "timeout";
+
+/** How long a waiter sits before it stops believing a save will ever settle. */
+export const DOCUMENT_SAVES_WAIT_TIMEOUT_MS = 10_000;
+
 function beginDocumentSave() {
 	documentSavesInFlight += 1;
 }
@@ -25,11 +31,32 @@ function endDocumentSave() {
 	}
 }
 
-/** Resolves when no `saveDocument` is still waiting on IPC or installing its result. */
-export function waitForDocumentSaves(): Promise<void> {
-	if (documentSavesInFlight === 0) return Promise.resolve();
+/**
+ * `"idle"` once no `saveDocument` is still waiting on IPC or installing its
+ * result; `"timeout"` if that has not happened within `timeoutMs`.
+ *
+ * The timeout is not decoration. `saveDocument` decrements its counter in a
+ * `finally`, so a rejected save still releases waiters — but a bridge call that
+ * never settles at all runs no `finally`, leaves the counter above zero, and
+ * would park every waiter here forever. Callers must treat `"timeout"` as "I do
+ * not know whether that save landed" and abandon the attempt, keeping whatever
+ * pending state lets a later attempt retry. Reporting it as `"idle"` would be a
+ * lie about disk state, and is how a queued write ends up racing a stuck one.
+ */
+export function waitForDocumentSaves(
+	timeoutMs: number = DOCUMENT_SAVES_WAIT_TIMEOUT_MS,
+): Promise<DocumentSavesWait> {
+	if (documentSavesInFlight === 0) return Promise.resolve("idle");
 	return new Promise((resolve) => {
-		documentSavesIdle.push(resolve);
+		const settle = (outcome: DocumentSavesWait) => {
+			const at = documentSavesIdle.indexOf(waiter);
+			if (at >= 0) documentSavesIdle.splice(at, 1);
+			clearTimeout(timer);
+			resolve(outcome);
+		};
+		const waiter = () => settle("idle");
+		const timer = setTimeout(() => settle("timeout"), timeoutMs);
+		documentSavesIdle.push(waiter);
 	});
 }
 
