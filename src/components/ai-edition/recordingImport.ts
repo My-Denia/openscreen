@@ -266,6 +266,12 @@ export async function maybeSaveFreshRecordingAutoZooms(
 			if (toSave === latest || toSave === current || toSave === storedNow) return false;
 			if (storedNow.project.id !== latest.project.id) return false;
 			const saved = await useProjectStore.getState().saveDocument(toSave, { history: true });
+			// A trim (or any other edit) can start after this save was submitted and
+			// still be in flight when it returns: `waitForDocumentSaves` before the
+			// write only sees saves that have already begun. Wait again, then look at
+			// the store — if that later write landed on the unzoomed snapshot, keep
+			// pending so a retry can rebase onto it.
+			await waitForDocumentSaves();
 			const stored = useProjectStore.getState().document;
 			if (saved && stored && (stored.zoomRanges?.length ?? 0) > 0) {
 				appliedFreshRecordingAutoZoomProjectId = stored.project.id;

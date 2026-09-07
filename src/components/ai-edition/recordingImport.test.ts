@@ -558,4 +558,81 @@ describe("fresh-recording auto-zoom", () => {
 		expect(stored?.timeline.clips[0].sourceEndSec).toBe(80);
 		expect(stored?.zoomRanges).toHaveLength(1);
 	});
+
+	it("keeps pending when a later user save wipes zooms before they settle", async () => {
+		const stale = documentWithClip(90);
+		const trimmed = {
+			...stale,
+			timeline: {
+				...stale.timeline,
+				clips: [
+					{
+						...stale.timeline.clips[0],
+						sourceEndSec: 80,
+						timelineEndSec: 80,
+					},
+				],
+			},
+		};
+		let releaseAutoZoomIpc!: () => void;
+		const autoZoomIpcGate = new Promise<void>((resolve) => {
+			releaseAutoZoomIpc = resolve;
+		});
+		let releaseUserIpc!: () => void;
+		const userIpcGate = new Promise<void>((resolve) => {
+			releaseUserIpc = resolve;
+		});
+		let autoZoomStarted!: () => void;
+		const autoZoomStartedGate = new Promise<void>((resolve) => {
+			autoZoomStarted = resolve;
+		});
+		let userStarted!: () => void;
+		const userStartedGate = new Promise<void>((resolve) => {
+			userStarted = resolve;
+		});
+		let saveCalls = 0;
+		bridge.save.mockImplementation(async (document: unknown) => {
+			saveCalls += 1;
+			if (saveCalls === 1) {
+				autoZoomStarted();
+				await autoZoomIpcGate;
+			} else {
+				userStarted();
+				await userIpcGate;
+			}
+			return { success: true, document };
+		});
+		useProjectStore.setState({
+			document: stale,
+			saveDocument: realActions.saveDocument,
+		});
+		markFreshRecordingAutoZoomPending(stale.assets[0].originalPath);
+		const autoZoom = maybeSaveFreshRecordingAutoZooms(stale, {
+			enabled: true,
+			getTelemetry: async () => dwell(4000, 0.4, 0.6),
+			createId: (prefix) => `${prefix}_after`,
+		});
+		await autoZoomStartedGate;
+		const userSave = useProjectStore.getState().saveDocument(trimmed, { history: true });
+		await userStartedGate;
+		releaseAutoZoomIpc();
+		releaseUserIpc();
+		await expect(userSave).resolves.toBe(true);
+		await expect(autoZoom).resolves.toBe(true);
+		const wiped = useProjectStore.getState().document;
+		expect(wiped?.timeline.clips[0].sourceEndSec).toBe(80);
+		expect(wiped?.zoomRanges).toEqual([]);
+
+		await expect(
+			maybeSaveFreshRecordingAutoZooms(wiped as AxcutDocument, {
+				enabled: true,
+				getTelemetry: async () => dwell(4000, 0.4, 0.6),
+				createId: (prefix) => `${prefix}_rebase`,
+			}),
+		).resolves.toBe(true);
+		const recovered = useProjectStore.getState().document;
+		expect(recovered?.timeline.clips[0].sourceEndSec).toBe(80);
+		expect(recovered?.zoomRanges).toHaveLength(1);
+		expect(consumeFreshRecordingAutoZoomPending()).toBe(false);
+	});
 });
