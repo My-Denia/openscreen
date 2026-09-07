@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nativeBridgeClient } from "@/native";
+import type { NativePlatform } from "@/native/contracts";
 import { TooltipProvider } from "../ui/tooltip";
 import { HUD_BAR_BOTTOM, HUD_POPOVER_GAP, HUD_POPOVER_MAX_HEIGHT } from "./hudGeometry";
 import { LaunchWindow } from "./LaunchWindow";
@@ -12,7 +13,7 @@ type SelectedSourceChangedListener = Parameters<
 	Window["electronAPI"]["onSelectedSourceChanged"]
 >[0];
 
-const platformState = vi.hoisted(() => ({ value: "darwin" }));
+const platformState = vi.hoisted(() => ({ value: "darwin" as NativePlatform }));
 const linuxHelperAvailable = vi.hoisted(() => ({ value: true }));
 const resizeCallbacks = vi.hoisted(() => [] as Array<ResizeObserverCallback>);
 
