@@ -10,6 +10,29 @@ import { type AxcutAsset, type AxcutDocument, createAudioTrack, documentSchema }
 import { probeAudioDuration, probeVideoDimensions } from "../timeline/duration";
 import { clearHistory, currentWriteEpoch, pushHistory } from "./undoStack";
 
+let documentSavesInFlight = 0;
+const documentSavesIdle: Array<() => void> = [];
+
+function beginDocumentSave() {
+	documentSavesInFlight += 1;
+}
+
+function endDocumentSave() {
+	documentSavesInFlight = Math.max(0, documentSavesInFlight - 1);
+	if (documentSavesInFlight > 0) return;
+	while (documentSavesIdle.length > 0) {
+		documentSavesIdle.shift()?.();
+	}
+}
+
+/** Resolves when no `saveDocument` is still waiting on IPC or installing its result. */
+export function waitForDocumentSaves(): Promise<void> {
+	if (documentSavesInFlight === 0) return Promise.resolve();
+	return new Promise((resolve) => {
+		documentSavesIdle.push(resolve);
+	});
+}
+
 // ponytail: thin Zustand wrapper over the native-bridge client. Keeps the
 // current project + revision counter in renderer memory; mutations round-trip
 // through the main process via the bridge so disk state stays authoritative.
@@ -469,61 +492,66 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 	},
 
 	async saveDocument(document, opts) {
-		// Read BEFORE the await, while `get().document` is still the pre-edit one.
-		// This is where undo history actually comes from: the editor writes through
-		// `saveDocument` for every user edit -- add a region, delete one, rename the
-		// project, every timeline op -- and `setDocument` is reserved for the handful
-		// of live/optimistic paths. Recording only in `setDocument` left `past` empty
-		// for everything the user does, so Ctrl+Z was a no-op (#433).
-		const base = historyBaseFor(opts, get().document);
-		// Read alongside it, and for the same reason: both describe the world this write
-		// is building on, and the await is where that world can change underneath it.
-		const epoch = currentWriteEpoch();
+		beginDocumentSave();
 		try {
-			const result = await nativeBridgeClient.aiEdition.save(document);
-			if (!result.success || !result.document) {
-				throw new Error(result.error ?? "Failed to save project");
+			// Read BEFORE the await, while `get().document` is still the pre-edit one.
+			// This is where undo history actually comes from: the editor writes through
+			// `saveDocument` for every user edit -- add a region, delete one, rename the
+			// project, every timeline op -- and `setDocument` is reserved for the handful
+			// of live/optimistic paths. Recording only in `setDocument` left `past` empty
+			// for everything the user does, so Ctrl+Z was a no-op (#433).
+			const base = historyBaseFor(opts, get().document);
+			// Read alongside it, and for the same reason: both describe the world this write
+			// is building on, and the await is where that world can change underneath it.
+			const epoch = currentWriteEpoch();
+			try {
+				const result = await nativeBridgeClient.aiEdition.save(document);
+				if (!result.success || !result.document) {
+					throw new Error(result.error ?? "Failed to save project");
+				}
+				// The undo wins, and this write is dropped -- store and history both. It was
+				// in flight when the user pressed Ctrl+Z (or switched projects), so its document
+				// is the one they just asked to leave: installing it reverted the undo on screen,
+				// and recording it put a FORWARD state on `past` and cleared `future`, so the
+				// redo they had just earned was gone.
+				//
+				// Dropped rather than reverted, because reverting is not this write's to do: the
+				// bytes are already on disk, and it is the undo's own persist -- issued from
+				// `useUndoRedoShortcuts`'s `onAfter` the moment it ran, so ordered after this one
+				// on the same IPC channel -- that puts the restored document back over them.
+				// `dirty` is deliberately left set for exactly that reason.
+				if (currentWriteEpoch() !== epoch) return false;
+				const parsed = parseDocument(result.document);
+				set({
+					document: parsed,
+					revision: get().revision + 1,
+					dirty: false,
+					lastSavedAt: new Date(),
+				});
+				// Recorded HERE, below the write, and not above it. `saveDocument` resolves
+				// false on a handled failure (a read-only project) and callers read that as
+				// "the edit did not happen". Recording first left `past` holding a snapshot
+				// identical to the live document and `future` wiped, so the next Ctrl+Z
+				// visibly did nothing and redo was gone -- #433's own symptom, re-created by
+				// the fix for it. Nothing between the `set` above and this line awaits, so no
+				// undo can observe the half-applied state.
+				recordHistory(base, document, opts);
+				return true;
+			} catch (error) {
+				// Logged as well as toasted: a toast is gone in five seconds, and "my edit
+				// disappeared" gets reported much later than that.
+				console.error("[project] failed to save document:", error);
+				toast.error(toastText("editor", "project.failedToSave"), {
+					description: error instanceof Error ? error.message : String(error),
+				});
+				// `dirty` is deliberately left alone. It is the only input to the
+				// `beforeunload` guard and to `setHasUnsavedChanges`, so clearing it here
+				// would let the window close without a prompt on the one path where there is
+				// definitely something unsaved.
+				return false;
 			}
-			// The undo wins, and this write is dropped -- store and history both. It was
-			// in flight when the user pressed Ctrl+Z (or switched projects), so its document
-			// is the one they just asked to leave: installing it reverted the undo on screen,
-			// and recording it put a FORWARD state on `past` and cleared `future`, so the
-			// redo they had just earned was gone.
-			//
-			// Dropped rather than reverted, because reverting is not this write's to do: the
-			// bytes are already on disk, and it is the undo's own persist -- issued from
-			// `useUndoRedoShortcuts`'s `onAfter` the moment it ran, so ordered after this one
-			// on the same IPC channel -- that puts the restored document back over them.
-			// `dirty` is deliberately left set for exactly that reason.
-			if (currentWriteEpoch() !== epoch) return false;
-			const parsed = parseDocument(result.document);
-			set({
-				document: parsed,
-				revision: get().revision + 1,
-				dirty: false,
-				lastSavedAt: new Date(),
-			});
-			// Recorded HERE, below the write, and not above it. `saveDocument` resolves
-			// false on a handled failure (a read-only project) and callers read that as
-			// "the edit did not happen". Recording first left `past` holding a snapshot
-			// identical to the live document and `future` wiped, so the next Ctrl+Z
-			// visibly did nothing and redo was gone -- #433's own symptom, re-created by
-			// the fix for it. Nothing between the `set` above and this line awaits, so no
-			// undo can observe the half-applied state.
-			recordHistory(base, document, opts);
-			return true;
-		} catch (error) {
-			// Logged as well as toasted: a toast is gone in five seconds, and "my edit
-			// disappeared" gets reported much later than that.
-			console.error("[project] failed to save document:", error);
-			toast.error(toastText("editor", "project.failedToSave"), {
-				description: error instanceof Error ? error.message : String(error),
-			});
-			// `dirty` is deliberately left alone. It is the only input to the
-			// `beforeunload` guard and to `setHasUnsavedChanges`, so clearing it here
-			// would let the window close without a prompt on the one path where there is
-			// definitely something unsaved.
-			return false;
+		} finally {
+			endDocumentSave();
 		}
 	},
 

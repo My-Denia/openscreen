@@ -39,6 +39,7 @@ const realActions = {
 	createProject: useProjectStore.getState().createProject,
 	addAsset: useProjectStore.getState().addAsset,
 	replaceTimeline: useProjectStore.getState().replaceTimeline,
+	saveDocument: useProjectStore.getState().saveDocument,
 };
 
 /** Stands in for the main-process recording slot: one value, set and read. */
@@ -504,5 +505,57 @@ describe("fresh-recording auto-zoom", () => {
 			}),
 		).resolves.toBe(false);
 		expect(useProjectStore.getState().document?.zoomRanges).toEqual([]);
+	});
+
+	it("does not overwrite an in-flight user save with stale zooms", async () => {
+		const stale = documentWithClip(90);
+		const trimmed = {
+			...stale,
+			timeline: {
+				...stale.timeline,
+				clips: [
+					{
+						...stale.timeline.clips[0],
+						sourceEndSec: 80,
+						timelineEndSec: 80,
+					},
+				],
+			},
+		};
+		let releaseUserSave!: () => void;
+		const userSaveGate = new Promise<void>((resolve) => {
+			releaseUserSave = resolve;
+		});
+		let releaseTelemetry!: () => void;
+		const telemetryGate = new Promise<void>((resolve) => {
+			releaseTelemetry = resolve;
+		});
+		let saveCalls = 0;
+		bridge.save.mockImplementation(async (document: unknown) => {
+			saveCalls += 1;
+			if (saveCalls === 1) await userSaveGate;
+			return { success: true, document };
+		});
+		useProjectStore.setState({
+			document: stale,
+			saveDocument: realActions.saveDocument,
+		});
+		markFreshRecordingAutoZoomPending(stale.assets[0].originalPath);
+		const userSave = useProjectStore.getState().saveDocument(trimmed, { history: true });
+		const autoZoom = maybeSaveFreshRecordingAutoZooms(stale, {
+			enabled: true,
+			getTelemetry: async () => {
+				await telemetryGate;
+				return dwell(4000, 0.4, 0.6);
+			},
+			createId: (prefix) => `${prefix}_race`,
+		});
+		releaseTelemetry();
+		releaseUserSave();
+		await expect(userSave).resolves.toBe(true);
+		await expect(autoZoom).resolves.toBe(true);
+		const stored = useProjectStore.getState().document;
+		expect(stored?.timeline.clips[0].sourceEndSec).toBe(80);
+		expect(stored?.zoomRanges).toHaveLength(1);
 	});
 });
