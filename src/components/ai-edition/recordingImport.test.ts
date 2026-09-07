@@ -699,4 +699,45 @@ describe("fresh-recording auto-zoom", () => {
 		expect(recovered?.zoomRanges).toHaveLength(1);
 		expect(consumeFreshRecordingAutoZoomPending()).toBe(false);
 	});
+	// Waiting on somebody else's write is only half of it: this path's OWN write
+	// can hang too. `saveDocument` never rejects, so a main process that stops
+	// answering leaves the await pending forever — inside the shared chain, which
+	// then takes every retry down with it.
+	//
+	// LAST in this file on purpose: the abandoned save is never released, so it
+	// leaves the in-flight counter raised for anything that runs after it.
+	it("gives up on a write that never answers, and leaves the chain usable", async () => {
+		const doc = documentWithClip(90);
+		bridge.save.mockReturnValue(new Promise(() => undefined));
+		useProjectStore.setState({ document: doc, saveDocument: realActions.saveDocument });
+		markFreshRecordingAutoZoomPending(doc.assets[0].originalPath);
+
+		await expect(
+			maybeSaveFreshRecordingAutoZooms(doc, {
+				enabled: true,
+				getTelemetry: async () => dwell(4000, 0.4, 0.6),
+				createId: (prefix) => `${prefix}_stuck`,
+				saveTimeoutMs: 10,
+				waitTimeoutMs: 10,
+			}),
+		).resolves.toBe(false);
+		// Nothing was written, and the attempt is still owed.
+		expect(useProjectStore.getState().document?.zoomRanges).toEqual([]);
+
+		// The chain let go: a later attempt runs instead of queueing behind a promise
+		// that is never coming back. (The abandoned save still holds the in-flight
+		// counter, so this one waits out its own deadline rather than resolving idle
+		// — which is the point: degraded, not wedged.)
+		bridge.save.mockImplementation(async (document: unknown) => ({ success: true, document }));
+		await expect(
+			maybeSaveFreshRecordingAutoZooms(doc, {
+				enabled: true,
+				getTelemetry: async () => dwell(4000, 0.4, 0.6),
+				createId: (prefix) => `${prefix}_after`,
+				saveTimeoutMs: 1_000,
+				waitTimeoutMs: 10,
+			}),
+		).resolves.toBe(false);
+		expect(consumeFreshRecordingAutoZoomPending()).toBe(true);
+	});
 });

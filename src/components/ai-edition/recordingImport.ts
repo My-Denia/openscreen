@@ -17,7 +17,11 @@
 import type { CursorTelemetryPoint } from "@/components/video-editor/types";
 import { createId } from "@/lib/ai-edition/document/ids";
 import type { AxcutDocument } from "@/lib/ai-edition/schema";
-import { useProjectStore, waitForDocumentSaves } from "@/lib/ai-edition/store/projectStore";
+import {
+	DOCUMENT_SAVES_WAIT_TIMEOUT_MS,
+	useProjectStore,
+	waitForDocumentSaves,
+} from "@/lib/ai-edition/store/projectStore";
 import {
 	appendAutoZoomSuggestions,
 	collectAutoZoomSuggestionsForDocument,
@@ -89,7 +93,35 @@ export type ApplyFreshRecordingAutoZoomsDeps = {
 	enabled?: boolean;
 	getTelemetry?: (videoPath: string) => Promise<CursorTelemetryPoint[] | null | undefined>;
 	createId?: (prefix: string) => string;
+	/** Deadline for this path's own write. Tests use a short one. */
+	saveTimeoutMs?: number;
+	/** Deadline for waiting on writes somebody else started. Tests shorten it. */
+	waitTimeoutMs?: number;
 };
+
+/**
+ * `saveDocument` awaits the bridge with no deadline of its own and, by contract,
+ * never rejects — so a main process that stops answering leaves this `await`
+ * pending forever. That matters more here than at a normal call site: the write
+ * runs inside `freshRecordingAutoZoomSaveChain`, so a wedged save takes the
+ * chain with it and every later retry queues behind a promise that will not
+ * settle. Racing a deadline lets the attempt end and the chain move on; the
+ * abandoned save is safe to drop precisely because it cannot reject.
+ */
+async function saveWithDeadline(
+	save: Promise<boolean>,
+	timeoutMs: number,
+): Promise<boolean | "timeout"> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const deadline = new Promise<"timeout">((resolve) => {
+		timer = setTimeout(() => resolve("timeout"), timeoutMs);
+	});
+	try {
+		return await Promise.race([save, deadline]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
 
 async function readAutoZoomPref(): Promise<boolean> {
 	try {
@@ -235,10 +267,10 @@ export async function maybeSaveFreshRecordingAutoZooms(
 			// A wait that times out has told us nothing about what is on disk, so the
 			// only safe move is to abandon this attempt with pending still set: the
 			// retries below rebase onto whatever the stuck save eventually leaves.
-			if ((await waitForDocumentSaves()) === "timeout") return false;
+			if ((await waitForDocumentSaves(deps.waitTimeoutMs)) === "timeout") return false;
 			const latest = liveDocument(document);
 			const next = await applyPendingFreshRecordingAutoZooms(latest, deps);
-			if ((await waitForDocumentSaves()) === "timeout") return false;
+			if ((await waitForDocumentSaves(deps.waitTimeoutMs)) === "timeout") return false;
 			const current = liveDocument(document);
 			if (current.project.id !== latest.project.id) return false;
 			if ((current.zoomRanges?.length ?? 0) > 0) {
@@ -257,14 +289,21 @@ export async function maybeSaveFreshRecordingAutoZooms(
 			if (storedNow !== latest) return false;
 			if (toSave === latest || toSave === storedNow) return false;
 			if (storedNow.project.id !== latest.project.id) return false;
-			const saved = await useProjectStore.getState().saveDocument(toSave, { history: true });
+			const saved = await saveWithDeadline(
+				useProjectStore.getState().saveDocument(toSave, { history: true }),
+				deps.saveTimeoutMs ?? DOCUMENT_SAVES_WAIT_TIMEOUT_MS,
+			);
+			// The write never answered. Keep pending and let go of the chain, so the
+			// retries get to run instead of queueing behind a promise that is not
+			// coming back.
+			if (saved === "timeout") return false;
 			// A trim (or any other edit) can start after this save was submitted and
 			// still be in flight when it returns: `waitForDocumentSaves` before the
 			// write only sees saves that have already begun. Wait again, then look at
 			// the store — if that later write landed on the unzoomed snapshot, keep
 			// pending so a retry can try again. A timeout here says the same thing for
 			// a different reason: we cannot tell what landed, so do not clear pending.
-			if ((await waitForDocumentSaves()) === "timeout") return saved;
+			if ((await waitForDocumentSaves(deps.waitTimeoutMs)) === "timeout") return saved;
 			const stored = useProjectStore.getState().document;
 			if (saved && stored && (stored.zoomRanges?.length ?? 0) > 0) {
 				appliedFreshRecordingAutoZoomProjectId = stored.project.id;
