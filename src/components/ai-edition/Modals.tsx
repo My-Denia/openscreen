@@ -771,7 +771,17 @@ export function EditClipModal({
 
 	if (!clip) return null;
 
-	const sourceDurationSec = Math.max(assetMeta?.durationSec ?? 0, clip.sourceEndSec ?? 0, 0.001);
+	const assetDurationSec = assetMeta?.durationSec;
+	const knownOriginalDurationSec =
+		assetDurationSec != null && Number.isFinite(assetDurationSec) && assetDurationSec > 0
+			? assetDurationSec
+			: null;
+	// Track scale still needs a number when asset metadata is missing, so it keeps
+	// falling back to the clip's out-point. The "Original duration" readout must not:
+	// that fallback is the trim end, not the source length, and labelling it as the
+	// original silently tells the user the clip was never trimmed. Missing metadata
+	// prints an em dash, the same as `formatBytes` does for an absent `sizeBytes`.
+	const sourceDurationSec = Math.max(knownOriginalDurationSec ?? 0, clip.sourceEndSec ?? 0, 0.001);
 	const durationSec = Math.max(0.001, draftEnd - draftStart);
 	const hasTrimChanges =
 		Math.abs(draftStart - clip.sourceStartSec) > 0.001 ||
@@ -1091,9 +1101,15 @@ export function EditClipModal({
 
 			<div style={{ flexShrink: 0 }}>
 				<div style={{ display: "flex", gap: 24, marginBottom: 10 }}>
-					<RangeStat label={t("editClipDialog.start")} value={formatSeconds(draftStart)} />
-					<RangeStat label={t("editClipDialog.end")} value={formatSeconds(draftEnd)} />
-					<RangeStat label={t("editClipDialog.duration")} value={formatSeconds(durationSec)} />
+					<RangeStat
+						label={t("editClipDialog.originalDuration")}
+						value={knownOriginalDurationSec != null ? formatSeconds(knownOriginalDurationSec) : "—"}
+					/>
+					<RangeStat
+						label={t("editClipDialog.trimRange")}
+						value={`${formatSeconds(draftStart)}–${formatSeconds(draftEnd)}`}
+					/>
+					<RangeStat label={t("editClipDialog.finalDuration")} value={formatSeconds(durationSec)} />
 				</div>
 
 				<div
