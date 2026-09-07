@@ -197,8 +197,17 @@ export async function applyPendingFreshRecordingAutoZooms(
 			return [];
 		}
 	};
-	const collectFrom = async (source: AxcutDocument) =>
-		collectAutoZoomSuggestionsForDocument(source, getTelemetry);
+	const collectFrom = async (source: AxcutDocument) => {
+		const scoped = pendingFreshRecordingAutoZoomPath
+			? {
+					...source,
+					assets: source.assets.filter(
+						(asset) => asset.originalPath === pendingFreshRecordingAutoZoomPath,
+					),
+				}
+			: source;
+		return collectAutoZoomSuggestionsForDocument(scoped, getTelemetry);
+	};
 
 	const firstSignature = clipExtentSignature(start);
 	let suggestions = await collectFrom(start);

@@ -377,6 +377,51 @@ describe("fresh-recording auto-zoom", () => {
 		expect(consumeFreshRecordingAutoZoomPending()).toBe(true);
 	});
 
+	it("does not decorate a later imported clip while the fresh take is still pending", async () => {
+		const fresh = documentWithClip();
+		const laterPath = "C:\\recordings\\later.mp4";
+		const withLater: AxcutDocument = {
+			...fresh,
+			assets: [
+				...fresh.assets,
+				{
+					id: "asset_later",
+					kind: "video",
+					label: "later.mp4",
+					originalPath: laterPath,
+					cameraTrack: null,
+					durationSec: 10,
+				},
+			],
+			timeline: {
+				...fresh.timeline,
+				clips: [
+					...fresh.timeline.clips,
+					{
+						id: "clip_later",
+						assetId: "asset_later",
+						sourceStartSec: 0,
+						sourceEndSec: 10,
+						timelineStartSec: 10,
+						timelineEndSec: 20,
+						wordRefs: [],
+						origin: "system",
+						reason: "",
+					},
+				],
+			},
+		};
+		markFreshRecordingAutoZoomPending(fresh.assets[0].originalPath);
+		const next = await applyPendingFreshRecordingAutoZooms(withLater, {
+			enabled: true,
+			getTelemetry: async (videoPath) => (videoPath === laterPath ? dwell(14000, 0.4, 0.6) : []),
+			createId: (prefix) => `${prefix}_later`,
+		});
+		expect(next).toBe(withLater);
+		expect(next.zoomRanges).toEqual([]);
+		expect(consumeFreshRecordingAutoZoomPending()).toBe(true);
+	});
+
 	it("waits for a probed asset duration before generating zooms", async () => {
 		markFreshRecordingAutoZoomPending();
 		const placeholder = documentWithClip(60);

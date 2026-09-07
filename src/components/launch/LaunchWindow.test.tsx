@@ -3,6 +3,7 @@ import "@testing-library/jest-dom";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { nativeBridgeClient } from "@/native";
 import { TooltipProvider } from "../ui/tooltip";
 import { HUD_BAR_BOTTOM, HUD_POPOVER_GAP, HUD_POPOVER_MAX_HEIGHT } from "./hudGeometry";
 import { LaunchWindow } from "./LaunchWindow";
@@ -316,6 +317,9 @@ function resetLaunchMocks() {
 	i18nState.value.resolveSystemLocaleSuggestion.mockClear();
 	i18nState.value.setLocale.mockClear();
 	linuxHelperAvailable.value = true;
+	vi.mocked(nativeBridgeClient.system.getPlatform).mockImplementation(
+		async () => platformState.value,
+	);
 	appInfoState.value = { version: "1.9.6", canCheckForUpdates: true };
 	updateCheckMock.mockReset();
 	updateCheckMock.mockResolvedValue(undefined);
@@ -374,6 +378,19 @@ describe("LaunchWindow record button", () => {
 			"title",
 			"Auto-zoom needs the editable cursor. Switch cursor mode to enable.",
 		);
+		fireEvent.click(button);
+		expect(recorderState.value.setAutoZoomEnabled).not.toHaveBeenCalled();
+	});
+
+	it("disables auto-zoom in system-cursor mode before platform detection finishes", () => {
+		vi.mocked(nativeBridgeClient.system.getPlatform).mockImplementation(
+			() => new Promise(() => undefined),
+		);
+		recorderState.value.cursorCaptureMode = "system";
+		renderLaunchWindow();
+
+		const button = screen.getByTestId("launch-auto-zoom-button");
+		expect(button).toBeDisabled();
 		fireEvent.click(button);
 		expect(recorderState.value.setAutoZoomEnabled).not.toHaveBeenCalled();
 	});
