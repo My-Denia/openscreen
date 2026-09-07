@@ -15,10 +15,6 @@ import {
 	migrateRawDocumentToCurrent,
 } from "@/lib/ai-edition/document/migrate";
 import {
-	applyProbedDuration,
-	replaceTimeline as replaceTimelineOp,
-} from "@/lib/ai-edition/document/timeline";
-import {
 	type InsertSide,
 	insertDocumentWord,
 	removeDocumentWords,
@@ -52,6 +48,11 @@ import { useNativePlaybackSync } from "@/native/useNativePlaybackSync";
 import { ExportDialog } from "./ExportDialog";
 import { insertionsEnabled } from "./insertionsEnabled";
 import { ChatStripPanel } from "./LeftPanel";
+import {
+	documentAfterLoadedMetadata,
+	isFiniteMediaDuration,
+	isLoadedMetadataForDocument,
+} from "./loadedRecordingMetadata";
 import {
 	EditClipModal,
 	NewProjectModal,
@@ -428,50 +429,21 @@ export function NewEditorShell() {
 			// until the main-process EBML fix lands. Fall back to a 60s seed if
 			// duration is unknown so the timeline never gets stuck on an empty
 			// placeholder. All store reads go through getState() to avoid
-			// stale-closure bugs.
-			const finite = Number.isFinite(durationSec) && durationSec > 0;
-			const known = finite ? durationSec : 60;
+			// stale-closure bugs. The queued work is bound to the project that
+			// owned the video when this fired — draining after a project switch
+			// would seed the wrong primary.
+			const originatingProjectId = useProjectStore.getState().document?.project.id;
+			const known = isFiniteMediaDuration(durationSec) ? durationSec : 60;
 			setSourceDuration(known);
 			metadataChainRef.current = metadataChainRef.current
 				.catch(() => undefined)
 				.then(async () => {
 					const state = useProjectStore.getState();
 					const doc = state.document;
-					if (!doc || doc.assets.length === 0) return;
-					let next = doc;
-					if (doc.timeline.clips.length === 0) {
-						// ponytail: replaceTimeline derives clip length from
-						// asset.durationSec, which import never populates — without this
-						// patch the first auto-created clip silently comes out empty
-						// (normalizeIntervals clamps against a 0 duration and drops it).
-						// A non-finite probe may seed a 60s clip, but that fallback
-						// must not be written to asset.durationSec: applyProbedDuration
-						// only overwrites a null duration, and auto-zoom waits for a
-						// real probe before suggesting.
-						const primaryAssetId = doc.project.primaryAssetId ?? doc.assets[0]?.id;
-						const docWithDuration =
-							primaryAssetId && finite
-								? {
-										...doc,
-										assets: doc.assets.map((a) =>
-											a.id === primaryAssetId ? { ...a, durationSec: known } : a,
-										),
-									}
-								: doc;
-						next = replaceTimelineOp(
-							docWithDuration,
-							[{ startSec: 0, endSec: known }],
-							"Auto-created full-duration clip",
-						);
-					} else {
-						// Hand the probed duration to the pure document layer: it patches only the
-						// clips of THIS asset that are still waiting for a real length (the
-						// pre-probe placeholder, or the extent-less clip a legacy v2 import mints),
-						// shifts what follows, and brings the modifiers along — anchoring the ones
-						// migration had to leave unanchored. Returns the document untouched when
-						// nothing is waiting, so there is nothing to guard here.
-						next = applyProbedDuration(doc, assetId, known);
+					if (!isLoadedMetadataForDocument(doc, originatingProjectId) || doc.assets.length === 0) {
+						return;
 					}
+					let next = documentAfterLoadedMetadata(doc, durationSec, assetId);
 					// `history: false` for the duration write: it is the probed length being
 					// folded in on load, not something the user did — an undo landing on it
 					// would empty their timeline. Auto-zoom is a later, undoable suggestion.

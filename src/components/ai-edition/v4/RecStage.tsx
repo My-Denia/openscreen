@@ -384,6 +384,7 @@ export function RecStage({
 						</div>
 						<button
 							type="button"
+							data-testid="rec-auto-zoom-button"
 							className={`${styles.recToggleBtn}${prefs.autoZoomEnabled !== false && cursorHighlight ? ` ${styles.on}` : ""}`}
 							aria-pressed={prefs.autoZoomEnabled !== false && cursorHighlight}
 							disabled={!cursorHighlight}
