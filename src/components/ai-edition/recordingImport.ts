@@ -17,7 +17,7 @@
 import type { CursorTelemetryPoint } from "@/components/video-editor/types";
 import { createId } from "@/lib/ai-edition/document/ids";
 import type { AxcutDocument } from "@/lib/ai-edition/schema";
-import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
+import { useProjectStore, waitForDocumentSaves } from "@/lib/ai-edition/store/projectStore";
 import {
 	appendAutoZoomSuggestions,
 	collectAutoZoomSuggestionsForDocument,
@@ -248,12 +248,24 @@ export async function maybeSaveFreshRecordingAutoZooms(
 ): Promise<boolean> {
 	const writeFreshRecordingAutoZooms = async (): Promise<boolean> => {
 		try {
+			await waitForDocumentSaves();
 			const latest = liveDocument(document);
 			const next = await applyPendingFreshRecordingAutoZooms(latest, deps);
-			const current = liveDocument(latest);
-			if (next === latest || next === current) return false;
+			await waitForDocumentSaves();
+			const current = liveDocument(document);
 			if (current.project.id !== latest.project.id) return false;
-			const saved = await useProjectStore.getState().saveDocument(next, { history: true });
+			if ((current.zoomRanges?.length ?? 0) > 0) {
+				appliedFreshRecordingAutoZoomProjectId = current.project.id;
+				clearFreshRecordingAutoZoomPending();
+				return false;
+			}
+			const toSave =
+				current === latest ? next : await applyPendingFreshRecordingAutoZooms(current, deps);
+			const storedNow = liveDocument(document);
+			if (storedNow !== current && storedNow !== latest) return false;
+			if (toSave === latest || toSave === current || toSave === storedNow) return false;
+			if (storedNow.project.id !== latest.project.id) return false;
+			const saved = await useProjectStore.getState().saveDocument(toSave, { history: true });
 			const stored = useProjectStore.getState().document;
 			if (saved && stored && (stored.zoomRanges?.length ?? 0) > 0) {
 				appliedFreshRecordingAutoZoomProjectId = stored.project.id;
