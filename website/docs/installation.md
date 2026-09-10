@@ -133,14 +133,14 @@ The editing tools are the same everywhere — zooms, backgrounds, crop/trim/spee
 |---|---|---|---|
 | Capture pipeline | Native (ScreenCaptureKit) | Native (Windows Graphics Capture) | Native (PipeWire via the ScreenCast portal); browser fallback without the helper, losing hardware encode and cursor telemetry |
 | Custom cursor themes / click effects | ✅ | ✅ | ✅ on Wayland — click capture needs the `input` group ([details](#mouse-clicks-on-wayland)) |
-| Webcam | Browser capture, saved as a separate file (still works as PiP) | Native capture, muxed into the recording | Browser capture, saved as a separate file (still works as PiP) |
+| Webcam | Browser capture, saved as a separate file (still works as PiP) | Native capture, saved as a separate file | Browser capture, saved as a separate file (still works as PiP) |
 | System audio | Works out of the box; permission prompt on macOS 14.2+ | Works out of the box | Needs PipeWire (default on Ubuntu 22.04+, Fedora 34+) |
-| MP4 export | ✅ | ✅ | ✅ — H.264 on the GPU through VAAPI where the driver offers it, software otherwise; H.265 is software-only |
+| MP4 export | ✅ | ✅ | ✅ — H.264 on the GPU through VAAPI when the GPU stack allows it (see the note below), software otherwise; H.265 is software-only |
 | GIF export | ✅ | ✅ | ✅ |
 | On-device transcription | Metal (Apple Silicon) / CPU | Vulkan / CPU | Vulkan / CPU |
 
 :::note MP4 export on Linux
-The GPU compositor behind the live preview and MP4 export has three backends — Direct3D 11 on Windows, Metal on macOS, wgpu/WGSL on Linux — and ships in all three builds. On Linux, an H.264 export hands each composited frame to `h264_vaapi` without a CPU copy when the GPU driver exposes VAAPI. When it does not — no render node, or a driver without VAAPI — the export falls back to a software encoder and simply takes longer; nothing else changes. H.265 exports always use the software encoder on Linux.
+The GPU compositor behind the live preview and MP4 export has three backends — Direct3D 11 on Windows, Metal on macOS, wgpu/WGSL on Linux — and ships in all three builds. On Linux, an H.264 export hands each composited frame to `h264_vaapi` without a CPU copy when the GPU driver exposes VAAPI *and* the Vulkan device can hand the frame over as a dmabuf (`VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf`). When any of that is missing — no render node, a driver without VAAPI, a Vulkan device without those extensions — the export falls back to a software encoder and simply takes longer; nothing else changes. H.265 exports always use the software encoder on Linux.
 :::
 
 Next: [Quick start](./quick-start.md) walks through your first recording.
