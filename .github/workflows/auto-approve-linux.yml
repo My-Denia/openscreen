@@ -1,0 +1,44 @@
+name: auto-approve-linux
+
+# Approves Beetix's PRs when every changed file is a Linux/Wayland capture path
+# (same list as .github/CODEOWNERS). Anything else still needs a human review.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+jobs:
+  approve:
+    if: github.event.pull_request.user.login == 'Beetix' && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - id: scope
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > files.txt
+          if [ ! -s files.txt ] || grep -qvE '^(electron/native/pipewire-capture/|electron/native-bridge/capture/linuxNativeCaptureSession|electron/native-bridge/cursor/recording/pipeWire|crates/compositor/src/(linux_[^/]*|[^/]*_linux)\.rs$)' files.txt; then
+            echo "in_scope=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "in_scope=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.scope.outputs.in_scope == 'true'
+        id: token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APPROVER_APP_ID }}
+          private-key: ${{ secrets.APPROVER_APP_PRIVATE_KEY }}
+
+      - if: steps.scope.outputs.in_scope == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr review "$PR" --repo "$GITHUB_REPOSITORY" --approve \
+            --body "Auto-approved: author is a Linux/Wayland code owner and every changed file is in those paths."
