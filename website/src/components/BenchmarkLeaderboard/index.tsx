@@ -27,11 +27,42 @@ const PLATFORM_NAMES: Record<string, string> = {
 	win32: "Windows",
 };
 
+type Setup = {
+	platform: string;
+	machine: string;
+	gpu?: string;
+	runs: number;
+	cost: number;
+};
+
 type Tool = {
 	node: string;
 	tool: string;
 	build: string;
+	prerelease?: boolean;
 	relativeCost: number;
+	setups?: Setup[];
+	submissions: number;
+	machines: string[];
+	platforms: string[];
+	versions?: string[];
+	observedCostRange?: [number, number];
+};
+
+type BuildPart = {
+	build: string;
+	prerelease?: boolean;
+	platforms: string[];
+};
+
+type RankedRow = {
+	node: string;
+	tool: string;
+	build: string;
+	prerelease: boolean;
+	builds: BuildPart[];
+	relativeCost: number;
+	setups: Setup[];
 	submissions: number;
 	machines: string[];
 	platforms: string[];
@@ -48,11 +79,11 @@ function unique(values: string[][]): string[] {
 	return [...new Set(values.flat())];
 }
 
+const cmpStr = (x: string, y: string) => (x < y ? -1 : x > y ? 1 : 0);
+
 /**
  * Which of two builds is the newer. Ported from the benchmark's own
- * lib/aggregate.mjs so the two agree, rather than inferred from the array
- * order: aggregate.json is sorted by cost, so "first one wins" would quietly
- * show the older build the day an update turns out to be slower.
+ * lib/aggregate.mjs so the two agree.
  */
 function compareBuilds(a: string, b: string): number {
 	const parse = (v: string) => {
@@ -69,17 +100,64 @@ function compareBuilds(a: string, b: string): number {
 	// No tag is the release itself, and it outranks every candidate for it.
 	if (!x.tag) return 1;
 	if (!y.tag) return -1;
-	return x.tag < y.tag ? -1 : 1;
+	return cmpStr(x.tag, y.tag);
 }
 
-/** One row per tool: the newest build measured, which is what the site ranks. */
-function newestBuilds(tools: Tool[]): Tool[] {
-	const best = new Map<string, Tool>();
+/**
+ * One row per tool, built from the newest build measured on each platform.
+ * Ported from the benchmark's lib/aggregate.mjs (newestPerPlatform).
+ *
+ * Taking the newest build per platform is what a reader on any given platform
+ * would actually install: when a vendor ships at different cadences per
+ * platform (e.g. FocuSee 2.4.1 on macOS and 2.3.5 on Windows), this averages
+ * the current release across platforms instead of taking only the globally
+ * newest build which would drop all Windows runs.
+ */
+function newestPerPlatform(tools: Tool[]): RankedRow[] {
+	const byTool = new Map<string, Tool[]>();
 	for (const t of tools) {
-		const cur = best.get(t.tool);
-		if (!cur || compareBuilds(t.build, cur.build) > 0) best.set(t.tool, t);
+		if (!byTool.has(t.tool)) byTool.set(t.tool, []);
+		byTool.get(t.tool)!.push(t);
 	}
-	return [...best.values()];
+	const rows: RankedRow[] = [];
+	for (const [tool, builds] of byTool) {
+		const newestOn = new Map<string, Tool>();
+		for (const b of builds) {
+			for (const s of b.setups ?? []) {
+				const cur = newestOn.get(s.platform);
+				if (!cur || compareBuilds(b.build, cur.build) > 0) newestOn.set(s.platform, b);
+			}
+		}
+		const kept = builds
+			.map((b) => ({
+				build: b,
+				setups: (b.setups ?? []).filter((s) => newestOn.get(s.platform) === b),
+			}))
+			.filter((x) => x.setups.length)
+			.sort(
+				(x, y) => compareBuilds(y.build.build, x.build.build) || cmpStr(x.build.node, y.build.node),
+			);
+		if (!kept.length) continue;
+		const setups = kept.flatMap((x) => x.setups);
+		const lead = kept[0].build;
+		rows.push({
+			node: lead.node,
+			tool,
+			build: lead.build,
+			prerelease: kept.some((x) => x.build.prerelease),
+			builds: kept.map((x) => ({
+				build: x.build.build,
+				prerelease: x.build.prerelease,
+				platforms: [...new Set(x.setups.map((s) => s.platform))].sort(cmpStr),
+			})),
+			relativeCost: +(setups.reduce((n, s) => n + s.cost, 0) / setups.length).toFixed(3),
+			setups,
+			submissions: setups.reduce((n, s) => n + s.runs, 0),
+			machines: [...new Set(setups.map((s) => s.machine).filter(Boolean))],
+			platforms: [...new Set(setups.map((s) => s.platform).filter(Boolean))],
+		});
+	}
+	return rows.sort((a, b) => a.relativeCost - b.relativeCost || cmpStr(a.node, b.node));
 }
 
 export default function BenchmarkLeaderboard() {
@@ -129,7 +207,7 @@ export default function BenchmarkLeaderboard() {
 	// dropping a superseded build must not shrink the machine list it earned.
 	const platforms = unique(data.tools.map((t) => t.platforms));
 	const machines = unique(data.tools.map((t) => t.machines));
-	const tools = newestBuilds(data.tools).sort((a, b) => a.relativeCost - b.relativeCost);
+	const tools = newestPerPlatform(data.tools);
 	const max = tools[tools.length - 1].relativeCost;
 
 	return (
@@ -160,7 +238,31 @@ export default function BenchmarkLeaderboard() {
 							<td className={styles.rank}>{String(i + 1).padStart(2, "0")}</td>
 							<td className={styles.name}>
 								{t.tool}
-								<span className={styles.build}>{t.build}</span>
+								<span
+									className={styles.build}
+									title={
+										t.builds.length > 1
+											? "This tool is not on the same release everywhere it was measured — each platform contributes the newest build measured on it"
+											: undefined
+									}
+								>
+									{t.builds.length > 1
+										? t.builds
+												.map(
+													(b) =>
+														`${b.build} (${b.platforms.map((p) => PLATFORM_NAMES[p] ?? p).join(", ")})`,
+												)
+												.join(" · ")
+										: t.build}
+								</span>
+								{t.prerelease && (
+									<span
+										className={styles.tag}
+										title="A prerelease — published by the vendor, but not the release build"
+									>
+										rc
+									</span>
+								)}
 							</td>
 							<td className={styles.plotCell}>
 								<span className={styles.plot}>
