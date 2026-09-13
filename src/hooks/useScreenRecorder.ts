@@ -110,6 +110,7 @@ type UseScreenRecorderReturn = {
 	setAutoZoomEnabled: (enabled: boolean) => void;
 	softwareEncoderFallbackNoticeVisible: boolean;
 	dismissSoftwareEncoderFallbackNotice: (dontShowAgain?: boolean) => void;
+	recordingPrefsLoaded: boolean;
 };
 
 type NativeWindowsRecordingHandle = {
@@ -247,6 +248,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const [autoZoomEnabled, setAutoZoomEnabled] = useState(true);
 	const [softwareEncoderFallbackNoticeVisible, setSoftwareEncoderFallbackNoticeVisible] =
 		useState(false);
+	const [recordingPrefsLoaded, setRecordingPrefsLoaded] = useState(false);
 
 	// Seed from the main-process recording-prefs SSOT on mount, so choices
 	// made in the editor's Rec-mode stage (a different renderer window) carry
@@ -257,7 +259,11 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		void window.electronAPI
 			?.getRecordingPrefs?.()
 			.then((prefs) => {
-				if (cancelled || !prefs) return;
+				if (cancelled) return;
+				if (!prefs) {
+					setRecordingPrefsLoaded(true);
+					return;
+				}
 				setMicrophoneEnabled(prefs.micEnabled);
 				if (prefs.micDeviceId) setMicrophoneDeviceId(prefs.micDeviceId);
 				// The name matters as much as the id: the native Windows helper picks
@@ -268,15 +274,18 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				if (prefs.micDeviceName) setMicrophoneDeviceName(prefs.micDeviceName);
 				setWebcamEnabledState(prefs.camEnabled);
 				if (prefs.camDeviceId) setWebcamDeviceId(prefs.camDeviceId);
+				if (prefs.camDeviceName) setWebcamDeviceName(prefs.camDeviceName);
 				setSystemAudioEnabled(prefs.systemAudioEnabled);
 				setCursorCaptureMode(prefs.cursorCaptureMode);
 				setAutoZoomEnabled(prefs.autoZoomEnabled !== false);
+				setRecordingPrefsLoaded(true);
 			})
 			.catch((err) => {
 				// Bare ipcRenderer.invoke — rejects if the main handler throws. Falling
 				// back to this hook's own defaults is acceptable; an unhandled rejection
 				// on every HUD mount is not.
 				console.warn("Failed to seed the recording prefs:", err);
+				if (!cancelled) setRecordingPrefsLoaded(true);
 			});
 		return () => {
 			cancelled = true;
@@ -2358,5 +2367,6 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		setAutoZoomEnabled,
 		softwareEncoderFallbackNoticeVisible,
 		dismissSoftwareEncoderFallbackNotice,
+		recordingPrefsLoaded,
 	};
 }

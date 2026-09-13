@@ -21,6 +21,10 @@ import {
 	documentSchema,
 	migrateRawDocumentToCurrent,
 } from "../../src/lib/ai-edition/schema";
+import {
+	applyProjectAppearanceDefaults,
+	type ProjectAppearanceDefaults,
+} from "../../src/lib/projectDefaults";
 import { ensureDocumentExtensions } from "../media/extensionClip";
 import { relinkProjectMedia } from "../media/projectMediaRelinker";
 
@@ -165,15 +169,18 @@ export class DocumentService {
 	 * `electron` import. Optional so the tests and the CLI construct it as they always did.
 	 */
 	private readonly onProjectRead?: (document: AxcutDocument) => void;
+	private readonly loadProjectDefaults?: () => ProjectAppearanceDefaults;
 
 	constructor(
 		projectsRoot: string,
 		mediaRegistryDir: string,
 		onProjectRead?: (document: AxcutDocument) => void,
+		loadProjectDefaults?: () => ProjectAppearanceDefaults,
 	) {
 		this.projectsRoot = projectsRoot;
 		this.mediaRegistryDir = mediaRegistryDir;
 		this.onProjectRead = onProjectRead;
+		this.loadProjectDefaults = loadProjectDefaults;
 	}
 
 	async ensureProjectsDir(): Promise<void> {
@@ -299,10 +306,13 @@ export class DocumentService {
 	async createProject(title: string): Promise<AxcutDocument> {
 		await this.ensureProjectsDir();
 		const projectId = createId("proj");
-		const doc = createEmptyDocument({
+		const empty = createEmptyDocument({
 			projectId,
 			title: title?.trim() || "Untitled Project",
 		});
+		const doc = this.loadProjectDefaults
+			? applyProjectAppearanceDefaults(empty, this.loadProjectDefaults())
+			: empty;
 		await this.writeProject(doc);
 		return doc;
 	}

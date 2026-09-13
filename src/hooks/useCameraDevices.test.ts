@@ -122,6 +122,20 @@ describe("useCameraDevices", () => {
 		});
 	});
 
+	it("resolves a stale id by a unique saved camera label", async () => {
+		const { result } = renderHook(() => useCameraDevices(true, "stale-id", "Camera 2"));
+		await waitFor(() => expect(result.current.selectedDeviceId).toBe("cam2"));
+	});
+
+	it("does not guess when a saved camera label is ambiguous", async () => {
+		mockEnumerateDevices.mockResolvedValueOnce([
+			{ kind: "videoinput", deviceId: "cam1", label: "Same camera", groupId: "g1" },
+			{ kind: "videoinput", deviceId: "cam2", label: "Same camera", groupId: "g2" },
+		]);
+		const { result } = renderHook(() => useCameraDevices(true, "stale-id", "Same camera"));
+		await waitFor(() => expect(result.current.selectedDeviceId).toBe("cam1"));
+	});
+
 	/**
 	 * The HUD feeds this hook's own output back in: `LaunchWindow` writes
 	 * `selectedDeviceId` into the recorder's `webcamDeviceId`, and hands that same
