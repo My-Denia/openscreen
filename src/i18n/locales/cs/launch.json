@@ -52,6 +52,11 @@
 		"camera": "Kamera",
 		"cameraDevice": "Zařízení kamery"
 	},
+	"autoZoom": {
+		"enable": "Zapnout automatické přiblížení po nahrání",
+		"disable": "Vypnout automatické přiblížení po nahrání",
+		"needsEditableCursor": "Automatické přiblížení vyžaduje upravitelný kurzor. Přepněte režim kurzoru, abyste ho povolili."
+	},
 	"cursor": {
 		"useEditableCursor": "Použít upravitelný kurzor",
 		"useSystemCursor": "Použít systémový kurzor"

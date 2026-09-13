@@ -310,7 +310,12 @@
 		"level": "Úroveň přiblížení",
 		"previewHold": "Podržte pro náhled efektu přiblížení",
 		"customScale": "Vlastní přiblížení",
-		"selectRegion": "Vyberte oblast přiblížení pro úpravu"
+		"selectRegion": "Vyberte oblast přiblížení pro úpravu",
+		"cursor": {
+			"title": "Kurzor",
+			"show": "Viditelný",
+			"hide": "Skrytý"
+		}
 	},
 	"audio": {
 		"outputGain": "Výstupní úroveň",
@@ -342,7 +347,8 @@
 		"themeDefault": "Výchozí",
 		"clipToBounds": "Oříznout na plátno",
 		"motionBlur": "Pohybové rozmazání",
-		"theme": "Styl kurzoru"
+		"theme": "Styl kurzoru",
+		"autoHide": "Automaticky skrýt, když je neaktivní"
 	},
 	"export": {
 		"gifButton": "Exportovat GIF",
