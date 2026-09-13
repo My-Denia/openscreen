@@ -32,7 +32,7 @@ interface Window {
 		/** Native (D3D) export progress — frames encoded so far, pushed at ~10 Hz max while
 		 *  `compositor.export`/`compositor.exportMulti` runs. Distinct from `exportOnFrameAck`,
 		 *  the OLD web/CPU pipeline's per-frame ack, not a progress signal. */
-		onNativeExportProgress?: (callback: (frames: number) => void) => () => void;
+		onNativeExportProgress?: (callback: (frames: number, exportId?: string) => void) => () => void;
 		getSources: (opts: Electron.SourcesOptions) => Promise<ProcessedDesktopSource[]>;
 		switchToEditor: () => Promise<void>;
 		switchToHud: () => Promise<void>;
@@ -53,11 +53,19 @@ interface Window {
 		}>;
 		selectSource: (source: ProcessedDesktopSource) => Promise<ProcessedDesktopSource | null>;
 		getSelectedSource: () => Promise<ProcessedDesktopSource | null>;
-		onSelectedSourceChanged: (callback: (source: ProcessedDesktopSource) => void) => () => void;
+		onSelectedSourceChanged: (
+			callback: (source: ProcessedDesktopSource | null) => void,
+		) => () => void;
 		getRecordingPrefs: () => Promise<import("./ipc/handlers").RecordingPrefs>;
 		setRecordingPrefs: (
 			prefs: Partial<import("./ipc/handlers").RecordingPrefs>,
 		) => Promise<import("./ipc/handlers").RecordingPrefs>;
+		getAppSettings: () => Promise<import("./app-settings").AppSettingsSnapshot>;
+		setProjectAppearanceDefaults: (
+			defaults: import("../src/lib/projectDefaults").ProjectAppearanceDefaults,
+		) => Promise<import("./app-settings").AppSettingsSnapshot>;
+		resetProjectAppearanceDefaults: () => Promise<import("./app-settings").AppSettingsSnapshot>;
+		resetRecordingSetup: () => Promise<import("./app-settings").AppSettingsSnapshot>;
 		onRecordingPrefsChanged: (
 			callback: (prefs: import("./ipc/handlers").RecordingPrefs) => void,
 		) => () => void;

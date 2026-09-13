@@ -4,7 +4,17 @@
 // rapid iteration without the Electron window overhead.
 
 import { PROVIDER_DEFINITIONS } from "../../electron/ai-edition/provider-registry";
-import { axcutSchemaVersion, migrateRawDocumentToCurrent } from "../lib/ai-edition/schema";
+import {
+	type AxcutDocument,
+	axcutSchemaVersion,
+	migrateRawDocumentToCurrent,
+} from "../lib/ai-edition/schema";
+import {
+	applyProjectAppearanceDefaults,
+	DEFAULT_PROJECT_APPEARANCE,
+	type ProjectAppearanceDefaults,
+	parseProjectAppearanceDefaults,
+} from "../lib/projectDefaults";
 import { nativeBridgeClient as realClient } from "./client";
 
 function detectBrowserMode(): boolean {
@@ -45,6 +55,7 @@ type ShimRecordingPrefs = {
 	micDeviceName: string | null;
 	camEnabled: boolean;
 	camDeviceId: string | null;
+	camDeviceName: string | null;
 	systemAudioEnabled: boolean;
 	cursorCaptureMode: "editable-overlay" | "system";
 	autoZoomEnabled: boolean;
@@ -56,10 +67,13 @@ let shimRecordingPrefs: ShimRecordingPrefs = {
 	micDeviceName: null,
 	camEnabled: false,
 	camDeviceId: null,
+	camDeviceName: null,
 	systemAudioEnabled: false,
 	cursorCaptureMode: "editable-overlay",
 	autoZoomEnabled: true,
 };
+const shimRecordingPrefsListeners = new Set<(prefs: ShimRecordingPrefs) => void>();
+const shimSelectedSourceListeners = new Set<(source: ShimDesktopSource | null) => void>();
 (() => {
 	try {
 		const raw = localStorage.getItem(recordingPrefsStorageKey);
@@ -68,6 +82,35 @@ let shimRecordingPrefs: ShimRecordingPrefs = {
 		// ponytail: corrupt/unavailable localStorage — start fresh.
 	}
 })();
+
+const appearanceStorageKey = "browser-shim-project-appearance-v1";
+let shimAppearanceDefaults: ProjectAppearanceDefaults = DEFAULT_PROJECT_APPEARANCE;
+let shimHasCustomAppearance = false;
+(() => {
+	try {
+		const raw = localStorage.getItem(appearanceStorageKey);
+		if (!raw) return;
+		const parsed = JSON.parse(raw) as { version?: unknown; defaults?: unknown };
+		if (parsed.version === 1 && parsed.defaults) {
+			shimAppearanceDefaults = parseProjectAppearanceDefaults(parsed.defaults);
+			shimHasCustomAppearance = true;
+		}
+	} catch {
+		// Corrupt/unavailable localStorage starts from canonical factory appearance.
+	}
+})();
+
+function shimAppSettingsSnapshot() {
+	return {
+		recording: shimRecordingPrefs,
+		lastSource: null,
+		appearance: {
+			version: 1 as const,
+			custom: shimHasCustomAppearance,
+			defaults: shimAppearanceDefaults,
+		},
+	};
+}
 
 // ponytail: real file dialogs/ffmpeg probing aren't available in a plain
 // browser tab, but a hidden <input type="file"> + blob URL gets us a real,
@@ -138,21 +181,63 @@ function createShimElectronAPI() {
 		getSources: () => Promise.resolve(SHIM_SOURCES),
 		selectSource: (source: ShimDesktopSource) => {
 			shimSelectedSource = source;
+			shimSelectedSourceListeners.forEach((listener) => listener(source));
 			return Promise.resolve(source);
 		},
 		getSelectedSource: () => Promise.resolve(shimSelectedSource),
-		onSelectedSourceChanged: () => () => undefined,
+		onSelectedSourceChanged: (callback: (source: ShimDesktopSource | null) => void) => {
+			shimSelectedSourceListeners.add(callback);
+			return () => shimSelectedSourceListeners.delete(callback);
+		},
 		getRecordingPrefs: () => Promise.resolve(shimRecordingPrefs),
 		setRecordingPrefs: (patch: Partial<ShimRecordingPrefs>) => {
-			shimRecordingPrefs = { ...shimRecordingPrefs, ...patch };
+			const next = { ...shimRecordingPrefs, ...patch };
 			try {
-				localStorage.setItem(recordingPrefsStorageKey, JSON.stringify(shimRecordingPrefs));
-			} catch {
-				// ponytail: localStorage may be full or unavailable; silently skip
+				localStorage.setItem(recordingPrefsStorageKey, JSON.stringify(next));
+			} catch (error) {
+				return Promise.reject(error);
 			}
+			shimRecordingPrefs = next;
+			shimRecordingPrefsListeners.forEach((listener) => listener(next));
 			return Promise.resolve(shimRecordingPrefs);
 		},
-		onRecordingPrefsChanged: () => () => undefined,
+		onRecordingPrefsChanged: (callback: (prefs: ShimRecordingPrefs) => void) => {
+			shimRecordingPrefsListeners.add(callback);
+			return () => shimRecordingPrefsListeners.delete(callback);
+		},
+		getAppSettings: () => Promise.resolve(shimAppSettingsSnapshot()),
+		setProjectAppearanceDefaults: (defaults: ProjectAppearanceDefaults) => {
+			const next = parseProjectAppearanceDefaults(defaults);
+			localStorage.setItem(appearanceStorageKey, JSON.stringify({ version: 1, defaults: next }));
+			shimAppearanceDefaults = next;
+			shimHasCustomAppearance = true;
+			return Promise.resolve(shimAppSettingsSnapshot());
+		},
+		resetProjectAppearanceDefaults: () => {
+			localStorage.setItem(appearanceStorageKey, JSON.stringify({ version: 1, defaults: null }));
+			shimAppearanceDefaults = DEFAULT_PROJECT_APPEARANCE;
+			shimHasCustomAppearance = false;
+			return Promise.resolve(shimAppSettingsSnapshot());
+		},
+		resetRecordingSetup: () => {
+			const next: ShimRecordingPrefs = {
+				micEnabled: false,
+				micDeviceId: null,
+				micDeviceName: null,
+				camEnabled: false,
+				camDeviceId: null,
+				camDeviceName: null,
+				systemAudioEnabled: false,
+				cursorCaptureMode: "editable-overlay",
+				autoZoomEnabled: true,
+			};
+			localStorage.setItem(recordingPrefsStorageKey, JSON.stringify(next));
+			shimRecordingPrefs = next;
+			shimSelectedSource = null;
+			shimRecordingPrefsListeners.forEach((listener) => listener(next));
+			shimSelectedSourceListeners.forEach((listener) => listener(null));
+			return Promise.resolve(shimAppSettingsSnapshot());
+		},
 		// ponytail: the chat panel subscribes to this on mount, unconditionally.
 		// Without a stub the whole editor tree throws before it paints, so every
 		// browser-shim test fails at boot, not just the chat ones. Nothing streams
@@ -363,7 +448,7 @@ function createShimBridgeClient() {
 				);
 			},
 			create: (title?: string) => {
-				const doc: ShimDocument = {
+				const empty: ShimDocument = {
 					// Mint at the current schema version so the renderer's
 					// `documentSchema.parse` (a pure validator, no migration) accepts
 					// the returned document. Must never be a literal: this value has to
@@ -391,6 +476,10 @@ function createShimBridgeClient() {
 					audioTracks: [],
 					legacyEditor: null,
 				};
+				const doc = applyProjectAppearanceDefaults(
+					empty as unknown as AxcutDocument,
+					shimAppearanceDefaults,
+				) as unknown as ShimDocument;
 				documentsByProject[doc.project.id] = doc;
 				projectOrder.unshift(doc.project.id);
 				saveProjectsState();

@@ -19,15 +19,16 @@ import { EditorTopBar } from "./EditorTopBar";
 
 const noop = () => {};
 
-function renderTopBar(projectTitle: string | null) {
+function renderTopBar(projectTitle: string | null, mode: "media" | "edit" | "rec" = "edit") {
 	const onRename = vi.fn();
 	const onShowAbout = vi.fn();
 	const onCheckForUpdates = vi.fn();
 	const onOpenSettings = vi.fn();
+	const onOpenAppSettings = vi.fn();
 	const onOpenProviderSettings = vi.fn();
 	render(
 		<EditorTopBar
-			mode="edit"
+			mode={mode}
 			onModeChange={noop}
 			projectTitle={projectTitle}
 			dirty={false}
@@ -39,6 +40,7 @@ function renderTopBar(projectTitle: string | null) {
 				save: noop,
 				export: noop,
 				openSettings: onOpenSettings,
+				openAppSettings: onOpenAppSettings,
 				renameProject: onRename,
 				toggleChat: noop,
 				openProviderSettings: onOpenProviderSettings,
@@ -47,7 +49,14 @@ function renderTopBar(projectTitle: string | null) {
 			}}
 		/>,
 	);
-	return { onRename, onShowAbout, onCheckForUpdates, onOpenSettings, onOpenProviderSettings };
+	return {
+		onRename,
+		onShowAbout,
+		onCheckForUpdates,
+		onOpenSettings,
+		onOpenAppSettings,
+		onOpenProviderSettings,
+	};
 }
 
 /** The menu reads two separate channels, and they answer different questions: `getAppInfo` for
@@ -163,15 +172,23 @@ describe("AppMenu", () => {
 		expect(trigger.getAttribute("style") ?? "").not.toMatch(/all\s*:\s*unset/);
 	});
 
-	it("opens on click and offers shortcuts, AI settings and about", () => {
+	it("opens on click and offers app settings, shortcuts, AI settings and about", () => {
 		renderTopBar("Demo Project");
 		fireEvent.click(screen.getByRole("button", { name: /OpenScreen/ }));
 		expect(screen.getByRole("menu")).toBeInTheDocument();
 		// Exact names: the translator echoes keys, and both settings rows are labelled with a
 		// `…title` key, so a /title/ match would hit two items and pin neither.
 		expect(screen.getByRole("menuitem", { name: "title" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "appSettings.title" })).toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: "providerSettings.title" })).toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: /actions\.about/ })).toBeInTheDocument();
+	});
+
+	it.each(["media", "edit", "rec"] as const)("opens app settings from %s mode", (mode) => {
+		const { onOpenAppSettings } = renderTopBar("Demo Project", mode);
+		fireEvent.click(screen.getByRole("button", { name: /OpenScreen/ }));
+		fireEvent.click(screen.getByRole("menuitem", { name: "appSettings.title" }));
+		expect(onOpenAppSettings).toHaveBeenCalledTimes(1);
 	});
 
 	// Issue #420: the AI dialog used to be openable only from the chat panel, which mounts in
