@@ -97,6 +97,17 @@ describe("useCameraDevices", () => {
 	// settled on the first device. Losing the user's camera at that point is what
 	// made a HUD rebuilt for a new recording revert to a virtual camera that emits
 	// nothing, while the native helper was told to capture it by name.
+	it("clears the live selection when the remembered camera is reset", async () => {
+		const { result, rerender } = renderHook(
+			({ preferred }: { preferred?: string }) => useCameraDevices(true, preferred),
+			{ initialProps: { preferred: "cam2" } },
+		);
+		await waitFor(() => expect(result.current.selectedDeviceId).toBe("cam2"));
+
+		rerender({ preferred: undefined });
+		await waitFor(() => expect(result.current.selectedDeviceId).toBe(""));
+	});
+
 	it("should adopt the restored device when it arrives after enumeration", async () => {
 		const { result, rerender } = renderHook(
 			({ preferred }: { preferred?: string }) => useCameraDevices(true, preferred),

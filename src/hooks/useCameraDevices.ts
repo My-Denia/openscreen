@@ -37,6 +37,7 @@ export function useCameraDevices(
 	const selectedDeviceIdRef = useRef(selectedDeviceId);
 	const preferredDeviceIdRef = useRef(preferredDeviceId);
 	const preferredDeviceNameRef = useRef(preferredDeviceName);
+	const hadPreferenceRef = useRef(false);
 	useEffect(() => {
 		selectedDeviceIdRef.current = selectedDeviceId;
 		preferredDeviceIdRef.current = preferredDeviceId;
@@ -106,6 +107,15 @@ export function useCameraDevices(
 	// on the same camera instead of racing.
 	useEffect(() => {
 		if (!enabled) return;
+		const hasPreference = Boolean(preferredDeviceId || preferredDeviceName);
+		if (!hasPreference) {
+			if (hadPreferenceRef.current) {
+				hadPreferenceRef.current = false;
+				setSelectedDeviceId("");
+			}
+			return;
+		}
+		hadPreferenceRef.current = true;
 		const byId = preferredDeviceId
 			? devices.find((device) => device.deviceId === preferredDeviceId)
 			: undefined;

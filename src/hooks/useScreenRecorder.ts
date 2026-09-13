@@ -254,8 +254,34 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	// made in the editor's Rec-mode stage (a different renderer window) carry
 	// over instead of this hook silently reverting to its own hardcoded
 	// defaults every time startNewRecording() switches to the HUD window.
+	// Reset and later saves arrive on the same channel; applying every field
+	// (including null devices) is what clears a live HUD after reset.
 	useEffect(() => {
 		let cancelled = false;
+		const applyPrefs = (prefs: {
+			micEnabled: boolean;
+			micDeviceId?: string | null;
+			micDeviceName?: string | null;
+			camEnabled: boolean;
+			camDeviceId?: string | null;
+			camDeviceName?: string | null;
+			systemAudioEnabled: boolean;
+			cursorCaptureMode: CursorCaptureMode;
+			autoZoomEnabled?: boolean;
+		}) => {
+			if (cancelled) return;
+			setMicrophoneEnabled(prefs.micEnabled);
+			setMicrophoneDeviceId(prefs.micDeviceId ?? undefined);
+			setMicrophoneDeviceName(prefs.micDeviceName ?? undefined);
+			setWebcamEnabledState(prefs.camEnabled);
+			setWebcamDeviceId(prefs.camDeviceId ?? undefined);
+			setWebcamDeviceName(prefs.camDeviceName ?? undefined);
+			setSystemAudioEnabled(prefs.systemAudioEnabled);
+			setCursorCaptureMode(prefs.cursorCaptureMode);
+			setAutoZoomEnabled(prefs.autoZoomEnabled !== false);
+			setRecordingPrefsLoaded(true);
+		};
+		const stop = window.electronAPI?.onRecordingPrefsChanged?.(applyPrefs);
 		void window.electronAPI
 			?.getRecordingPrefs?.()
 			.then((prefs) => {
@@ -264,21 +290,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					setRecordingPrefsLoaded(true);
 					return;
 				}
-				setMicrophoneEnabled(prefs.micEnabled);
-				if (prefs.micDeviceId) setMicrophoneDeviceId(prefs.micDeviceId);
-				// The name matters as much as the id: the native Windows helper picks
-				// the microphone by NAME, and falls back to the Windows default
-				// endpoint when it is empty. Seeding only the id left an auto-started
-				// recording racing this window's own device enumeration for it, and
-				// losing (getopenscreen/openscreen#404).
-				if (prefs.micDeviceName) setMicrophoneDeviceName(prefs.micDeviceName);
-				setWebcamEnabledState(prefs.camEnabled);
-				if (prefs.camDeviceId) setWebcamDeviceId(prefs.camDeviceId);
-				if (prefs.camDeviceName) setWebcamDeviceName(prefs.camDeviceName);
-				setSystemAudioEnabled(prefs.systemAudioEnabled);
-				setCursorCaptureMode(prefs.cursorCaptureMode);
-				setAutoZoomEnabled(prefs.autoZoomEnabled !== false);
-				setRecordingPrefsLoaded(true);
+				applyPrefs(prefs);
 			})
 			.catch((err) => {
 				// Bare ipcRenderer.invoke — rejects if the main handler throws. Falling
@@ -289,6 +301,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			});
 		return () => {
 			cancelled = true;
+			stop?.();
 		};
 	}, []);
 

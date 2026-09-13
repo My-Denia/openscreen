@@ -93,7 +93,12 @@ import {
 } from "../recording/nativeWindowsCaptureStop";
 import { patchWebmDurationOnDisk } from "../recording/webm-duration";
 import { reindexRecordingOnDisk } from "../recording/webm-seek-index";
-import { describeRecordingSource, resolveRecordingSource } from "../recording-source-settings";
+import {
+	describeRecordingSource,
+	resolveCurrentRecordingSource,
+	resolveRecordingSource,
+	shouldEnumerateRecordingSources,
+} from "../recording-source-settings";
 import { registerNativeBridgeHandlers } from "./nativeBridge";
 import { registerRecordingPrefsHandlers } from "./recordingPrefs";
 import { RecordingStreamRegistry, registerRecordingStreamHandlers } from "./recordingStream";
@@ -1929,9 +1934,7 @@ export function registerIpcHandlers(
 		lastEnumeratedSources = new Map(sources.map((source) => [source.id, source]));
 		const previousSelectedSource = selectedSource;
 		const currentLive = selectedSource?.id
-			? sources.find(
-					(source) => source.id === selectedSource?.id && source.name === selectedSource.name,
-				)
+			? sources.find((source) => source.id === selectedSource?.id)
 			: null;
 		if (currentLive) {
 			selectedSource = {
@@ -2021,6 +2024,18 @@ export function registerIpcHandlers(
 			}
 			return null;
 		}
+		const lastSource = appSettings.getSnapshot().lastSource;
+		const liveSelected =
+			selectedSource?.id != null
+				? {
+						id: selectedSource.id,
+						name: selectedSource.name,
+						display_id: selectedSource.display_id ?? "",
+					}
+				: null;
+		if (!shouldEnumerateRecordingSources(liveSelected, lastSource)) {
+			return selectedSource;
+		}
 		const sources = await withDeadline(
 			desktopCapturer.getSources({
 				types: ["screen", "window"],
@@ -2031,14 +2046,12 @@ export function registerIpcHandlers(
 			`Desktop source restoration did not return within ${GET_SOURCES_TIMEOUT_MS}ms.`,
 		);
 		lastEnumeratedSources = new Map(sources.map((source) => [source.id, source]));
-		const descriptor = selectedSource?.id
-			? describeRecordingSource(process.platform, {
-					id: selectedSource.id,
-					name: selectedSource.name,
-					display_id: selectedSource.display_id ?? "",
-				})
-			: appSettings.getSnapshot().lastSource;
-		const restored = resolveRecordingSource(descriptor, process.platform, sources);
+		const restored = resolveCurrentRecordingSource(
+			liveSelected,
+			lastSource,
+			process.platform,
+			sources,
+		);
 		selectedDesktopSource = restored ? (lastEnumeratedSources.get(restored.id) ?? null) : null;
 		selectedSource = restored
 			? { id: restored.id, name: restored.name, display_id: restored.display_id }

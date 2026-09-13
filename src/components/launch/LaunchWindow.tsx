@@ -4,7 +4,11 @@ import { getAvailableLocales, getLocaleName } from "@/i18n/loader";
 import { loadUserPreferences, saveUserPreferences } from "@/lib/userPreferences";
 import { nativeBridgeClient } from "@/native";
 import { type CameraDevice, useCameraDevices } from "../../hooks/useCameraDevices";
-import { type MicrophoneDevice, useMicrophoneDevices } from "../../hooks/useMicrophoneDevices";
+import {
+	isPlaceholderMicrophoneLabel,
+	type MicrophoneDevice,
+	useMicrophoneDevices,
+} from "../../hooks/useMicrophoneDevices";
 import { usePortalOwnsSource } from "../../hooks/usePortalOwnsSource";
 import { useScreenRecorder } from "../../hooks/useScreenRecorder";
 import { requestCameraAccess } from "../../lib/requestCameraAccess";
@@ -188,7 +192,10 @@ export function LaunchWindow() {
 	useEffect(() => {
 		if (selectedMicId && selectedMicId !== "default") {
 			setMicrophoneDeviceId(selectedMicId);
-			setMicrophoneDeviceName(micDevices.find((d) => d.deviceId === selectedMicId)?.label);
+			const liveLabel = micDevices.find((d) => d.deviceId === selectedMicId)?.label;
+			if (liveLabel && !isPlaceholderMicrophoneLabel(liveLabel, selectedMicId)) {
+				setMicrophoneDeviceName(liveLabel);
+			}
 		} else if (micDevicesReady) {
 			setMicrophoneDeviceId(undefined);
 			setMicrophoneDeviceName(undefined);
@@ -558,28 +565,32 @@ export function LaunchWindow() {
 		cameraDevicesReady,
 		micDevicesReady,
 		microphoneEnabled,
+		webcamEnabled,
 	});
 	deviceReadinessRef.current = {
 		recordingPrefsLoaded,
 		cameraDevicesReady,
 		micDevicesReady,
 		microphoneEnabled,
+		webcamEnabled,
 	};
+	const toggleRecordingRef = useRef(toggleRecording);
+	toggleRecordingRef.current = toggleRecording;
 	const startWhenDevicesReady = useCallback(async () => {
 		for (let attempt = 0; attempt < 100; attempt++) {
 			const ready = deviceReadinessRef.current;
 			if (
 				ready.recordingPrefsLoaded &&
-				ready.cameraDevicesReady &&
+				(!ready.webcamEnabled || ready.cameraDevicesReady) &&
 				(!ready.microphoneEnabled || ready.micDevicesReady)
 			) {
-				toggleRecording();
+				toggleRecordingRef.current();
 				return;
 			}
 			await new Promise((resolve) => setTimeout(resolve, 25));
 		}
 		console.warn("Recording did not start because device preferences could not be resolved.");
-	}, [toggleRecording]);
+	}, []);
 
 	// The main process pushes every change through `onSelectedSourceChanged`, so
 	// this only needs one read to seed the initial value (plus one on focus, in

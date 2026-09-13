@@ -90,13 +90,17 @@ vi.mock("../../hooks/useMicrophoneDevices", () => ({
 	}),
 }));
 
+const cameraDevicesState = vi.hoisted(() => ({
+	isReady: true,
+}));
+
 vi.mock("../../hooks/useCameraDevices", () => ({
 	useCameraDevices: () => ({
 		devices: [],
 		selectedDeviceId: "",
 		setSelectedDeviceId: vi.fn(),
 		isLoading: false,
-		isReady: true,
+		isReady: cameraDevicesState.isReady,
 		error: null,
 	}),
 }));
@@ -302,7 +306,7 @@ function emitSourceSelectorClosed() {
 
 function resetLaunchMocks() {
 	vi.stubGlobal("ResizeObserver", StubResizeObserver);
-	recorderState.value.toggleRecording.mockClear();
+	recorderState.value.toggleRecording = vi.fn();
 	recorderState.value.cursorCaptureMode = "editable-overlay";
 	recorderState.value.autoZoomEnabled = true;
 	recorderState.value.setAutoZoomEnabled.mockClear();
@@ -317,6 +321,8 @@ function resetLaunchMocks() {
 	recorderState.value.setMicrophoneDeviceId.mockClear();
 	recorderState.value.webcamEnabled = false;
 	recorderState.value.setWebcamEnabled.mockClear();
+	recorderState.value.recordingPrefsLoaded = true;
+	cameraDevicesState.isReady = true;
 	micDevicesState.value = [];
 	audioLevelMeter.call.mockClear();
 	hudCursorListeners = [];
@@ -518,6 +524,55 @@ describe("LaunchWindow record button", () => {
 
 		expect(recorderState.value.toggleRecording).toHaveBeenCalledTimes(1);
 		expect(window.electronAPI.openSourceSelector).not.toHaveBeenCalled();
+	});
+
+	it("does not wait for the camera list when the webcam is off", async () => {
+		cameraDevicesState.isReady = false;
+		recorderState.value.webcamEnabled = false;
+		stubElectronAPI(vi.fn(async () => displayOneSource));
+
+		renderLaunchWindow();
+
+		const recordButton = await screen.findByTestId("launch-record-button");
+		await waitFor(() => {
+			expect(recordButton).toHaveAttribute("title", "Display 1");
+		});
+
+		fireEvent.click(recordButton);
+
+		await waitFor(() => {
+			expect(recorderState.value.toggleRecording).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	it("starts with the latest record callback after prefs finish loading", async () => {
+		const firstToggle = vi.fn();
+		const secondToggle = vi.fn();
+		recorderState.value.toggleRecording = firstToggle;
+		recorderState.value.recordingPrefsLoaded = false;
+		stubElectronAPI(vi.fn(async () => displayOneSource));
+
+		const view = renderLaunchWindow();
+		const recordButton = await screen.findByTestId("launch-record-button");
+		await waitFor(() => {
+			expect(recordButton).toHaveAttribute("title", "Display 1");
+		});
+
+		fireEvent.click(recordButton);
+		expect(firstToggle).not.toHaveBeenCalled();
+
+		recorderState.value.toggleRecording = secondToggle;
+		recorderState.value.recordingPrefsLoaded = true;
+		view.rerender(
+			<TooltipProvider>
+				<LaunchWindow />
+			</TooltipProvider>,
+		);
+
+		await waitFor(() => {
+			expect(secondToggle).toHaveBeenCalledTimes(1);
+		});
+		expect(firstToggle).not.toHaveBeenCalled();
 	});
 
 	// The #385 regression, and #266 before it. A HUD that has gone click-through

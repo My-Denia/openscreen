@@ -6,6 +6,10 @@ export interface MicrophoneDevice {
 	groupId: string;
 }
 
+export function isPlaceholderMicrophoneLabel(label: string, deviceId: string): boolean {
+	return label === `Microphone ${deviceId.slice(0, 8)}`;
+}
+
 function microphoneDevices(devices: readonly MediaDeviceInfo[]): MicrophoneDevice[] {
 	return devices
 		.filter((device) => device.kind === "audioinput")
@@ -58,6 +62,7 @@ export function useMicrophoneDevices(
 	const selectedDeviceIdRef = useRef(selectedDeviceId);
 	const preferredDeviceIdRef = useRef(preferredDeviceId);
 	const preferredDeviceNameRef = useRef(preferredDeviceName);
+	const hadPreferenceRef = useRef(false);
 	useEffect(() => {
 		selectedDeviceIdRef.current = selectedDeviceId;
 		preferredDeviceIdRef.current = preferredDeviceId;
@@ -143,6 +148,15 @@ export function useMicrophoneDevices(
 
 	useEffect(() => {
 		if (!enabled) return;
+		const hasPreference = Boolean(preferredDeviceId || preferredDeviceName);
+		if (!hasPreference) {
+			if (hadPreferenceRef.current) {
+				hadPreferenceRef.current = false;
+				setSelectedDeviceId("default");
+			}
+			return;
+		}
+		hadPreferenceRef.current = true;
 		const preferred = resolvePreferredDevice(devices, preferredDeviceId, preferredDeviceName);
 		if (!preferred || preferred.deviceId === selectedDeviceId) return;
 		setSelectedDeviceId(preferred.deviceId);

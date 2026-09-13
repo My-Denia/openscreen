@@ -19,6 +19,39 @@ export function describeRecordingSource(
 	};
 }
 
+/** True when restoration or liveness checking has a source to look up. */
+export function shouldEnumerateRecordingSources(
+	selected: LiveRecordingSource | null | undefined,
+	lastSource: RecordingSourceDescriptor | null | undefined,
+): boolean {
+	return Boolean(selected?.id || lastSource);
+}
+
+/**
+ * In-memory selections stay bound to the live id: a browser tab or document title
+ * can change without the window going away. Disk restore stays strict.
+ */
+export function resolveLiveRecordingSource(
+	selected: LiveRecordingSource,
+	sources: readonly LiveRecordingSource[],
+): LiveRecordingSource | null {
+	const exact = sources.filter((source) => source.id === selected.id);
+	return exact.length === 1 ? exact[0] : null;
+}
+
+export function resolveCurrentRecordingSource(
+	selected: LiveRecordingSource | null | undefined,
+	lastSource: RecordingSourceDescriptor | null | undefined,
+	platform: NodeJS.Platform,
+	sources: readonly LiveRecordingSource[],
+	options: { waylandPortal?: boolean } = {},
+): LiveRecordingSource | null {
+	if (selected?.id) {
+		return resolveLiveRecordingSource(selected, sources);
+	}
+	return resolveRecordingSource(lastSource ?? null, platform, sources, options);
+}
+
 /** Resolves a stored logical descriptor only to an item from a fresh enumeration. */
 export function resolveRecordingSource(
 	descriptor: RecordingSourceDescriptor | null,

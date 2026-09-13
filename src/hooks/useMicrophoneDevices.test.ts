@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useMicrophoneDevices } from "./useMicrophoneDevices";
+import { isPlaceholderMicrophoneLabel, useMicrophoneDevices } from "./useMicrophoneDevices";
 
 const DEVICES = [
 	{ kind: "audioinput", deviceId: "mic-a", label: "Realtek Array Microphone", groupId: "g1" },
@@ -25,6 +25,11 @@ Object.defineProperty(global.navigator, "mediaDevices", {
 });
 
 describe("useMicrophoneDevices", () => {
+	it("recognizes the synthetic label used when permission hid the real name", () => {
+		expect(isPlaceholderMicrophoneLabel("Microphone mic-hidd", "mic-hidden")).toBe(true);
+		expect(isPlaceholderMicrophoneLabel("Realtek Array Microphone", "mic-a")).toBe(false);
+	});
+
 	beforeEach(() => {
 		vi.clearAllMocks();
 		enumerateDevices.mockResolvedValue(DEVICES);
@@ -35,6 +40,18 @@ describe("useMicrophoneDevices", () => {
 		const { result } = renderHook(() => useMicrophoneDevices(true));
 		await waitFor(() => expect(result.current.selectedDeviceId).toBe("mic-a"));
 		expect(getUserMedia).not.toHaveBeenCalled();
+	});
+
+	it("clears the live selection when the remembered microphone is reset", async () => {
+		const { result, rerender } = renderHook(
+			({ preferredId, preferredName }: { preferredId?: string; preferredName?: string }) =>
+				useMicrophoneDevices(true, preferredId, preferredName),
+			{ initialProps: { preferredId: "mic-b", preferredName: "Microphone (Logitech PRO X)" } },
+		);
+		await waitFor(() => expect(result.current.selectedDeviceId).toBe("mic-b"));
+
+		rerender({ preferredId: undefined, preferredName: undefined });
+		await waitFor(() => expect(result.current.selectedDeviceId).toBe("default"));
 	});
 
 	it("prefers the remembered microphone over the first input", async () => {
