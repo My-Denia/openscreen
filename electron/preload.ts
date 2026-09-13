@@ -117,8 +117,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	openNotes: () => {
 		return ipcRenderer.invoke("open-notes");
 	},
-	selectSource: (source: ProcessedDesktopSource) => {
-		return ipcRenderer.invoke("select-source", source);
+	selectSource: (source: ProcessedDesktopSource, options?: { persist?: boolean }) => {
+		return ipcRenderer.invoke("select-source", source, options);
 	},
 	getSelectedSource: () => {
 		return ipcRenderer.invoke("get-selected-source");

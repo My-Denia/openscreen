@@ -51,7 +51,10 @@ interface Window {
 			opened: boolean;
 			reason?: string;
 		}>;
-		selectSource: (source: ProcessedDesktopSource) => Promise<ProcessedDesktopSource | null>;
+		selectSource: (
+			source: ProcessedDesktopSource,
+			options?: { persist?: boolean },
+		) => Promise<ProcessedDesktopSource | null>;
 		getSelectedSource: () => Promise<ProcessedDesktopSource | null>;
 		onSelectedSourceChanged: (
 			callback: (source: ProcessedDesktopSource | null) => void,

@@ -43,14 +43,15 @@ describe("useMicrophoneDevices", () => {
 	});
 
 	it("clears the live selection when the remembered microphone is reset", async () => {
-		const { result, rerender } = renderHook(
-			({ preferredId, preferredName }: { preferredId?: string; preferredName?: string }) =>
-				useMicrophoneDevices(true, preferredId, preferredName),
-			{ initialProps: { preferredId: "mic-b", preferredName: "Microphone (Logitech PRO X)" } },
-		);
+		const { result, rerender } = renderHook<
+			ReturnType<typeof useMicrophoneDevices>,
+			{ preferredId?: string; preferredName?: string }
+		>(({ preferredId, preferredName }) => useMicrophoneDevices(true, preferredId, preferredName), {
+			initialProps: { preferredId: "mic-b", preferredName: "Microphone (Logitech PRO X)" },
+		});
 		await waitFor(() => expect(result.current.selectedDeviceId).toBe("mic-b"));
 
-		rerender({ preferredId: undefined, preferredName: undefined });
+		rerender({});
 		await waitFor(() => expect(result.current.selectedDeviceId).toBe("default"));
 	});
 

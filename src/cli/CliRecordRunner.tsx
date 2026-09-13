@@ -163,7 +163,7 @@ export function CliRecordRunner() {
 				requestRef.current = request;
 
 				const source = await pickSource(request);
-				await window.electronAPI.selectSource(source);
+				await window.electronAPI.selectSource(source, { persist: false });
 				window.electronAPI.cliLog("info", `Recording source: ${source.name}`);
 
 				setMicrophoneEnabled(Boolean(request.mic));

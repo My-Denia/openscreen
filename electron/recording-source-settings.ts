@@ -19,6 +19,11 @@ export function describeRecordingSource(
 	};
 }
 
+/** HUD/RecStage persist the pick; CLI capture must not overwrite that default. */
+export function shouldPersistSelectedSource(options?: { persist?: boolean }): boolean {
+	return options?.persist !== false;
+}
+
 /** True when restoration or liveness checking has a source to look up. */
 export function shouldEnumerateRecordingSources(
 	selected: LiveRecordingSource | null | undefined,

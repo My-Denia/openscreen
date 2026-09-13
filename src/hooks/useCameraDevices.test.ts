@@ -98,13 +98,15 @@ describe("useCameraDevices", () => {
 	// made a HUD rebuilt for a new recording revert to a virtual camera that emits
 	// nothing, while the native helper was told to capture it by name.
 	it("clears the live selection when the remembered camera is reset", async () => {
-		const { result, rerender } = renderHook(
-			({ preferred }: { preferred?: string }) => useCameraDevices(true, preferred),
-			{ initialProps: { preferred: "cam2" } },
-		);
+		const { result, rerender } = renderHook<
+			ReturnType<typeof useCameraDevices>,
+			{ preferred?: string }
+		>(({ preferred }) => useCameraDevices(true, preferred), {
+			initialProps: { preferred: "cam2" },
+		});
 		await waitFor(() => expect(result.current.selectedDeviceId).toBe("cam2"));
 
-		rerender({ preferred: undefined });
+		rerender({});
 		await waitFor(() => expect(result.current.selectedDeviceId).toBe(""));
 	});
 

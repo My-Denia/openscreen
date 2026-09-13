@@ -4,6 +4,7 @@ import {
 	resolveCurrentRecordingSource,
 	resolveRecordingSource,
 	shouldEnumerateRecordingSources,
+	shouldPersistSelectedSource,
 } from "./recording-source-settings";
 
 const display = { id: "screen:1:0", name: "Display 1", display_id: "stable-1" };
@@ -52,6 +53,12 @@ describe("recording source settings", () => {
 		expect(
 			resolveRecordingSource(describeRecordingSource("win32", selected), "win32", [renamed]),
 		).toBeNull();
+	});
+
+	it("persists interactive source picks and skips CLI ones", () => {
+		expect(shouldPersistSelectedSource()).toBe(true);
+		expect(shouldPersistSelectedSource({ persist: true })).toBe(true);
+		expect(shouldPersistSelectedSource({ persist: false })).toBe(false);
 	});
 
 	it("enumerates only when a live or persisted source exists", () => {

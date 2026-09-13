@@ -98,6 +98,7 @@ import {
 	resolveCurrentRecordingSource,
 	resolveRecordingSource,
 	shouldEnumerateRecordingSources,
+	shouldPersistSelectedSource,
 } from "../recording-source-settings";
 import { registerNativeBridgeHandlers } from "./nativeBridge";
 import { registerRecordingPrefsHandlers } from "./recordingPrefs";
@@ -1973,46 +1974,51 @@ export function registerIpcHandlers(
 		}));
 	});
 
-	ipcMain.handle("select-source", async (_, source: SelectedSource) => {
-		// Reuse the exact source object returned during enumeration to avoid
-		// Windows window-source id mismatches across separate getSources() calls.
-		selectedDesktopSource =
-			typeof source.id === "string" ? (lastEnumeratedSources.get(source.id) ?? null) : null;
+	ipcMain.handle(
+		"select-source",
+		async (_, source: SelectedSource, options?: { persist?: boolean }) => {
+			// Reuse the exact source object returned during enumeration to avoid
+			// Windows window-source id mismatches across separate getSources() calls.
+			selectedDesktopSource =
+				typeof source.id === "string" ? (lastEnumeratedSources.get(source.id) ?? null) : null;
 
-		if (!selectedDesktopSource && typeof source.id === "string") {
-			try {
-				const sources = await desktopCapturer.getSources({
-					types: ["screen", "window"],
-					thumbnailSize: { width: 0, height: 0 },
-					fetchWindowIcons: true,
-				});
-				lastEnumeratedSources = new Map(sources.map((candidate) => [candidate.id, candidate]));
-				selectedDesktopSource = lastEnumeratedSources.get(source.id) ?? null;
-			} catch {
-				selectedDesktopSource = null;
+			if (!selectedDesktopSource && typeof source.id === "string") {
+				try {
+					const sources = await desktopCapturer.getSources({
+						types: ["screen", "window"],
+						thumbnailSize: { width: 0, height: 0 },
+						fetchWindowIcons: true,
+					});
+					lastEnumeratedSources = new Map(sources.map((candidate) => [candidate.id, candidate]));
+					selectedDesktopSource = lastEnumeratedSources.get(source.id) ?? null;
+				} catch {
+					selectedDesktopSource = null;
+				}
 			}
-		}
-		if (!selectedDesktopSource) {
-			selectedSource = null;
-			broadcastSelectedSource(null);
-			return null;
-		}
-		selectedSource = {
-			id: selectedDesktopSource.id,
-			name: selectedDesktopSource.name,
-			display_id: selectedDesktopSource.display_id,
-		};
-		// Persist only a descriptor built from the freshly enumerated live object.
-		appSettings.setLastSource(
-			describeRecordingSource(process.platform, selectedSource as Required<SelectedSource>),
-		);
-		broadcastSelectedSource(selectedSource);
-		const sourceSelectorWin = getSourceSelectorWindow();
-		if (sourceSelectorWin) {
-			sourceSelectorWin.close();
-		}
-		return selectedSource;
-	});
+			if (!selectedDesktopSource) {
+				selectedSource = null;
+				broadcastSelectedSource(null);
+				return null;
+			}
+			selectedSource = {
+				id: selectedDesktopSource.id,
+				name: selectedDesktopSource.name,
+				display_id: selectedDesktopSource.display_id,
+			};
+			// Persist only a descriptor built from the freshly enumerated live object.
+			if (shouldPersistSelectedSource(options)) {
+				appSettings.setLastSource(
+					describeRecordingSource(process.platform, selectedSource as Required<SelectedSource>),
+				);
+			}
+			broadcastSelectedSource(selectedSource);
+			const sourceSelectorWin = getSourceSelectorWindow();
+			if (sourceSelectorWin) {
+				sourceSelectorWin.close();
+			}
+			return selectedSource;
+		},
+	);
 
 	ipcMain.handle("get-selected-source", async () => {
 		const previousSelectedSource = selectedSource;
