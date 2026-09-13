@@ -110,6 +110,7 @@ type UseScreenRecorderReturn = {
 	setAutoZoomEnabled: (enabled: boolean) => void;
 	softwareEncoderFallbackNoticeVisible: boolean;
 	dismissSoftwareEncoderFallbackNotice: (dontShowAgain?: boolean) => void;
+	recordingPrefsLoaded: boolean;
 };
 
 type NativeWindowsRecordingHandle = {
@@ -160,6 +161,17 @@ type NativeLinuxRecordingHandle = {
  * video in the camera's place. Rounding loses nothing: one frame at 60 fps is
  * 16.7 ms.
  */
+export function isRecoverableWebcamConstraintError(
+	error: unknown,
+	savedDeviceName?: string,
+): boolean {
+	if (!savedDeviceName) return false;
+	return (
+		error instanceof DOMException &&
+		["OverconstrainedError", "NotFoundError", "DevicesNotFoundError"].includes(error.name)
+	);
+}
+
 export function webcamOffsetMsFrom(
 	webcamRecorder: RecorderHandle | null,
 	webcamStartedAtMs: number | null,
@@ -247,39 +259,60 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const [autoZoomEnabled, setAutoZoomEnabled] = useState(true);
 	const [softwareEncoderFallbackNoticeVisible, setSoftwareEncoderFallbackNoticeVisible] =
 		useState(false);
+	const [recordingPrefsLoaded, setRecordingPrefsLoaded] = useState(false);
 
 	// Seed from the main-process recording-prefs SSOT on mount, so choices
 	// made in the editor's Rec-mode stage (a different renderer window) carry
 	// over instead of this hook silently reverting to its own hardcoded
 	// defaults every time startNewRecording() switches to the HUD window.
+	// Reset and later saves arrive on the same channel; applying every field
+	// (including null devices) is what clears a live HUD after reset.
 	useEffect(() => {
 		let cancelled = false;
+		const applyPrefs = (prefs: {
+			micEnabled: boolean;
+			micDeviceId?: string | null;
+			micDeviceName?: string | null;
+			camEnabled: boolean;
+			camDeviceId?: string | null;
+			camDeviceName?: string | null;
+			systemAudioEnabled: boolean;
+			cursorCaptureMode: CursorCaptureMode;
+			autoZoomEnabled?: boolean;
+		}) => {
+			if (cancelled) return;
+			setMicrophoneEnabled(prefs.micEnabled);
+			setMicrophoneDeviceId(prefs.micDeviceId ?? undefined);
+			setMicrophoneDeviceName(prefs.micDeviceName ?? undefined);
+			setWebcamEnabledState(prefs.camEnabled);
+			setWebcamDeviceId(prefs.camDeviceId ?? undefined);
+			setWebcamDeviceName(prefs.camDeviceName ?? undefined);
+			setSystemAudioEnabled(prefs.systemAudioEnabled);
+			setCursorCaptureMode(prefs.cursorCaptureMode);
+			setAutoZoomEnabled(prefs.autoZoomEnabled !== false);
+			setRecordingPrefsLoaded(true);
+		};
+		const stop = window.electronAPI?.onRecordingPrefsChanged?.(applyPrefs);
 		void window.electronAPI
 			?.getRecordingPrefs?.()
 			.then((prefs) => {
-				if (cancelled || !prefs) return;
-				setMicrophoneEnabled(prefs.micEnabled);
-				if (prefs.micDeviceId) setMicrophoneDeviceId(prefs.micDeviceId);
-				// The name matters as much as the id: the native Windows helper picks
-				// the microphone by NAME, and falls back to the Windows default
-				// endpoint when it is empty. Seeding only the id left an auto-started
-				// recording racing this window's own device enumeration for it, and
-				// losing (getopenscreen/openscreen#404).
-				if (prefs.micDeviceName) setMicrophoneDeviceName(prefs.micDeviceName);
-				setWebcamEnabledState(prefs.camEnabled);
-				if (prefs.camDeviceId) setWebcamDeviceId(prefs.camDeviceId);
-				setSystemAudioEnabled(prefs.systemAudioEnabled);
-				setCursorCaptureMode(prefs.cursorCaptureMode);
-				setAutoZoomEnabled(prefs.autoZoomEnabled !== false);
+				if (cancelled) return;
+				if (!prefs) {
+					setRecordingPrefsLoaded(true);
+					return;
+				}
+				applyPrefs(prefs);
 			})
 			.catch((err) => {
 				// Bare ipcRenderer.invoke — rejects if the main handler throws. Falling
 				// back to this hook's own defaults is acceptable; an unhandled rejection
 				// on every HUD mount is not.
 				console.warn("Failed to seed the recording prefs:", err);
+				if (!cancelled) setRecordingPrefsLoaded(true);
 			});
 		return () => {
 			cancelled = true;
+			stop?.();
 		};
 	}, []);
 
@@ -464,6 +497,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				webcamStream.current = stream;
 				webcamReady.current = true;
 			} catch (cameraError) {
+				if (isRecoverableWebcamConstraintError(cameraError, webcamDeviceName)) {
+					console.warn("Waiting to resolve the restored camera identity:", cameraError);
+					return;
+				}
 				if (!cancelled) {
 					console.warn("Failed to get webcam access:", cameraError);
 					setWebcamEnabledState(false);
@@ -494,7 +531,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				webcamStream.current = null;
 			}
 		};
-	}, [webcamEnabled, webcamDeviceId, t]);
+	}, [webcamEnabled, webcamDeviceId, webcamDeviceName, t]);
 
 	const finalizeRecording = useCallback(
 		(
@@ -2358,5 +2395,6 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		setAutoZoomEnabled,
 		softwareEncoderFallbackNoticeVisible,
 		dismissSoftwareEncoderFallbackNotice,
+		recordingPrefsLoaded,
 	};
 }

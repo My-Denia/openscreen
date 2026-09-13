@@ -65,6 +65,7 @@ const recorderState = vi.hoisted(() => ({
 		setAutoZoomEnabled: vi.fn(),
 		softwareEncoderFallbackNoticeVisible: false,
 		dismissSoftwareEncoderFallbackNotice: vi.fn(),
+		recordingPrefsLoaded: true,
 	},
 }));
 
@@ -85,7 +86,12 @@ vi.mock("../../hooks/useMicrophoneDevices", () => ({
 		devices: micDevicesState.value,
 		selectedDeviceId: "default",
 		setSelectedDeviceId: vi.fn(),
+		isReady: true,
 	}),
+}));
+
+const cameraDevicesState = vi.hoisted(() => ({
+	isReady: true,
 }));
 
 vi.mock("../../hooks/useCameraDevices", () => ({
@@ -94,12 +100,17 @@ vi.mock("../../hooks/useCameraDevices", () => ({
 		selectedDeviceId: "",
 		setSelectedDeviceId: vi.fn(),
 		isLoading: false,
+		isReady: cameraDevicesState.isReady,
 		error: null,
 	}),
 }));
 
+const audioLevelMeter = vi.hoisted(() => ({ call: vi.fn() }));
 vi.mock("../../hooks/useAudioLevelMeter", () => ({
-	useAudioLevelMeter: () => ({ level: 0 }),
+	useAudioLevelMeter: (options: unknown) => {
+		audioLevelMeter.call(options);
+		return { level: 0 };
+	},
 }));
 
 vi.mock("../../hooks/useCameraPreviewStream", () => ({
@@ -295,10 +306,12 @@ function emitSourceSelectorClosed() {
 
 function resetLaunchMocks() {
 	vi.stubGlobal("ResizeObserver", StubResizeObserver);
-	recorderState.value.toggleRecording.mockClear();
+	recorderState.value.toggleRecording = vi.fn();
 	recorderState.value.cursorCaptureMode = "editable-overlay";
 	recorderState.value.autoZoomEnabled = true;
 	recorderState.value.setAutoZoomEnabled.mockClear();
+	recorderState.value.systemAudioEnabled = false;
+	recorderState.value.setSystemAudioEnabled.mockClear();
 	recorderState.value.setCursorCaptureMode.mockClear();
 	recorderState.value.softwareEncoderFallbackNoticeVisible = false;
 	recorderState.value.dismissSoftwareEncoderFallbackNotice.mockClear();
@@ -308,7 +321,10 @@ function resetLaunchMocks() {
 	recorderState.value.setMicrophoneDeviceId.mockClear();
 	recorderState.value.webcamEnabled = false;
 	recorderState.value.setWebcamEnabled.mockClear();
+	recorderState.value.recordingPrefsLoaded = true;
+	cameraDevicesState.isReady = true;
 	micDevicesState.value = [];
+	audioLevelMeter.call.mockClear();
 	hudCursorListeners = [];
 	selectedSourceChangedListeners = [];
 	sourceSelectorClosedListeners = [];
@@ -508,6 +524,55 @@ describe("LaunchWindow record button", () => {
 
 		expect(recorderState.value.toggleRecording).toHaveBeenCalledTimes(1);
 		expect(window.electronAPI.openSourceSelector).not.toHaveBeenCalled();
+	});
+
+	it("does not wait for the camera list when the webcam is off", async () => {
+		cameraDevicesState.isReady = false;
+		recorderState.value.webcamEnabled = false;
+		stubElectronAPI(vi.fn(async () => displayOneSource));
+
+		renderLaunchWindow();
+
+		const recordButton = await screen.findByTestId("launch-record-button");
+		await waitFor(() => {
+			expect(recordButton).toHaveAttribute("title", "Display 1");
+		});
+
+		fireEvent.click(recordButton);
+
+		await waitFor(() => {
+			expect(recorderState.value.toggleRecording).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	it("starts with the latest record callback after prefs finish loading", async () => {
+		const firstToggle = vi.fn();
+		const secondToggle = vi.fn();
+		recorderState.value.toggleRecording = firstToggle;
+		recorderState.value.recordingPrefsLoaded = false;
+		stubElectronAPI(vi.fn(async () => displayOneSource));
+
+		const view = renderLaunchWindow();
+		const recordButton = await screen.findByTestId("launch-record-button");
+		await waitFor(() => {
+			expect(recordButton).toHaveAttribute("title", "Display 1");
+		});
+
+		fireEvent.click(recordButton);
+		expect(firstToggle).not.toHaveBeenCalled();
+
+		recorderState.value.toggleRecording = secondToggle;
+		recorderState.value.recordingPrefsLoaded = true;
+		view.rerender(
+			<TooltipProvider>
+				<LaunchWindow />
+			</TooltipProvider>,
+		);
+
+		await waitFor(() => {
+			expect(secondToggle).toHaveBeenCalledTimes(1);
+		});
+		expect(firstToggle).not.toHaveBeenCalled();
 	});
 
 	// The #385 regression, and #266 before it. A HUD that has gone click-through
@@ -1053,6 +1118,109 @@ describe("LaunchWindow device buttons", () => {
 		expect(recorderState.value.setMicrophoneEnabled).toHaveBeenCalledWith(false);
 	});
 
+	it("persists turning system audio on", async () => {
+		renderLaunchWindow();
+
+		fireEvent.click(await screen.findByTestId("launch-system-audio-button"));
+
+		expect(recorderState.value.setSystemAudioEnabled).toHaveBeenCalledWith(true);
+		expect(window.electronAPI.setRecordingPrefs).toHaveBeenCalledWith({ systemAudioEnabled: true });
+	});
+
+	it("persists turning system audio off", async () => {
+		recorderState.value.systemAudioEnabled = true;
+
+		renderLaunchWindow();
+
+		fireEvent.click(await screen.findByTestId("launch-system-audio-button"));
+
+		expect(recorderState.value.setSystemAudioEnabled).toHaveBeenCalledWith(false);
+		expect(window.electronAPI.setRecordingPrefs).toHaveBeenCalledWith({
+			systemAudioEnabled: false,
+		});
+	});
+
+	it("persists turning the microphone on", async () => {
+		renderLaunchWindow();
+
+		fireEvent.click(await screen.findByTestId("launch-microphone-button"));
+
+		expect(recorderState.value.setMicrophoneEnabled).toHaveBeenCalledWith(true);
+		expect(window.electronAPI.setRecordingPrefs).toHaveBeenCalledWith({ micEnabled: true });
+	});
+
+	it("persists turning the microphone off", async () => {
+		recorderState.value.microphoneEnabled = true;
+
+		renderLaunchWindow();
+
+		fireEvent.click(await screen.findByTestId("launch-microphone-button"));
+
+		expect(recorderState.value.setMicrophoneEnabled).toHaveBeenCalledWith(false);
+		expect(window.electronAPI.setRecordingPrefs).toHaveBeenCalledWith({ micEnabled: false });
+	});
+
+	it("persists switching to the system cursor", async () => {
+		renderLaunchWindow();
+
+		fireEvent.click(await screen.findByTestId("launch-cursor-mode-button"));
+
+		expect(recorderState.value.setCursorCaptureMode).toHaveBeenCalledWith("system");
+		expect(window.electronAPI.setRecordingPrefs).toHaveBeenCalledWith({
+			cursorCaptureMode: "system",
+		});
+	});
+
+	it("persists switching to the editable cursor", async () => {
+		recorderState.value.cursorCaptureMode = "system";
+
+		renderLaunchWindow();
+
+		fireEvent.click(await screen.findByTestId("launch-cursor-mode-button"));
+
+		expect(recorderState.value.setCursorCaptureMode).toHaveBeenCalledWith("editable-overlay");
+		expect(window.electronAPI.setRecordingPrefs).toHaveBeenCalledWith({
+			cursorCaptureMode: "editable-overlay",
+		});
+	});
+
+	it("does not mutate toggles or preferences while recording", async () => {
+		recorderState.value.recording = true;
+		renderLaunchWindow();
+
+		const systemAudioButton = await screen.findByTestId("launch-system-audio-button");
+		const microphoneButton = await screen.findByTestId("launch-microphone-button");
+		const cursorButton = await screen.findByTestId("launch-cursor-mode-button");
+
+		expect(systemAudioButton).toBeDisabled();
+		expect(microphoneButton).toBeDisabled();
+		expect(cursorButton).toBeDisabled();
+		fireEvent.click(systemAudioButton);
+		fireEvent.click(microphoneButton);
+		fireEvent.click(cursorButton);
+
+		expect(recorderState.value.setSystemAudioEnabled).not.toHaveBeenCalled();
+		expect(recorderState.value.setMicrophoneEnabled).not.toHaveBeenCalled();
+		expect(recorderState.value.setCursorCaptureMode).not.toHaveBeenCalled();
+		expect(window.electronAPI.setRecordingPrefs).not.toHaveBeenCalled();
+	});
+
+	it("keeps a local toggle change when preference persistence fails", async () => {
+		const error = new Error("preference store unavailable");
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		vi.mocked(window.electronAPI.setRecordingPrefs).mockRejectedValue(error);
+
+		renderLaunchWindow();
+		fireEvent.click(await screen.findByTestId("launch-system-audio-button"));
+
+		expect(recorderState.value.setSystemAudioEnabled).toHaveBeenCalledWith(true);
+		await waitFor(() => {
+			expect(warnSpy).toHaveBeenCalledWith("Failed to persist the device preference:", error);
+		});
+
+		warnSpy.mockRestore();
+	});
+
 	it("turns the camera on with a single click, without opening anything", async () => {
 		renderLaunchWindow();
 
@@ -1119,6 +1287,17 @@ describe("LaunchWindow device settings", () => {
 		// whole reason the picker moved out of the mic button.
 		expect(recorderState.value.setMicrophoneDeviceId).toHaveBeenCalledWith("mic-b");
 		expect(recorderState.value.setMicrophoneEnabled).not.toHaveBeenCalled();
+	});
+
+	it("uses an unconstrained meter request for the default microphone pseudo-device", async () => {
+		micDevicesState.value = [{ deviceId: "default", label: "System default", groupId: "g" }];
+		renderLaunchWindow();
+		fireEvent.click(await screen.findByTestId("launch-device-settings-button"));
+		await screen.findByTestId("hud-device-settings");
+		expect(audioLevelMeter.call).toHaveBeenLastCalledWith({
+			enabled: true,
+			deviceId: undefined,
+		});
 	});
 
 	// The gear is disabled while recording, but a panel that was already open stays mounted —

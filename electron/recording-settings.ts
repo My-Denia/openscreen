@@ -1,38 +1,22 @@
-import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import path from "node:path";
+import { AppSettingsStore, type RecordingPreferences } from "./app-settings";
 
-function readSettings(userData: string): Record<string, unknown> {
-	try {
-		const value: unknown = JSON.parse(
-			readFileSync(path.join(userData, "recording-settings.json"), "utf8"),
-		);
-		return value !== null && typeof value === "object" && !Array.isArray(value)
-			? (value as Record<string, unknown>)
-			: {};
-	} catch {
-		return {};
-	}
-}
-
-/** Default on for new users; a saved false must survive an app restart. */
+/** Back-compatible auto-zoom reader used by existing callers and tests. */
 export function loadAutoZoomEnabled(userData: string): boolean {
-	const value = readSettings(userData).autoZoomEnabled;
-	return typeof value === "boolean" ? value : true;
+	return new AppSettingsStore(userData).getSnapshot().recording.autoZoomEnabled;
 }
 
-/** Save only this durable preference; device selection remains session-only. */
+/** Back-compatible auto-zoom writer; the canonical store owns every recording preference. */
 export function saveAutoZoomEnabled(userData: string, enabled: boolean): void {
-	if (typeof enabled !== "boolean") throw new TypeError("autoZoomEnabled must be a boolean");
-	const destination = path.join(userData, "recording-settings.json");
-	const temporary = `${destination}.${process.pid}.tmp`;
-	try {
-		writeFileSync(
-			temporary,
-			`${JSON.stringify({ ...readSettings(userData), autoZoomEnabled: enabled })}\n`,
-			"utf8",
-		);
-		renameSync(temporary, destination);
-	} finally {
-		rmSync(temporary, { force: true });
-	}
+	new AppSettingsStore(userData).setRecordingPreferences({ autoZoomEnabled: enabled });
+}
+
+export function loadRecordingPreferences(userData: string): RecordingPreferences {
+	return new AppSettingsStore(userData).getSnapshot().recording;
+}
+
+export function saveRecordingPreferences(
+	userData: string,
+	patch: Partial<RecordingPreferences>,
+): RecordingPreferences {
+	return new AppSettingsStore(userData).setRecordingPreferences(patch).recording;
 }

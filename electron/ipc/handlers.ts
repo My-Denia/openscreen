@@ -56,6 +56,7 @@ import {
 import type { CursorTelemetryReader } from "../ai-edition/deep-agent/service";
 import { DocumentService } from "../ai-edition/document-service";
 import { LlmConfigStore } from "../ai-edition/llm-config-store";
+import { AppSettingsStore } from "../app-settings";
 import { isDiagnosticModeEnabled, mainLogBuffer } from "../diagnostics/main-log-buffer";
 import { mainT } from "../i18n";
 import { getInstallChannel } from "../install-channel";
@@ -92,6 +93,13 @@ import {
 } from "../recording/nativeWindowsCaptureStop";
 import { patchWebmDurationOnDisk } from "../recording/webm-duration";
 import { reindexRecordingOnDisk } from "../recording/webm-seek-index";
+import {
+	describeRecordingSource,
+	resolveRecordingSource,
+	restoreRecordingSourceAfterEnumeration,
+	shouldEnumerateRecordingSources,
+	shouldPersistSelectedSource,
+} from "../recording-source-settings";
 import { registerNativeBridgeHandlers } from "./nativeBridge";
 import { registerRecordingPrefsHandlers } from "./recordingPrefs";
 import { RecordingStreamRegistry, registerRecordingStreamHandlers } from "./recordingStream";
@@ -607,6 +615,8 @@ export interface RecordingPrefs {
 	micDeviceName: string | null;
 	camEnabled: boolean;
 	camDeviceId: string | null;
+	/** Camera label paired with the preferred id for restart-safe resolution. */
+	camDeviceName: string | null;
 	systemAudioEnabled: boolean;
 	cursorCaptureMode: CursorCaptureMode;
 	/** After a take, suggest cursor-dwell zooms. Default on, matching 1.5. */
@@ -618,6 +628,7 @@ const defaultRecordingPrefs: RecordingPrefs = {
 	micDeviceName: null,
 	camEnabled: false,
 	camDeviceId: null,
+	camDeviceName: null,
 	systemAudioEnabled: false,
 	cursorCaptureMode: "editable-overlay",
 	autoZoomEnabled: true,
@@ -1830,6 +1841,17 @@ export function registerIpcHandlers(
 	onRecordingStateChange?: (recording: boolean, sourceName: string) => void,
 	_switchToHud?: () => void,
 ) {
+	const appSettings = new AppSettingsStore(app.getPath("userData"));
+	const broadcastSelectedSource = (source: SelectedSource | null) => {
+		for (const window of BrowserWindow.getAllWindows()) {
+			if (!window.isDestroyed()) {
+				window.webContents.send("selected-source-changed", source);
+			}
+		}
+	};
+	const sameSelectedSource = (left: SelectedSource | null, right: SelectedSource | null) =>
+		left?.id === right?.id && left?.name === right?.name && left?.display_id === right?.display_id;
+
 	async function requestScreenAccess() {
 		if (process.platform !== "darwin") {
 			return { success: true, granted: true, status: "granted" };
@@ -1911,6 +1933,38 @@ export function registerIpcHandlers(
 			);
 		}
 		lastEnumeratedSources = new Map(sources.map((source) => [source.id, source]));
+		const previousSelectedSource = selectedSource;
+		const currentLive = selectedSource?.id
+			? sources.find((source) => source.id === selectedSource?.id)
+			: null;
+		if (currentLive) {
+			selectedSource = {
+				id: currentLive.id,
+				name: currentLive.name,
+				display_id: currentLive.display_id,
+			};
+			selectedDesktopSource = currentLive;
+		} else {
+			selectedSource = null;
+			selectedDesktopSource = null;
+			const restored = resolveRecordingSource(
+				appSettings.getSnapshot().lastSource,
+				process.platform,
+				sources,
+				{ waylandPortal: process.platform === "linux" && Boolean(findPipeWireCursorHelperPath()) },
+			);
+			if (restored) {
+				selectedSource = {
+					id: restored.id,
+					name: restored.name,
+					display_id: restored.display_id,
+				};
+				selectedDesktopSource = lastEnumeratedSources.get(restored.id) ?? null;
+			}
+		}
+		if (!sameSelectedSource(previousSelectedSource, selectedSource)) {
+			broadcastSelectedSource(selectedSource);
+		}
 		return sources.map((source) => ({
 			id: source.id,
 			name: source.name,
@@ -1920,42 +1974,128 @@ export function registerIpcHandlers(
 		}));
 	});
 
-	ipcMain.handle("select-source", async (_, source: SelectedSource) => {
-		selectedSource = source;
-		// Reuse the exact source object returned during enumeration to avoid
-		// Windows window-source id mismatches across separate getSources() calls.
-		selectedDesktopSource =
-			typeof source.id === "string" ? (lastEnumeratedSources.get(source.id) ?? null) : null;
+	ipcMain.handle(
+		"select-source",
+		async (_, source: SelectedSource, options?: { persist?: boolean }) => {
+			// Reuse the exact source object returned during enumeration to avoid
+			// Windows window-source id mismatches across separate getSources() calls.
+			selectedDesktopSource =
+				typeof source.id === "string" ? (lastEnumeratedSources.get(source.id) ?? null) : null;
 
-		if (!selectedDesktopSource && typeof source.id === "string") {
-			try {
-				const sources = await desktopCapturer.getSources({
-					types: ["screen", "window"],
-					thumbnailSize: { width: 0, height: 0 },
-					fetchWindowIcons: true,
-				});
-				lastEnumeratedSources = new Map(sources.map((candidate) => [candidate.id, candidate]));
-				selectedDesktopSource = lastEnumeratedSources.get(source.id) ?? null;
-			} catch {
-				selectedDesktopSource = null;
+			if (!selectedDesktopSource && typeof source.id === "string") {
+				try {
+					const sources = await desktopCapturer.getSources({
+						types: ["screen", "window"],
+						thumbnailSize: { width: 0, height: 0 },
+						fetchWindowIcons: true,
+					});
+					lastEnumeratedSources = new Map(sources.map((candidate) => [candidate.id, candidate]));
+					selectedDesktopSource = lastEnumeratedSources.get(source.id) ?? null;
+				} catch {
+					selectedDesktopSource = null;
+				}
 			}
+			if (!selectedDesktopSource) {
+				selectedSource = null;
+				broadcastSelectedSource(null);
+				return null;
+			}
+			selectedSource = {
+				id: selectedDesktopSource.id,
+				name: selectedDesktopSource.name,
+				display_id: selectedDesktopSource.display_id,
+			};
+			// Persist only a descriptor built from the freshly enumerated live object.
+			// A failed write must not keep the picker open after a valid live pick.
+			if (shouldPersistSelectedSource(options)) {
+				try {
+					appSettings.setLastSource(
+						describeRecordingSource(process.platform, selectedSource as Required<SelectedSource>),
+					);
+				} catch (error) {
+					console.warn("Failed to persist the selected recording source:", error);
+				}
+			}
+			broadcastSelectedSource(selectedSource);
+			const sourceSelectorWin = getSourceSelectorWindow();
+			if (sourceSelectorWin) {
+				sourceSelectorWin.close();
+			}
+			return selectedSource;
+		},
+	);
+
+	ipcMain.handle("get-selected-source", async () => {
+		const previousSelectedSource = selectedSource;
+		if (process.platform === "linux" && findPipeWireCursorHelperPath()) {
+			selectedSource = null;
+			selectedDesktopSource = null;
+			if (!sameSelectedSource(previousSelectedSource, null)) {
+				broadcastSelectedSource(null);
+			}
+			return null;
 		}
-		const mainWin = getMainWindow();
-		if (mainWin && !mainWin.isDestroyed()) {
-			mainWin.webContents.send("selected-source-changed", selectedSource);
+		const lastSource = appSettings.getSnapshot().lastSource;
+		const liveSelected =
+			selectedSource?.id != null
+				? {
+						id: selectedSource.id,
+						name: selectedSource.name,
+						display_id: selectedSource.display_id ?? "",
+					}
+				: null;
+		if (!shouldEnumerateRecordingSources(liveSelected, lastSource)) {
+			return selectedSource;
 		}
-		const sourceSelectorWin = getSourceSelectorWindow();
-		if (sourceSelectorWin) {
-			sourceSelectorWin.close();
+		const sources = await withDeadline(
+			desktopCapturer.getSources({
+				types: ["screen", "window"],
+				thumbnailSize: { width: 0, height: 0 },
+				fetchWindowIcons: false,
+			}),
+			GET_SOURCES_TIMEOUT_MS,
+			`Desktop source restoration did not return within ${GET_SOURCES_TIMEOUT_MS}ms.`,
+		);
+		const decision = restoreRecordingSourceAfterEnumeration({
+			selectedBefore: liveSelected,
+			selectedAfter:
+				selectedSource?.id != null
+					? {
+							id: selectedSource.id,
+							name: selectedSource.name,
+							display_id: selectedSource.display_id ?? "",
+						}
+					: null,
+			lastSourceBefore: lastSource,
+			lastSourceAfter: appSettings.getSnapshot().lastSource,
+			platform: process.platform,
+			sources,
+		});
+		if (!decision.apply) {
+			return selectedSource;
+		}
+		lastEnumeratedSources = new Map(sources.map((source) => [source.id, source]));
+		const restored = decision.restored;
+		selectedDesktopSource = restored ? (lastEnumeratedSources.get(restored.id) ?? null) : null;
+		selectedSource = restored
+			? { id: restored.id, name: restored.name, display_id: restored.display_id }
+			: null;
+		if (!sameSelectedSource(previousSelectedSource, selectedSource)) {
+			broadcastSelectedSource(selectedSource);
 		}
 		return selectedSource;
 	});
 
-	ipcMain.handle("get-selected-source", () => {
-		return selectedSource;
-	});
-
-	registerRecordingPrefsHandlers(defaultRecordingPrefs, getMainWindow);
+	registerRecordingPrefsHandlers(
+		defaultRecordingPrefs,
+		getMainWindow,
+		() => {
+			selectedSource = null;
+			selectedDesktopSource = null;
+			broadcastSelectedSource(null);
+		},
+		() => BrowserWindow.getAllWindows(),
+	);
 
 	ipcMain.handle("request-camera-access", async () => {
 		if (process.platform !== "darwin") {
@@ -4365,6 +4505,7 @@ export function registerIpcHandlers(
 		path.join(app.getPath("userData"), "projects"),
 		RECORDINGS_DIR,
 		approveDocumentMedia,
+		() => appSettings.getSnapshot().appearance.defaults,
 	);
 
 	// LlmConfigStore is single-instance for a duller reason — its constructor does

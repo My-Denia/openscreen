@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { DEFAULT_PROJECT_APPEARANCE } from "./projectDefaults";
 import {
 	DEFAULT_PREFS,
 	getProjectFolder,
@@ -132,5 +133,11 @@ describe("user preferences", () => {
 		);
 
 		expect(loadUserPreferences().hideSoftwareEncoderFallbackNotice).toBe(false);
+	});
+
+	it("keeps dormant padding and aspect values compatible without overriding project defaults", () => {
+		saveUserPreferences({ padding: 3, aspectRatio: "1:1" });
+		expect(loadUserPreferences()).toMatchObject({ padding: 3, aspectRatio: "1:1" });
+		expect(DEFAULT_PROJECT_APPEARANCE).toMatchObject({ padding: 50, aspectRatio: "16:9" });
 	});
 });

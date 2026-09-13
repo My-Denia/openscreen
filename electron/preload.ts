@@ -2,10 +2,12 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { NativeLinuxRecordingRequest } from "../src/lib/nativeLinuxRecording";
 import type { NativeMacRecordingRequest } from "../src/lib/nativeMacRecording";
 import type { NativeWindowsRecordingRequest } from "../src/lib/nativeWindowsRecording";
+import type { ProjectAppearanceDefaults } from "../src/lib/projectDefaults";
 import type { RecordingSession, StoreRecordedSessionInput } from "../src/lib/recordingSession";
 import type { ShortcutBinding } from "../src/lib/shortcuts";
 import type { AiEditionChatEvent } from "../src/native/contracts";
 import { NATIVE_BRIDGE_CHANNEL, type NativeBridgeRequest } from "../src/native/contracts";
+import type { AppSettingsSnapshot } from "./app-settings";
 import type { RecordingPrefs } from "./ipc/handlers";
 import type {
 	SttStatusEvent,
@@ -115,8 +117,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	openNotes: () => {
 		return ipcRenderer.invoke("open-notes");
 	},
-	selectSource: (source: ProcessedDesktopSource) => {
-		return ipcRenderer.invoke("select-source", source);
+	selectSource: (source: ProcessedDesktopSource, options?: { persist?: boolean }) => {
+		return ipcRenderer.invoke("select-source", source, options);
 	},
 	getSelectedSource: () => {
 		return ipcRenderer.invoke("get-selected-source");
@@ -127,13 +129,20 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	setRecordingPrefs: (prefs: Partial<RecordingPrefs>) => {
 		return ipcRenderer.invoke("set-recording-prefs", prefs);
 	},
+	getAppSettings: () => ipcRenderer.invoke("get-app-settings") as Promise<AppSettingsSnapshot>,
+	setProjectAppearanceDefaults: (defaults: ProjectAppearanceDefaults) =>
+		ipcRenderer.invoke("set-project-appearance-defaults", defaults) as Promise<AppSettingsSnapshot>,
+	resetProjectAppearanceDefaults: () =>
+		ipcRenderer.invoke("reset-project-appearance-defaults") as Promise<AppSettingsSnapshot>,
+	resetRecordingSetup: () =>
+		ipcRenderer.invoke("reset-recording-setup") as Promise<AppSettingsSnapshot>,
 	onRecordingPrefsChanged: (callback: (prefs: RecordingPrefs) => void) => {
 		const listener = (_event: unknown, prefs: RecordingPrefs) => callback(prefs);
 		ipcRenderer.on("recording-prefs-changed", listener);
 		return () => ipcRenderer.removeListener("recording-prefs-changed", listener);
 	},
-	onSelectedSourceChanged: (callback: (source: ProcessedDesktopSource) => void) => {
-		const listener = (_event: unknown, source: ProcessedDesktopSource) => callback(source);
+	onSelectedSourceChanged: (callback: (source: ProcessedDesktopSource | null) => void) => {
+		const listener = (_event: unknown, source: ProcessedDesktopSource | null) => callback(source);
 		ipcRenderer.on("selected-source-changed", listener);
 		return () => ipcRenderer.removeListener("selected-source-changed", listener);
 	},
