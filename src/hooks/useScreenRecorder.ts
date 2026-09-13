@@ -161,6 +161,17 @@ type NativeLinuxRecordingHandle = {
  * video in the camera's place. Rounding loses nothing: one frame at 60 fps is
  * 16.7 ms.
  */
+export function isRecoverableWebcamConstraintError(
+	error: unknown,
+	savedDeviceName?: string,
+): boolean {
+	if (!savedDeviceName) return false;
+	return (
+		error instanceof DOMException &&
+		["OverconstrainedError", "NotFoundError", "DevicesNotFoundError"].includes(error.name)
+	);
+}
+
 export function webcamOffsetMsFrom(
 	webcamRecorder: RecorderHandle | null,
 	webcamStartedAtMs: number | null,
@@ -486,6 +497,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				webcamStream.current = stream;
 				webcamReady.current = true;
 			} catch (cameraError) {
+				if (isRecoverableWebcamConstraintError(cameraError, webcamDeviceName)) {
+					console.warn("Waiting to resolve the restored camera identity:", cameraError);
+					return;
+				}
 				if (!cancelled) {
 					console.warn("Failed to get webcam access:", cameraError);
 					setWebcamEnabledState(false);
@@ -516,7 +531,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				webcamStream.current = null;
 			}
 		};
-	}, [webcamEnabled, webcamDeviceId, t]);
+	}, [webcamEnabled, webcamDeviceId, webcamDeviceName, t]);
 
 	const finalizeRecording = useCallback(
 		(

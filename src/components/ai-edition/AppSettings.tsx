@@ -45,7 +45,7 @@ function AppSettings({ open, onClose }: { open: boolean; onClose: () => void }) 
 	}, [open]);
 
 	const microphones = useMicrophoneDevices(
-		open,
+		open && Boolean(recording?.micEnabled),
 		recording?.micDeviceId ?? undefined,
 		recording?.micDeviceName ?? undefined,
 	);

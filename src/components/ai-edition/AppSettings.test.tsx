@@ -13,12 +13,18 @@ const project = vi.hoisted(() => ({
 vi.mock("@/lib/ai-edition/store/projectStore", () => ({
 	useProjectStore: (selector: (state: typeof project) => unknown) => selector(project),
 }));
+const microphoneHook = vi.hoisted(() => ({
+	enabled: [] as boolean[],
+}));
 vi.mock("@/hooks/useMicrophoneDevices", () => ({
-	useMicrophoneDevices: () => ({
-		devices: [{ deviceId: "mic-live", label: "Live microphone", groupId: "g" }],
-		selectedDeviceId: "mic-live",
-		setSelectedDeviceId: vi.fn(),
-	}),
+	useMicrophoneDevices: (enabled: boolean) => {
+		microphoneHook.enabled.push(enabled);
+		return {
+			devices: [{ deviceId: "mic-live", label: "Live microphone", groupId: "g" }],
+			selectedDeviceId: "mic-live",
+			setSelectedDeviceId: vi.fn(),
+		};
+	},
 }));
 vi.mock("@/hooks/useCameraDevices", () => ({
 	useCameraDevices: () => ({
@@ -70,6 +76,7 @@ function renderSettings() {
 
 describe("AppSettings", () => {
 	beforeEach(() => {
+		microphoneHook.enabled = [];
 		project.document = createEmptyDocument({ projectId: "proj_settings", title: "Settings" });
 		window.electronAPI = {
 			getAppSettings: vi.fn(async () => snapshot),
@@ -81,6 +88,14 @@ describe("AppSettings", () => {
 			resetProjectAppearanceDefaults: vi.fn(async () => snapshot),
 			resetRecordingSetup: vi.fn(async () => snapshot),
 		} as unknown as typeof window.electronAPI;
+	});
+
+	it("does not enable microphone enumeration until the microphone is on", async () => {
+		renderSettings();
+		await screen.findByTestId("app-settings-dialog");
+		expect(microphoneHook.enabled.at(-1)).toBe(false);
+		fireEvent.click(screen.getByLabelText("appSettings.microphone"));
+		expect(microphoneHook.enabled.at(-1)).toBe(true);
 	});
 
 	it("loads settings and saves edited recording toggles", async () => {
