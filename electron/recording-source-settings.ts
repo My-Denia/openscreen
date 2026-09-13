@@ -24,6 +24,67 @@ export function shouldPersistSelectedSource(options?: { persist?: boolean }): bo
 	return options?.persist !== false;
 }
 
+export function sameRecordingSourceDescriptor(
+	left: RecordingSourceDescriptor | null | undefined,
+	right: RecordingSourceDescriptor | null | undefined,
+): boolean {
+	if (left == null && right == null) return true;
+	if (left == null || right == null) return false;
+	return (
+		left.platform === right.platform &&
+		left.kind === right.kind &&
+		left.id === right.id &&
+		left.name === right.name &&
+		left.displayId === right.displayId
+	);
+}
+
+/**
+ * Drop a restore result when the live selection or the persisted descriptor
+ * changed while enumeration was in flight. This includes reset: both sides can
+ * still be null while lastSource went from A to empty.
+ */
+export function shouldCommitRestoredRecordingSource(options: {
+	selectedBeforeId?: string | null;
+	selectedAfterId?: string | null;
+	lastSourceBefore: RecordingSourceDescriptor | null | undefined;
+	lastSourceAfter: RecordingSourceDescriptor | null | undefined;
+}): boolean {
+	return (
+		(options.selectedBeforeId ?? null) === (options.selectedAfterId ?? null) &&
+		sameRecordingSourceDescriptor(options.lastSourceBefore, options.lastSourceAfter)
+	);
+}
+
+export function restoreRecordingSourceAfterEnumeration(options: {
+	selectedBefore: LiveRecordingSource | null | undefined;
+	selectedAfter: LiveRecordingSource | null | undefined;
+	lastSourceBefore: RecordingSourceDescriptor | null | undefined;
+	lastSourceAfter: RecordingSourceDescriptor | null | undefined;
+	platform: NodeJS.Platform;
+	sources: readonly LiveRecordingSource[];
+}): { apply: boolean; restored: LiveRecordingSource | null } {
+	if (
+		!shouldCommitRestoredRecordingSource({
+			selectedBeforeId: options.selectedBefore?.id,
+			selectedAfterId: options.selectedAfter?.id,
+			lastSourceBefore: options.lastSourceBefore,
+			lastSourceAfter: options.lastSourceAfter,
+		})
+	) {
+		return { apply: false, restored: null };
+	}
+	return {
+		apply: true,
+		restored: resolveCurrentRecordingSource(
+			options.selectedBefore,
+			options.lastSourceBefore,
+			options.platform,
+			options.sources,
+		),
+	};
+}
+
 /** True when restoration or liveness checking has a source to look up. */
 export function shouldEnumerateRecordingSources(
 	selected: LiveRecordingSource | null | undefined,

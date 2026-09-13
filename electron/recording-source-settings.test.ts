@@ -3,6 +3,7 @@ import {
 	describeRecordingSource,
 	resolveCurrentRecordingSource,
 	resolveRecordingSource,
+	restoreRecordingSourceAfterEnumeration,
 	shouldEnumerateRecordingSources,
 	shouldPersistSelectedSource,
 } from "./recording-source-settings";
@@ -59,6 +60,37 @@ describe("recording source settings", () => {
 		expect(shouldPersistSelectedSource()).toBe(true);
 		expect(shouldPersistSelectedSource({ persist: true })).toBe(true);
 		expect(shouldPersistSelectedSource({ persist: false })).toBe(false);
+	});
+
+	it("does not resurrect a persisted source after reset during enumeration", () => {
+		const persisted = describeRecordingSource("win32", display);
+		let selected: { id: string; name: string; display_id: string } | null = null;
+		let lastSource: ReturnType<typeof describeRecordingSource> | null = persisted;
+		const selectedBefore = selected;
+		const lastSourceBefore = lastSource;
+		lastSource = null;
+		selected = null;
+		const decision = restoreRecordingSourceAfterEnumeration({
+			selectedBefore,
+			selectedAfter: selected,
+			lastSourceBefore,
+			lastSourceAfter: lastSource,
+			platform: "win32",
+			sources: [display],
+		});
+		expect(decision.apply).toBe(false);
+		expect(decision.restored).toBeNull();
+		expect(selected).toBeNull();
+		expect(
+			restoreRecordingSourceAfterEnumeration({
+				selectedBefore: null,
+				selectedAfter: null,
+				lastSourceBefore: persisted,
+				lastSourceAfter: persisted,
+				platform: "win32",
+				sources: [display],
+			}).restored,
+		).toEqual(display);
 	});
 
 	it("enumerates only when a live or persisted source exists", () => {

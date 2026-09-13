@@ -95,8 +95,8 @@ import { patchWebmDurationOnDisk } from "../recording/webm-duration";
 import { reindexRecordingOnDisk } from "../recording/webm-seek-index";
 import {
 	describeRecordingSource,
-	resolveCurrentRecordingSource,
 	resolveRecordingSource,
+	restoreRecordingSourceAfterEnumeration,
 	shouldEnumerateRecordingSources,
 	shouldPersistSelectedSource,
 } from "../recording-source-settings";
@@ -2056,16 +2056,26 @@ export function registerIpcHandlers(
 			GET_SOURCES_TIMEOUT_MS,
 			`Desktop source restoration did not return within ${GET_SOURCES_TIMEOUT_MS}ms.`,
 		);
-		if (!sameSelectedSource(selectedSource, previousSelectedSource)) {
+		const decision = restoreRecordingSourceAfterEnumeration({
+			selectedBefore: liveSelected,
+			selectedAfter:
+				selectedSource?.id != null
+					? {
+							id: selectedSource.id,
+							name: selectedSource.name,
+							display_id: selectedSource.display_id ?? "",
+						}
+					: null,
+			lastSourceBefore: lastSource,
+			lastSourceAfter: appSettings.getSnapshot().lastSource,
+			platform: process.platform,
+			sources,
+		});
+		if (!decision.apply) {
 			return selectedSource;
 		}
 		lastEnumeratedSources = new Map(sources.map((source) => [source.id, source]));
-		const restored = resolveCurrentRecordingSource(
-			liveSelected,
-			lastSource,
-			process.platform,
-			sources,
-		);
+		const restored = decision.restored;
 		selectedDesktopSource = restored ? (lastEnumeratedSources.get(restored.id) ?? null) : null;
 		selectedSource = restored
 			? { id: restored.id, name: restored.name, display_id: restored.display_id }
