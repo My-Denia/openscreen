@@ -48,8 +48,12 @@ export function useCameraDevices(
 		if (!enabled) return;
 		setIsReady(false);
 		let mounted = true;
+		let latestLoad = 0;
 
 		const loadDevices = async () => {
+			const loadToken = ++latestLoad;
+			const isCurrent = () => mounted && loadToken === latestLoad;
+			setIsReady(false);
 			try {
 				setIsLoading(true);
 				setError(null);
@@ -65,30 +69,28 @@ export function useCameraDevices(
 						groupId: device.groupId,
 					}));
 
-				if (mounted) {
-					setDevices(videoInputs);
-					const currentId = selectedDeviceIdRef.current;
-					const stillAvailable = videoInputs.some((d) => d.deviceId === currentId);
-					if (!currentId || !stillAvailable) {
-						const preferredId = preferredDeviceIdRef.current;
-						const preferredName = preferredDeviceNameRef.current;
-						const labelMatches = preferredName
-							? videoInputs.filter((d) => d.label === preferredName)
-							: [];
-						const preferred =
-							(preferredId ? videoInputs.find((d) => d.deviceId === preferredId) : undefined) ??
-							(labelMatches.length === 1 ? labelMatches[0] : undefined);
-						setSelectedDeviceId(preferred?.deviceId ?? videoInputs[0]?.deviceId ?? "");
-					}
-					setIsLoading(false);
-					setIsReady(true);
+				if (!isCurrent()) return;
+				setDevices(videoInputs);
+				const currentId = selectedDeviceIdRef.current;
+				const stillAvailable = videoInputs.some((d) => d.deviceId === currentId);
+				if (!currentId || !stillAvailable) {
+					const preferredId = preferredDeviceIdRef.current;
+					const preferredName = preferredDeviceNameRef.current;
+					const labelMatches = preferredName
+						? videoInputs.filter((d) => d.label === preferredName)
+						: [];
+					const preferred =
+						(preferredId ? videoInputs.find((d) => d.deviceId === preferredId) : undefined) ??
+						(labelMatches.length === 1 ? labelMatches[0] : undefined);
+					setSelectedDeviceId(preferred?.deviceId ?? videoInputs[0]?.deviceId ?? "");
 				}
+				setIsLoading(false);
+				setIsReady(true);
 			} catch (err) {
-				if (mounted) {
-					setError(err instanceof Error ? err.message : "Failed to load cameras");
-					setIsLoading(false);
-					setIsReady(true);
-				}
+				if (!isCurrent()) return;
+				setError(err instanceof Error ? err.message : "Failed to load cameras");
+				setIsLoading(false);
+				setIsReady(true);
 			}
 		};
 

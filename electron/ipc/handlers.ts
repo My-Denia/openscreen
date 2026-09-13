@@ -2006,10 +2006,15 @@ export function registerIpcHandlers(
 				display_id: selectedDesktopSource.display_id,
 			};
 			// Persist only a descriptor built from the freshly enumerated live object.
+			// A failed write must not keep the picker open after a valid live pick.
 			if (shouldPersistSelectedSource(options)) {
-				appSettings.setLastSource(
-					describeRecordingSource(process.platform, selectedSource as Required<SelectedSource>),
-				);
+				try {
+					appSettings.setLastSource(
+						describeRecordingSource(process.platform, selectedSource as Required<SelectedSource>),
+					);
+				} catch (error) {
+					console.warn("Failed to persist the selected recording source:", error);
+				}
 			}
 			broadcastSelectedSource(selectedSource);
 			const sourceSelectorWin = getSourceSelectorWindow();
@@ -2051,6 +2056,9 @@ export function registerIpcHandlers(
 			GET_SOURCES_TIMEOUT_MS,
 			`Desktop source restoration did not return within ${GET_SOURCES_TIMEOUT_MS}ms.`,
 		);
+		if (!sameSelectedSource(selectedSource, previousSelectedSource)) {
+			return selectedSource;
+		}
 		lastEnumeratedSources = new Map(sources.map((source) => [source.id, source]));
 		const restored = resolveCurrentRecordingSource(
 			liveSelected,

@@ -190,6 +190,31 @@ describe("useCameraDevices", () => {
 		expect(result.current.selectedDeviceId).toBe("cam2");
 	});
 
+	it("clears readiness while a later devicechange is still loading", async () => {
+		const { result } = renderHook(() => useCameraDevices(true));
+		await waitFor(() => expect(result.current.isReady).toBe(true));
+
+		let resolveNewest: ((devices: typeof mockDevices) => void) | undefined;
+		mockEnumerateDevices.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					resolveNewest = resolve;
+				}),
+		);
+		const devicechangeHandler = (
+			navigator.mediaDevices.addEventListener as ReturnType<typeof vi.fn>
+		).mock.calls[0]?.[1] as (() => void) | undefined;
+		if (!devicechangeHandler) throw new Error("devicechange listener was not registered");
+
+		act(() => {
+			void devicechangeHandler();
+		});
+		expect(result.current.isReady).toBe(false);
+
+		await act(async () => resolveNewest?.(mockDevices));
+		await waitFor(() => expect(result.current.isReady).toBe(true));
+	});
+
 	it("should fall back to first available device when selected device is unplugged", async () => {
 		const { result } = renderHook(() => useCameraDevices(true));
 
