@@ -8,9 +8,9 @@ import { type AspectRatio, isAspectRatio } from "@/utils/aspectRatioUtils";
 const PREFS_KEY = "openscreen_user_preferences";
 
 export interface UserPreferences {
-	/** Default padding % */
+	/** @deprecated Dormant compatibility field. New-project appearance uses recording-settings.json. */
 	padding: number;
-	/** Default aspect ratio */
+	/** @deprecated Dormant compatibility field. New-project appearance uses recording-settings.json. */
 	aspectRatio: AspectRatio;
 	/** Default export quality */
 	exportQuality: ExportQuality;
@@ -61,6 +61,8 @@ export function loadUserPreferences(): UserPreferences {
 	if (!raw || typeof raw !== "object") return { ...DEFAULT_PREFS };
 
 	return {
+		// Kept readable for compatibility with older builds. These values are never
+		// migrated into or consulted by the canonical project-appearance store.
 		padding:
 			typeof raw.padding === "number" &&
 			Number.isFinite(raw.padding) &&

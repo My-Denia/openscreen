@@ -54,6 +54,7 @@ function TopBar({ mode }: { mode: EditorMode }) {
 				save: noop,
 				export: noop,
 				openSettings: noop,
+				openAppSettings: noop,
 				renameProject: noop,
 				toggleChat: noop,
 				openProviderSettings: () => openDialog("providers"),

@@ -1547,6 +1547,7 @@ export function NewEditorShell() {
 					save: () => void handleSave(),
 					export: handleExport,
 					openSettings: handleOpenSettings,
+					openAppSettings: () => openDialog("settings"),
 					renameProject: handleRenameProject,
 					toggleChat: () => setChatOpen((v) => !v),
 					openProviderSettings: () => openDialog("providers"),

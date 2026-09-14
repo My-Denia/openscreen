@@ -2,6 +2,7 @@
 // The shim persists projects to localStorage, so this needs a DOM.
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { AxcutDocument } from "@/lib/ai-edition/schema";
+import { DEFAULT_PROJECT_APPEARANCE } from "@/lib/projectDefaults";
 import { installBrowserShims } from "./browserShim";
 import { nativeBridgeClient } from "./client";
 
@@ -56,5 +57,83 @@ describe("browserShim addAsset (issue #350)", () => {
 		const asset = doc.assets.at(-1);
 		expect(asset?.kind).toBe("video");
 		expect(doc.project.primaryAssetId).toBe(asset?.id);
+	});
+});
+
+describe("browserShim app settings", () => {
+	it("materializes versioned appearance defaults into a new browser project", async () => {
+		await window.electronAPI.setProjectAppearanceDefaults({
+			...DEFAULT_PROJECT_APPEARANCE,
+			wallpaper: "#abcdef",
+			padding: 9,
+		});
+		const created = await nativeBridgeClient.aiEdition.create("Defaults");
+		expect(asDoc(created.document).legacyEditor).toMatchObject({
+			wallpaper: "#abcdef",
+			padding: 9,
+		});
+	});
+
+	it("publishes recording settings only after localStorage succeeds", async () => {
+		await window.electronAPI.resetRecordingSetup();
+		const setItem = Storage.prototype.setItem;
+		Storage.prototype.setItem = () => {
+			throw new Error("storage unavailable");
+		};
+		try {
+			await expect(window.electronAPI.setRecordingPrefs({ micEnabled: true })).rejects.toThrow(
+				"storage unavailable",
+			);
+			expect((await window.electronAPI.getRecordingPrefs()).micEnabled).toBe(false);
+		} finally {
+			Storage.prototype.setItem = setItem;
+		}
+	});
+
+	it("notifies recording and source subscribers on changes and reset", async () => {
+		const prefsEvents: boolean[] = [];
+		const sourceEvents: Array<string | null> = [];
+		const stopPrefs = window.electronAPI.onRecordingPrefsChanged((prefs) =>
+			prefsEvents.push(prefs.micEnabled),
+		);
+		const stopSource = window.electronAPI.onSelectedSourceChanged((source) =>
+			sourceEvents.push(source?.id ?? null),
+		);
+
+		await window.electronAPI.setRecordingPrefs({ micEnabled: true });
+		const source = (await window.electronAPI.getSources({ types: ["screen"] }))[0];
+		await window.electronAPI.selectSource(source);
+		await window.electronAPI.resetRecordingSetup();
+
+		expect(prefsEvents).toEqual([true, false]);
+		expect(sourceEvents).toEqual([source.id, null]);
+		stopPrefs();
+		stopSource();
+		await window.electronAPI.setRecordingPrefs({ micEnabled: true });
+		expect(prefsEvents).toEqual([true, false]);
+	});
+
+	it("persists the selected source unless persist is false, and reset clears it", async () => {
+		const source = (await window.electronAPI.getSources({ types: ["screen"] }))[0];
+		await window.electronAPI.selectSource(source, { persist: false });
+		expect(localStorage.getItem("browser-shim-selected-source")).toBeNull();
+		expect((await window.electronAPI.getAppSettings()).lastSource).toMatchObject({
+			id: source.id,
+			name: source.name,
+		});
+
+		await window.electronAPI.selectSource(source);
+		expect(
+			JSON.parse(localStorage.getItem("browser-shim-selected-source") ?? "null"),
+		).toMatchObject({ id: source.id });
+		expect((await window.electronAPI.getAppSettings()).lastSource).toMatchObject({
+			id: source.id,
+			name: source.name,
+			kind: "screen",
+		});
+
+		await window.electronAPI.resetRecordingSetup();
+		expect(localStorage.getItem("browser-shim-selected-source")).toBeNull();
+		expect((await window.electronAPI.getAppSettings()).lastSource).toBeNull();
 	});
 });

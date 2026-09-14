@@ -4,7 +4,11 @@ import { getAvailableLocales, getLocaleName } from "@/i18n/loader";
 import { loadUserPreferences, saveUserPreferences } from "@/lib/userPreferences";
 import { nativeBridgeClient } from "@/native";
 import { type CameraDevice, useCameraDevices } from "../../hooks/useCameraDevices";
-import { type MicrophoneDevice, useMicrophoneDevices } from "../../hooks/useMicrophoneDevices";
+import {
+	isPlaceholderMicrophoneLabel,
+	type MicrophoneDevice,
+	useMicrophoneDevices,
+} from "../../hooks/useMicrophoneDevices";
 import { usePortalOwnsSource } from "../../hooks/usePortalOwnsSource";
 import { useScreenRecorder } from "../../hooks/useScreenRecorder";
 import { requestCameraAccess } from "../../lib/requestCameraAccess";
@@ -106,11 +110,13 @@ export function LaunchWindow() {
 		setWebcamEnabled,
 		webcamDeviceId,
 		setWebcamDeviceId,
+		webcamDeviceName,
 		setWebcamDeviceName,
 		cursorCaptureMode,
 		setCursorCaptureMode,
 		softwareEncoderFallbackNoticeVisible,
 		dismissSoftwareEncoderFallbackNotice,
+		recordingPrefsLoaded,
 	} = useScreenRecorder();
 
 	// Choosing a device and switching one on are deliberately separate concerns.
@@ -168,14 +174,16 @@ export function LaunchWindow() {
 		selectedDeviceId: selectedCameraId,
 		setSelectedDeviceId: setSelectedCameraId,
 		isLoading: isCameraDevicesLoading,
+		isReady: cameraDevicesReady,
 		error: cameraDevicesError,
-	} = useCameraDevices(true, webcamDeviceId);
+	} = useCameraDevices(true, webcamDeviceId, webcamDeviceName);
 	// The microphone list stays lazy: enumerating it asks for mic permission,
 	// which would light the OS "in use" indicator just for opening the HUD.
 	const {
 		devices: micDevices,
 		selectedDeviceId: selectedMicId,
 		setSelectedDeviceId: setSelectedMicId,
+		isReady: micDevicesReady,
 	} = useMicrophoneDevices(
 		microphoneEnabled || isDeviceSettingsOpen,
 		microphoneDeviceId,
@@ -185,9 +193,15 @@ export function LaunchWindow() {
 	useEffect(() => {
 		if (selectedMicId && selectedMicId !== "default") {
 			setMicrophoneDeviceId(selectedMicId);
-			setMicrophoneDeviceName(micDevices.find((d) => d.deviceId === selectedMicId)?.label);
+			const liveLabel = micDevices.find((d) => d.deviceId === selectedMicId)?.label;
+			if (liveLabel && !isPlaceholderMicrophoneLabel(liveLabel, selectedMicId)) {
+				setMicrophoneDeviceName(liveLabel);
+			}
+		} else if (micDevicesReady) {
+			setMicrophoneDeviceId(undefined);
+			setMicrophoneDeviceName(undefined);
 		}
-	}, [selectedMicId, micDevices, setMicrophoneDeviceId, setMicrophoneDeviceName]);
+	}, [selectedMicId, micDevices, micDevicesReady, setMicrophoneDeviceId, setMicrophoneDeviceName]);
 
 	// Keyed on the chosen device's own fields, never on the `cameraDevices` array.
 	// That array is rebuilt on every `devicechange`, and mirroring the selection
@@ -199,8 +213,17 @@ export function LaunchWindow() {
 		if (selectedCameraId) {
 			setWebcamDeviceId(selectedCameraId);
 			setWebcamDeviceName(selectedCameraLabel);
+		} else if (cameraDevicesReady) {
+			setWebcamDeviceId(undefined);
+			setWebcamDeviceName(undefined);
 		}
-	}, [selectedCameraId, selectedCameraLabel, setWebcamDeviceId, setWebcamDeviceName]);
+	}, [
+		selectedCameraId,
+		selectedCameraLabel,
+		cameraDevicesReady,
+		setWebcamDeviceId,
+		setWebcamDeviceName,
+	]);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -597,6 +620,58 @@ export function LaunchWindow() {
 		},
 		[defaultSourceName],
 	);
+	const deviceReadinessRef = useRef({
+		recordingPrefsLoaded,
+		cameraDevicesReady,
+		micDevicesReady,
+		microphoneEnabled,
+		webcamEnabled,
+	});
+	const toggleRecordingRef = useRef(toggleRecording);
+	const startWhenDevicesReadyInFlight = useRef<Promise<void> | null>(null);
+	useLayoutEffect(() => {
+		deviceReadinessRef.current = {
+			recordingPrefsLoaded,
+			cameraDevicesReady,
+			micDevicesReady,
+			microphoneEnabled,
+			webcamEnabled,
+		};
+		toggleRecordingRef.current = toggleRecording;
+	}, [
+		recordingPrefsLoaded,
+		cameraDevicesReady,
+		micDevicesReady,
+		microphoneEnabled,
+		webcamEnabled,
+		toggleRecording,
+	]);
+	const startWhenDevicesReady = useCallback(() => {
+		if (startWhenDevicesReadyInFlight.current) {
+			return startWhenDevicesReadyInFlight.current;
+		}
+		const pending = (async () => {
+			try {
+				for (let attempt = 0; attempt < 100; attempt++) {
+					const ready = deviceReadinessRef.current;
+					if (
+						ready.recordingPrefsLoaded &&
+						(!ready.webcamEnabled || ready.cameraDevicesReady) &&
+						(!ready.microphoneEnabled || ready.micDevicesReady)
+					) {
+						toggleRecordingRef.current();
+						return;
+					}
+					await new Promise((resolve) => setTimeout(resolve, 25));
+				}
+				console.warn("Recording did not start because device preferences could not be resolved.");
+			} finally {
+				startWhenDevicesReadyInFlight.current = null;
+			}
+		})();
+		startWhenDevicesReadyInFlight.current = pending;
+		return pending;
+	}, []);
 
 	// The main process pushes every change through `onSelectedSourceChanged`, so
 	// this only needs one read to seed the initial value (plus one on focus, in
@@ -637,7 +712,7 @@ export function LaunchWindow() {
 			}
 
 			recordAfterSourceSelectionRef.current = false;
-			toggleRecording();
+			void startWhenDevicesReady();
 		});
 		const cleanupSelectorClosed = window.electronAPI?.onSourceSelectorClosed?.(() => {
 			recordAfterSourceSelectionRef.current = false;
@@ -647,7 +722,7 @@ export function LaunchWindow() {
 			cleanupSourceChanged?.();
 			cleanupSelectorClosed?.();
 		};
-	}, [applySelectedSource, recording, toggleRecording]);
+	}, [applySelectedSource, recording, startWhenDevicesReady]);
 
 	const openSourceSelector = useCallback(async () => {
 		if (window.electronAPI) {
@@ -685,7 +760,7 @@ export function LaunchWindow() {
 						// all. Honouring the refusal starts the recording instead,
 						// whatever the local state has caught up to.
 						if (result.reason === "portal-owns-selection" && !recording) {
-							toggleRecording();
+							void startWhenDevicesReady();
 						}
 					})
 					.catch(() => {
@@ -694,9 +769,16 @@ export function LaunchWindow() {
 				return;
 			}
 
-			toggleRecording();
+			void startWhenDevicesReady();
 		},
-		[hasSelectedSource, portalOwnsSource, openSourceSelector, recording, saving, toggleRecording],
+		[
+			hasSelectedSource,
+			portalOwnsSource,
+			openSourceSelector,
+			recording,
+			saving,
+			startWhenDevicesReady,
+		],
 	);
 	const handleRecordClick = useCallback(() => handleRecordButtonClick(), [handleRecordButtonClick]);
 
@@ -753,36 +835,23 @@ export function LaunchWindow() {
 		});
 	}, [closePopovers]);
 
-	const toggleSystemAudio = useCallback(() => {
-		if (controlsLocked) return;
-		setSystemAudioEnabled(!systemAudioEnabled);
-	}, [controlsLocked, setSystemAudioEnabled, systemAudioEnabled]);
-
-	const toggleCursorMode = useCallback(() => {
-		if (controlsLocked) return;
-		setCursorCaptureMode(cursorCaptureMode === "editable-overlay" ? "system" : "editable-overlay");
-	}, [controlsLocked, cursorCaptureMode, setCursorCaptureMode]);
-
-	const toggleMicrophone = useCallback(() => {
-		if (controlsLocked) return;
-		setMicrophoneEnabled(!microphoneEnabled);
-	}, [controlsLocked, microphoneEnabled, setMicrophoneEnabled]);
-
 	/**
-	 * Write a camera choice back to the main-process recording prefs.
+	 * Write a recording preference back to the main-process session store.
 	 *
-	 * The HUD used to be a reader of that SSOT and never a writer, while being
-	 * destroyed and rebuilt for every recording — so a camera picked here lived
-	 * exactly as long as one take, and the editor's Rec stage kept showing the
-	 * previous device. Best-effort on purpose: failing to persist a preference
-	 * must not stop a recording.
+	 * The HUD is destroyed and rebuilt for every recording, so toggles and device
+	 * choices need to share the same best-effort persistence path. Failing to
+	 * persist a preference must not stop a recording.
 	 */
 	const persistRecordingPrefs = useCallback(
 		(patch: {
 			camEnabled?: boolean;
 			camDeviceId?: string;
+			camDeviceName?: string;
+			micEnabled?: boolean;
 			micDeviceId?: string;
 			micDeviceName?: string;
+			systemAudioEnabled?: boolean;
+			cursorCaptureMode?: "editable-overlay" | "system";
 		}) => {
 			void window.electronAPI?.setRecordingPrefs?.(patch).catch((error) => {
 				console.warn("Failed to persist the device preference:", error);
@@ -790,6 +859,27 @@ export function LaunchWindow() {
 		},
 		[],
 	);
+
+	const toggleSystemAudio = useCallback(() => {
+		if (controlsLocked) return;
+		const next = !systemAudioEnabled;
+		setSystemAudioEnabled(next);
+		persistRecordingPrefs({ systemAudioEnabled: next });
+	}, [controlsLocked, persistRecordingPrefs, setSystemAudioEnabled, systemAudioEnabled]);
+
+	const toggleCursorMode = useCallback(() => {
+		if (controlsLocked) return;
+		const next = cursorCaptureMode === "editable-overlay" ? "system" : "editable-overlay";
+		setCursorCaptureMode(next);
+		persistRecordingPrefs({ cursorCaptureMode: next });
+	}, [controlsLocked, cursorCaptureMode, persistRecordingPrefs, setCursorCaptureMode]);
+
+	const toggleMicrophone = useCallback(() => {
+		if (controlsLocked) return;
+		const next = !microphoneEnabled;
+		setMicrophoneEnabled(next);
+		persistRecordingPrefs({ micEnabled: next });
+	}, [controlsLocked, microphoneEnabled, persistRecordingPrefs, setMicrophoneEnabled]);
 
 	const toggleWebcam = useCallback(() => {
 		if (controlsLocked) return;
@@ -817,7 +907,7 @@ export function LaunchWindow() {
 			setSelectedCameraId(device.deviceId);
 			setWebcamDeviceId(device.deviceId);
 			setWebcamDeviceName(device.label);
-			persistRecordingPrefs({ camDeviceId: device.deviceId });
+			persistRecordingPrefs({ camDeviceId: device.deviceId, camDeviceName: device.label });
 		},
 		[persistRecordingPrefs, setSelectedCameraId, setWebcamDeviceId, setWebcamDeviceName],
 	);
