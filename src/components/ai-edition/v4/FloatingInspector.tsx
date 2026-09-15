@@ -20,6 +20,7 @@ import {
 	MAX_PLAYBACK_SPEED,
 	SPEED_OPTIONS,
 	ZOOM_DEPTH_SCALES,
+	type ZoomDepth,
 } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import {
@@ -358,7 +359,88 @@ function convertAnnotationKind(
 	return { ...parked, type: next, content: restored };
 }
 
-const ZOOM_DEPTHS = [1, 2, 3, 4, 5, 6] as const;
+const ZOOM_DEPTHS: readonly ZoomDepth[] = [1, 2, 3, 4, 5, 6];
+
+/**
+ * The six zoom levels as one row of buttons, so a level is one click away instead of two
+ * (open the select, then pick). Six short labels fit the 300px pane on their own line, which
+ * is why this is a stacked label/row rather than a `paneRow`.
+ *
+ * `role="group"` + `aria-pressed` is the pattern the other exclusive choices in the right
+ * rail already use (`TranscriptLaneSwitch`, the facet rail), so every level stays in the Tab
+ * order. Arrow keys step through the levels, which is what the `<select>` this replaces did
+ * once focused — and the one keyboard path that survives the editor shell's Tab binding
+ * (it cycles annotations whenever any exist, from any focused element).
+ */
+export function ZoomLevelControl({
+	region,
+	tl,
+}: {
+	region: { id: string; depth: ZoomDepth };
+	tl: Pick<TimelineApi, "updateZoomDepth">;
+}) {
+	const ts = useScopedT("settings");
+	const buttonsRef = useRef<Array<HTMLButtonElement | null>>([]);
+
+	const setDepth = (depth: ZoomDepth) => {
+		// Re-pressing the current level is not an edit: no save, no undo entry.
+		if (depth === region.depth) return;
+		void tl.updateZoomDepth(region.id, depth);
+	};
+
+	return (
+		<div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+			<span style={{ fontSize: 12.5, color: "var(--fg-2)", fontWeight: 500 }}>
+				{ts("zoom.level")}
+			</span>
+			<div
+				role="group"
+				aria-label={ts("zoom.level")}
+				style={{ display: "flex", gap: 4 }}
+				onKeyDown={(e) => {
+					const step =
+						e.key === "ArrowRight" || e.key === "ArrowDown"
+							? 1
+							: e.key === "ArrowLeft" || e.key === "ArrowUp"
+								? -1
+								: 0;
+					if (step === 0) return;
+					// `nativeEvent.stopPropagation()`, not just the synthetic one: the editor shell
+					// listens on WINDOW, above React's root container, and ArrowLeft/ArrowRight seek
+					// the playhead there. Same reason as the pill's own keydown in V4Timeline.
+					e.preventDefault();
+					e.nativeEvent.stopPropagation();
+					const index = ZOOM_DEPTHS.indexOf(region.depth);
+					const next = ZOOM_DEPTHS[Math.min(ZOOM_DEPTHS.length - 1, Math.max(0, index + step))];
+					if (next === undefined) return;
+					buttonsRef.current[next - 1]?.focus();
+					setDepth(next);
+				}}
+			>
+				{ZOOM_DEPTHS.map((d) => {
+					const pressed = d === region.depth;
+					return (
+						<button
+							key={d}
+							ref={(el) => {
+								buttonsRef.current[d - 1] = el;
+							}}
+							type="button"
+							aria-pressed={pressed}
+							onClick={() => setDepth(d)}
+							style={pressed ? zoomLevelPressedStyle : zoomLevelBtnStyle}
+						>
+							{/* La table, pas une formule : ce libellé annonçait « 2.0× » là où la pastille de la
+							    timeline affiche « 1.80× » et où le rendu applique 1.8. */}
+							{ZOOM_DEPTH_SCALES[d]}×
+						</button>
+					);
+				})}
+			</div>
+		</div>
+	);
+}
+
 // The ladder the shared editor already ships (`SPEED_OPTIONS`), plus 1× so the select can
 // express "back to normal". It stops at 5×; the free field in `SpeedControl` is what reaches
 // `MAX_PLAYBACK_SPEED`.
@@ -519,24 +601,7 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 			<div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
 				{paneHeader(<ZoomIn size={15} />, tt("labels.zoom"), onClose, tc("actions.close"))}
 				<div style={bodyStyle}>
-					{paneRow(
-						ts("zoom.level"),
-						<select
-							value={region.depth}
-							onChange={(e) =>
-								void tl.updateZoomDepth(region.id, Number(e.target.value) as 1 | 2 | 3 | 4 | 5 | 6)
-							}
-							style={selectStyle}
-						>
-							{ZOOM_DEPTHS.map((d) => (
-								<option key={d} value={d}>
-									{/* La table, pas une formule : ce libellé annonçait « 2.0× » là où la pastille de la
-									    timeline affiche « 1.80× » et où le rendu applique 1.8. */}
-									{ZOOM_DEPTH_SCALES[d]}×
-								</option>
-							))}
-						</select>,
-					)}
+					<ZoomLevelControl region={region} tl={tl} />
 					{paneRow(
 						ts("zoom.threeD.title"),
 						<select
@@ -1029,6 +1094,30 @@ const selectStyle: React.CSSProperties = {
 	background: "var(--surface)",
 	color: "var(--fg)",
 	font: "500 12.5px var(--font-display)",
+};
+
+// Six of these share the pane's 266px of content width, so each gets ~41px: enough for
+// "1.25×" at 12px with room either side, and no horizontal padding to lose.
+const zoomLevelBtnStyle: React.CSSProperties = {
+	flex: "1 1 0",
+	minWidth: 0,
+	height: 28,
+	padding: 0,
+	borderRadius: 8,
+	border: "1px solid var(--border)",
+	background: "var(--surface)",
+	color: "var(--fg-2)",
+	font: "500 12px var(--font-display)",
+	cursor: "pointer",
+};
+
+// Same signal as the pressed facet-rail button: accent text on the soft accent fill.
+const zoomLevelPressedStyle: React.CSSProperties = {
+	...zoomLevelBtnStyle,
+	border: "1px solid var(--accent)",
+	background: "var(--accent-soft)",
+	color: "var(--accent)",
+	fontWeight: 600,
 };
 
 const secondaryBtnStyle: React.CSSProperties = {
