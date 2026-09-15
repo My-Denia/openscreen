@@ -262,8 +262,8 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	// made in the editor's Rec-mode stage (a different renderer window) carry
 	// over instead of this hook silently reverting to its own hardcoded
 	// defaults every time startNewRecording() switches to the HUD window.
-	// Reset and later saves arrive on the same channel; applying every field
-	// (including null devices) is what clears a live HUD after reset.
+	// Later saves from any window arrive on the same channel; applying every field
+	// (including null devices) keeps a live HUD in step with them.
 	useEffect(() => {
 		let cancelled = false;
 		let receivedNewerSnapshot = false;

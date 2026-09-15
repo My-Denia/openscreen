@@ -194,7 +194,7 @@ describe("RecStage controls", () => {
 		);
 	});
 
-	it("applies reset events and ignores older initial preference and source reads", async () => {
+	it("applies pushed preference events and ignores older initial preference and source reads", async () => {
 		let resolvePrefs: ((value: RecordingPrefs) => void) | undefined;
 		let resolveSource: ((value: SelectedSource) => void) | undefined;
 		const initialPrefs = new Promise<RecordingPrefs>((resolve) => {

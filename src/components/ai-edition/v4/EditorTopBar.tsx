@@ -10,7 +10,6 @@ import {
 	PanelLeft,
 	RefreshCw,
 	Save,
-	Settings,
 	Sparkles,
 	Sun,
 } from "lucide-react";
@@ -29,7 +28,6 @@ export interface TopBarActions {
 	save: () => void;
 	export: () => void;
 	openSettings: () => void;
-	openAppSettings: () => void;
 	renameProject: (title: string) => void;
 	toggleChat: () => void;
 	openProviderSettings: () => void;
@@ -399,15 +397,6 @@ function AppMenu({ actions }: { actions: TopBarActions }) {
 			</button>
 			{open ? (
 				<div ref={menuRef} className={styles.appMenu} role="menu" onKeyDown={onMenuKeyDown}>
-					<button
-						type="button"
-						role="menuitem"
-						className={styles.appMenuRow}
-						onClick={run(actions.openAppSettings)}
-					>
-						<Settings size={15} />
-						{tEditor("appSettings.title")}
-					</button>
 					<button
 						type="button"
 						role="menuitem"

@@ -32,11 +32,10 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 function start(
 	getWindow: () => BrowserWindow | null = () => null,
-	onResetSource: () => void = () => undefined,
 	getAppWindows?: () => BrowserWindow[],
 ) {
 	electron.handle.mockClear();
-	registerRecordingPrefsHandlers(defaults, getWindow, onResetSource, getAppWindows);
+	registerRecordingPrefsHandlers(defaults, getWindow, getAppWindows);
 	const get = electron.handle.mock.calls.find(
 		([name]) => name === "get-recording-prefs",
 	)?.[1] as () => RecordingPrefs;
@@ -44,13 +43,9 @@ function start(
 		_event: unknown,
 		prefs: Partial<RecordingPrefs>,
 	) => RecordingPrefs;
-	const reset = electron.handle.mock.calls.find(
-		([name]) => name === "reset-recording-setup",
-	)?.[1] as (_event: unknown) => { recording: RecordingPrefs; lastSource: null };
 	return {
 		get,
 		set: (prefs: Partial<RecordingPrefs>) => set(undefined, prefs),
-		reset: () => reset(undefined),
 	};
 }
 
@@ -96,7 +91,6 @@ describe("recording preferences IPC", () => {
 		} as unknown as BrowserWindow;
 		const session = start(
 			() => first,
-			undefined,
 			() => [first, second, first, destroyed],
 		);
 		const updated = session.set({ micEnabled: true });
@@ -104,24 +98,6 @@ describe("recording preferences IPC", () => {
 		expect(secondSend).toHaveBeenCalledWith("recording-prefs-changed", updated);
 		expect(firstSend).toHaveBeenCalledTimes(1);
 		expect(destroyedSend).not.toHaveBeenCalled();
-	});
-
-	it("publishes the reset snapshot and runs the source reset callback", () => {
-		const send = vi.fn();
-		const window = {
-			isDestroyed: () => false,
-			webContents: { send },
-		} as unknown as BrowserWindow;
-		const onResetSource = vi.fn();
-		const session = start(() => window, onResetSource);
-		session.set({ micEnabled: true, camEnabled: true, systemAudioEnabled: true });
-		send.mockClear();
-
-		const snapshot = session.reset();
-		expect(snapshot.recording).toEqual(defaults);
-		expect(snapshot.lastSource).toBeNull();
-		expect(onResetSource).toHaveBeenCalledTimes(1);
-		expect(send).toHaveBeenCalledWith("recording-prefs-changed", defaults);
 	});
 
 	it("does not publish an invalid or failed preference write", () => {

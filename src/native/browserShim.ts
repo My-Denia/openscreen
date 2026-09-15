@@ -4,19 +4,7 @@
 // rapid iteration without the Electron window overhead.
 
 import { PROVIDER_DEFINITIONS } from "../../electron/ai-edition/provider-registry";
-import { describeRecordingSource } from "../../electron/recording-source-settings";
-import {
-	type AxcutDocument,
-	axcutSchemaVersion,
-	migrateRawDocumentToCurrent,
-} from "../lib/ai-edition/schema";
-import {
-	applyProjectAppearanceDefaults,
-	DEFAULT_PROJECT_APPEARANCE,
-	type ProjectAppearanceDefaults,
-	parseProjectAppearanceDefaults,
-} from "../lib/projectDefaults";
-import { getPlatform } from "../utils/platformUtils";
+import { axcutSchemaVersion, migrateRawDocumentToCurrent } from "../lib/ai-edition/schema";
 import { nativeBridgeClient as realClient } from "./client";
 
 function detectBrowserMode(): boolean {
@@ -105,41 +93,6 @@ function persistShimSelectedSource(source: ShimDesktopSource | null) {
 		// ponytail: corrupt/unavailable localStorage — start with no source.
 	}
 })();
-
-const appearanceStorageKey = "browser-shim-project-appearance-v1";
-let shimAppearanceDefaults: ProjectAppearanceDefaults = DEFAULT_PROJECT_APPEARANCE;
-let shimHasCustomAppearance = false;
-(() => {
-	try {
-		const raw = localStorage.getItem(appearanceStorageKey);
-		if (!raw) return;
-		const parsed = JSON.parse(raw) as { version?: unknown; defaults?: unknown };
-		if (parsed.version === 1 && parsed.defaults) {
-			shimAppearanceDefaults = parseProjectAppearanceDefaults(parsed.defaults);
-			shimHasCustomAppearance = true;
-		}
-	} catch {
-		// Corrupt/unavailable localStorage starts from canonical factory appearance.
-	}
-})();
-
-function shimAppSettingsSnapshot() {
-	return {
-		recording: shimRecordingPrefs,
-		lastSource: shimSelectedSource
-			? describeRecordingSource(getPlatform(), {
-					id: shimSelectedSource.id,
-					name: shimSelectedSource.name,
-					display_id: shimSelectedSource.display_id,
-				})
-			: null,
-		appearance: {
-			version: 1 as const,
-			custom: shimHasCustomAppearance,
-			defaults: shimAppearanceDefaults,
-		},
-	};
-}
 
 // ponytail: real file dialogs/ffmpeg probing aren't available in a plain
 // browser tab, but a hidden <input type="file"> + blob URL gets us a real,
@@ -234,39 +187,6 @@ function createShimElectronAPI() {
 		onRecordingPrefsChanged: (callback: (prefs: ShimRecordingPrefs) => void) => {
 			shimRecordingPrefsListeners.add(callback);
 			return () => shimRecordingPrefsListeners.delete(callback);
-		},
-		getAppSettings: () => Promise.resolve(shimAppSettingsSnapshot()),
-		setProjectAppearanceDefaults: (defaults: ProjectAppearanceDefaults) => {
-			const next = parseProjectAppearanceDefaults(defaults);
-			localStorage.setItem(appearanceStorageKey, JSON.stringify({ version: 1, defaults: next }));
-			shimAppearanceDefaults = next;
-			shimHasCustomAppearance = true;
-			return Promise.resolve(shimAppSettingsSnapshot());
-		},
-		resetProjectAppearanceDefaults: () => {
-			localStorage.setItem(appearanceStorageKey, JSON.stringify({ version: 1, defaults: null }));
-			shimAppearanceDefaults = DEFAULT_PROJECT_APPEARANCE;
-			shimHasCustomAppearance = false;
-			return Promise.resolve(shimAppSettingsSnapshot());
-		},
-		resetRecordingSetup: () => {
-			const next: ShimRecordingPrefs = {
-				micEnabled: false,
-				micDeviceId: null,
-				micDeviceName: null,
-				camEnabled: false,
-				camDeviceId: null,
-				camDeviceName: null,
-				systemAudioEnabled: false,
-				cursorCaptureMode: "editable-overlay",
-			};
-			localStorage.setItem(recordingPrefsStorageKey, JSON.stringify(next));
-			shimRecordingPrefs = next;
-			shimSelectedSource = null;
-			persistShimSelectedSource(null);
-			shimRecordingPrefsListeners.forEach((listener) => listener(next));
-			shimSelectedSourceListeners.forEach((listener) => listener(null));
-			return Promise.resolve(shimAppSettingsSnapshot());
 		},
 		// ponytail: the chat panel subscribes to this on mount, unconditionally.
 		// Without a stub the whole editor tree throws before it paints, so every
@@ -506,10 +426,7 @@ function createShimBridgeClient() {
 					audioTracks: [],
 					legacyEditor: null,
 				};
-				const doc = applyProjectAppearanceDefaults(
-					empty as unknown as AxcutDocument,
-					shimAppearanceDefaults,
-				) as unknown as ShimDocument;
+				const doc = empty as unknown as ShimDocument;
 				documentsByProject[doc.project.id] = doc;
 				projectOrder.unshift(doc.project.id);
 				saveProjectsState();

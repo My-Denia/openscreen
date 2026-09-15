@@ -63,12 +63,6 @@ interface Window {
 		setRecordingPrefs: (
 			prefs: Partial<import("./ipc/handlers").RecordingPrefs>,
 		) => Promise<import("./ipc/handlers").RecordingPrefs>;
-		getAppSettings: () => Promise<import("./app-settings").AppSettingsSnapshot>;
-		setProjectAppearanceDefaults: (
-			defaults: import("../src/lib/projectDefaults").ProjectAppearanceDefaults,
-		) => Promise<import("./app-settings").AppSettingsSnapshot>;
-		resetProjectAppearanceDefaults: () => Promise<import("./app-settings").AppSettingsSnapshot>;
-		resetRecordingSetup: () => Promise<import("./app-settings").AppSettingsSnapshot>;
 		onRecordingPrefsChanged: (
 			callback: (prefs: import("./ipc/handlers").RecordingPrefs) => void,
 		) => () => void;

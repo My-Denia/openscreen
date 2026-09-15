@@ -1,10 +1,5 @@
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import {
-	DEFAULT_PROJECT_APPEARANCE,
-	type ProjectAppearanceDefaults,
-	parseProjectAppearanceDefaults,
-} from "../src/lib/projectDefaults";
 import type { CursorCaptureMode } from "../src/lib/recordingSession";
 
 export interface RecordingPreferences {
@@ -40,11 +35,6 @@ export interface RecordingSourceDescriptor {
 export interface AppSettingsSnapshot {
 	recording: RecordingPreferences;
 	lastSource: RecordingSourceDescriptor | null;
-	appearance: {
-		version: 1;
-		custom: boolean;
-		defaults: ProjectAppearanceDefaults;
-	};
 }
 
 type RawSettings = Record<string, unknown>;
@@ -115,26 +105,6 @@ function parseSource(value: unknown): RecordingSourceDescriptor | null {
 	return candidate as unknown as RecordingSourceDescriptor;
 }
 
-function parseAppearance(raw: RawSettings): AppSettingsSnapshot["appearance"] {
-	const value = raw.projectAppearance;
-	if (!value || typeof value !== "object" || Array.isArray(value)) {
-		return { version: 1, custom: false, defaults: DEFAULT_PROJECT_APPEARANCE };
-	}
-	const candidate = value as Record<string, unknown>;
-	if (candidate.version !== 1 || candidate.defaults === null) {
-		return { version: 1, custom: false, defaults: DEFAULT_PROJECT_APPEARANCE };
-	}
-	try {
-		return {
-			version: 1,
-			custom: true,
-			defaults: parseProjectAppearanceDefaults(candidate.defaults),
-		};
-	} catch {
-		return { version: 1, custom: false, defaults: DEFAULT_PROJECT_APPEARANCE };
-	}
-}
-
 function validateRecordingPatch(patch: Partial<RecordingPreferences>): void {
 	const allowed = new Set(Object.keys(DEFAULT_RECORDING_PREFERENCES));
 	for (const [key, value] of Object.entries(patch)) {
@@ -164,7 +134,6 @@ export class AppSettingsStore {
 		return {
 			recording: parseRecording(raw),
 			lastSource: parseSource(raw.lastSource),
-			appearance: parseAppearance(raw),
 		};
 	}
 
@@ -183,32 +152,6 @@ export class AppSettingsStore {
 		if (source !== null && !parseSource(source)) throw new TypeError("last source is invalid");
 		const raw = readRaw(this.userData);
 		atomicWrite(this.userData, { ...raw, lastSource: source });
-		return this.getSnapshot();
-	}
-
-	setAppearanceDefaults(defaults: ProjectAppearanceDefaults): AppSettingsSnapshot {
-		const parsed = parseProjectAppearanceDefaults(defaults);
-		const raw = readRaw(this.userData);
-		atomicWrite(this.userData, {
-			...raw,
-			projectAppearance: { version: 1, defaults: parsed },
-		});
-		return this.getSnapshot();
-	}
-
-	resetAppearanceDefaults(): AppSettingsSnapshot {
-		const raw = readRaw(this.userData);
-		atomicWrite(this.userData, { ...raw, projectAppearance: { version: 1, defaults: null } });
-		return this.getSnapshot();
-	}
-
-	resetRecordingSetup(): AppSettingsSnapshot {
-		const raw = readRaw(this.userData);
-		atomicWrite(this.userData, {
-			...raw,
-			...DEFAULT_RECORDING_PREFERENCES,
-			lastSource: null,
-		});
 		return this.getSnapshot();
 	}
 }

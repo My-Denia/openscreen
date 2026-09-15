@@ -117,11 +117,7 @@ import { registerNativeBridgeHandlers } from "./nativeBridge";
 import { createNativeMacMidCaptureErrorWatch } from "./nativeMacMidCaptureErrorWatch";
 import { registerRecordingPrefsHandlers } from "./recordingPrefs";
 import { RecordingStreamRegistry, registerRecordingStreamHandlers } from "./recordingStream";
-import {
-	resetSelectSource,
-	type SelectSourceContext,
-	selectSourceWithOwnership,
-} from "./selectSourceOwnership";
+import { type SelectSourceContext, selectSourceWithOwnership } from "./selectSourceOwnership";
 
 const PROJECT_FILE_EXTENSION = "openscreen";
 export const SHORTCUTS_FILE = path.join(app.getPath("userData"), "shortcuts.json");
@@ -2095,13 +2091,8 @@ export function registerIpcHandlers(
 		return selectedSource;
 	});
 
-	registerRecordingPrefsHandlers(
-		defaultRecordingPrefs,
-		getMainWindow,
-		() => {
-			resetSelectSource(selectSourceContext, broadcastSelectedSource);
-		},
-		() => BrowserWindow.getAllWindows(),
+	registerRecordingPrefsHandlers(defaultRecordingPrefs, getMainWindow, () =>
+		BrowserWindow.getAllWindows(),
 	);
 
 	ipcMain.handle("request-camera-access", async () => {
@@ -4607,7 +4598,6 @@ export function registerIpcHandlers(
 		path.join(app.getPath("userData"), "projects"),
 		RECORDINGS_DIR,
 		approveDocumentMedia,
-		() => appSettings.getSnapshot().appearance.defaults,
 	);
 
 	// LlmConfigStore is single-instance for a duller reason — its constructor does
