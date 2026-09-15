@@ -16,6 +16,7 @@ import {
 	type ProjectAppearanceDefaults,
 	parseProjectAppearanceDefaults,
 } from "../lib/projectDefaults";
+import { getPlatform } from "../utils/platformUtils";
 import { nativeBridgeClient as realClient } from "./client";
 
 function detectBrowserMode(): boolean {
@@ -126,7 +127,7 @@ function shimAppSettingsSnapshot() {
 	return {
 		recording: shimRecordingPrefs,
 		lastSource: shimSelectedSource
-			? describeRecordingSource(process.platform, {
+			? describeRecordingSource(getPlatform(), {
 					id: shimSelectedSource.id,
 					name: shimSelectedSource.name,
 					display_id: shimSelectedSource.display_id,

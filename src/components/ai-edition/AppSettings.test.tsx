@@ -15,14 +15,18 @@ vi.mock("@/lib/ai-edition/store/projectStore", () => ({
 }));
 const microphoneHook = vi.hoisted(() => ({
 	enabled: [] as boolean[],
+	selectedDeviceId: "mic-live",
+	devices: [{ deviceId: "mic-live", label: "Live microphone", groupId: "g" }],
+	isReady: true,
 }));
 vi.mock("@/hooks/useMicrophoneDevices", () => ({
 	useMicrophoneDevices: (enabled: boolean) => {
 		microphoneHook.enabled.push(enabled);
 		return {
-			devices: [{ deviceId: "mic-live", label: "Live microphone", groupId: "g" }],
-			selectedDeviceId: "mic-live",
+			devices: microphoneHook.devices,
+			selectedDeviceId: microphoneHook.selectedDeviceId,
 			setSelectedDeviceId: vi.fn(),
+			isReady: microphoneHook.isReady,
 		};
 	},
 }));
@@ -31,6 +35,7 @@ vi.mock("@/hooks/useCameraDevices", () => ({
 		devices: [{ deviceId: "cam-live", label: "Live camera", groupId: "g" }],
 		selectedDeviceId: "cam-live",
 		setSelectedDeviceId: vi.fn(),
+		isReady: true,
 	}),
 }));
 vi.mock("@/contexts/I18nContext", () => ({
@@ -81,6 +86,9 @@ function renderSettings() {
 describe("AppSettings", () => {
 	beforeEach(() => {
 		microphoneHook.enabled = [];
+		microphoneHook.selectedDeviceId = "mic-live";
+		microphoneHook.devices = [{ deviceId: "mic-live", label: "Live microphone", groupId: "g" }];
+		microphoneHook.isReady = true;
 		project.document = createEmptyDocument({ projectId: "proj_settings", title: "Settings" });
 		window.electronAPI = {
 			getAppSettings: vi.fn(async () => snapshot),
@@ -165,6 +173,43 @@ describe("AppSettings", () => {
 		fireEvent.click(screen.getByText("open settings"));
 		expect(await screen.findByRole("alert")).toHaveTextContent("read failed");
 		expect(screen.queryByText("appSettings.saveRecording")).not.toBeInTheDocument();
+	});
+
+	it("saves the resolved microphone when the stored device has fallen back", async () => {
+		vi.mocked(window.electronAPI.getAppSettings).mockResolvedValue({
+			...snapshot,
+			recording: {
+				...recording,
+				micEnabled: true,
+				micDeviceId: "mic-stale",
+				micDeviceName: "Unplugged microphone",
+			},
+		});
+		renderSettings();
+		await screen.findByTestId("app-settings-dialog");
+		fireEvent.click(screen.getByText("appSettings.saveRecording"));
+		await waitFor(() =>
+			expect(window.electronAPI.setRecordingPrefs).toHaveBeenCalledWith(
+				expect.objectContaining({
+					micEnabled: true,
+					micDeviceId: "mic-live",
+					micDeviceName: "Live microphone",
+				}),
+			),
+		);
+	});
+
+	it("does not save while an enabled microphone is still resolving", async () => {
+		microphoneHook.isReady = false;
+		vi.mocked(window.electronAPI.getAppSettings).mockResolvedValue({
+			...snapshot,
+			recording: { ...recording, micEnabled: true },
+		});
+		renderSettings();
+		await screen.findByTestId("app-settings-dialog");
+		expect(screen.getByText("appSettings.saveRecording").closest("button")).toBeDisabled();
+		fireEvent.click(screen.getByText("appSettings.saveRecording"));
+		expect(window.electronAPI.setRecordingPrefs).not.toHaveBeenCalled();
 	});
 
 	it("copies the current look and exposes both reset actions", async () => {

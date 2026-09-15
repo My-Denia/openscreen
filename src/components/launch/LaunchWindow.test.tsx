@@ -467,6 +467,48 @@ describe("LaunchWindow record button", () => {
 		expect(window.electronAPI.openSourceSelector).not.toHaveBeenCalled();
 	});
 
+	it("stops immediately without waiting for device readiness", async () => {
+		recorderState.value.recording = true;
+		recorderState.value.recordingPrefsLoaded = false;
+		stubElectronAPI(vi.fn(async () => displayOneSource));
+
+		renderLaunchWindow();
+		const recordButton = await screen.findByTestId("launch-record-button");
+		fireEvent.click(recordButton);
+
+		expect(recorderState.value.toggleRecording).toHaveBeenCalledTimes(1);
+	});
+
+	it("can start again after stop when devices were already ready", async () => {
+		stubElectronAPI(vi.fn(async () => displayOneSource));
+		const view = renderLaunchWindow();
+		const recordButton = await screen.findByTestId("launch-record-button");
+		await waitFor(() => {
+			expect(recordButton).toHaveAttribute("title", "Display 1");
+		});
+
+		fireEvent.click(recordButton);
+		expect(recorderState.value.toggleRecording).toHaveBeenCalledTimes(1);
+
+		recorderState.value.recording = true;
+		view.rerender(
+			<TooltipProvider>
+				<LaunchWindow />
+			</TooltipProvider>,
+		);
+		fireEvent.click(recordButton);
+		expect(recorderState.value.toggleRecording).toHaveBeenCalledTimes(2);
+
+		recorderState.value.recording = false;
+		view.rerender(
+			<TooltipProvider>
+				<LaunchWindow />
+			</TooltipProvider>,
+		);
+		fireEvent.click(recordButton);
+		expect(recorderState.value.toggleRecording).toHaveBeenCalledTimes(3);
+	});
+
 	it("does not wait for the camera list when the webcam is off", async () => {
 		cameraDevicesState.isReady = false;
 		recorderState.value.webcamEnabled = false;
