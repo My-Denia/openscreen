@@ -309,6 +309,7 @@ function resetLaunchMocks() {
 	recorderState.value.softwareEncoderFallbackNoticeVisible = false;
 	recorderState.value.dismissSoftwareEncoderFallbackNotice.mockClear();
 	recorderState.value.recording = false;
+	recorderState.value.canPauseRecording = false;
 	recorderState.value.microphoneEnabled = false;
 	recorderState.value.setMicrophoneEnabled.mockClear();
 	recorderState.value.setMicrophoneDeviceId.mockClear();
@@ -391,6 +392,53 @@ describe("LaunchWindow record button", () => {
 			expect(screen.getByTestId("launch-record-button")).toHaveAttribute("title", "Display 1");
 		});
 		expect(recorderState.value.toggleRecording).not.toHaveBeenCalled();
+	});
+
+	it("names the idle HUD icon controls for assistive technology", async () => {
+		renderLaunchWindow();
+		await screen.findByTestId("launch-record-button");
+
+		expect(screen.getByTestId("launch-system-audio-button")).toHaveAttribute(
+			"aria-label",
+			"Enable system audio",
+		);
+		expect(screen.getByTestId("launch-microphone-button")).toHaveAttribute(
+			"aria-label",
+			"Enable microphone",
+		);
+		expect(screen.getByTestId("launch-webcam-button")).toHaveAttribute(
+			"aria-label",
+			"Enable webcam",
+		);
+		expect(screen.getByTestId("launch-cursor-mode-button")).toHaveAttribute(
+			"aria-label",
+			"Use system cursor",
+		);
+		expect(screen.getByTestId("launch-open-studio-button")).toHaveAttribute(
+			"aria-label",
+			"Open Studio",
+		);
+		expect(screen.getByTitle("Hide HUD")).toHaveAttribute("aria-label", "Hide HUD");
+		expect(screen.getByTitle("Close App")).toHaveAttribute("aria-label", "Close App");
+	});
+
+	it("names the recording-state HUD controls for assistive technology", async () => {
+		recorderState.value.recording = true;
+		recorderState.value.canPauseRecording = true;
+		renderLaunchWindow();
+
+		expect(await screen.findByTestId("launch-pause-button")).toHaveAttribute(
+			"aria-label",
+			"tooltips.pauseRecording",
+		);
+		expect(screen.getByTestId("launch-restart-button")).toHaveAttribute(
+			"aria-label",
+			"tooltips.restartRecording",
+		);
+		expect(screen.getByTestId("launch-cancel-button")).toHaveAttribute(
+			"aria-label",
+			"tooltips.cancelRecording",
+		);
 	});
 
 	it("clears record-after-selection intent when the source picker closes without a selection", async () => {
