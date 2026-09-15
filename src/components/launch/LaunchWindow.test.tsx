@@ -296,6 +296,7 @@ function resetLaunchMocks() {
 	recorderState.value.softwareEncoderFallbackNoticeVisible = false;
 	recorderState.value.dismissSoftwareEncoderFallbackNotice.mockClear();
 	recorderState.value.recording = false;
+	recorderState.value.canPauseRecording = false;
 	recorderState.value.microphoneEnabled = false;
 	recorderState.value.setMicrophoneEnabled.mockClear();
 	recorderState.value.setMicrophoneDeviceId.mockClear();
@@ -377,22 +378,51 @@ describe("LaunchWindow record button", () => {
 		expect(recorderState.value.toggleRecording).not.toHaveBeenCalled();
 	});
 
-	it("provides accessible aria-labels on HUD icon controls", async () => {
+	it("names the idle HUD icon controls for assistive technology", async () => {
+		renderLaunchWindow();
+		await screen.findByTestId("launch-record-button");
+
+		expect(screen.getByTestId("launch-system-audio-button")).toHaveAttribute(
+			"aria-label",
+			"Enable system audio",
+		);
+		expect(screen.getByTestId("launch-microphone-button")).toHaveAttribute(
+			"aria-label",
+			"Enable microphone",
+		);
+		expect(screen.getByTestId("launch-webcam-button")).toHaveAttribute(
+			"aria-label",
+			"Enable webcam",
+		);
+		expect(screen.getByTestId("launch-cursor-mode-button")).toHaveAttribute(
+			"aria-label",
+			"Use system cursor",
+		);
+		expect(screen.getByTestId("launch-open-studio-button")).toHaveAttribute(
+			"aria-label",
+			"Open Studio",
+		);
+		expect(screen.getByTitle("Hide HUD")).toHaveAttribute("aria-label", "Hide HUD");
+		expect(screen.getByTitle("Close App")).toHaveAttribute("aria-label", "Close App");
+	});
+
+	it("names the recording-state HUD controls for assistive technology", async () => {
+		recorderState.value.recording = true;
+		recorderState.value.canPauseRecording = true;
 		renderLaunchWindow();
 
-		const recordButton = await screen.findByTestId("launch-record-button");
-		const systemAudioButton = screen.getByTestId("launch-system-audio-button");
-		const micButton = screen.getByTestId("launch-microphone-button");
-		const webcamButton = screen.getByTestId("launch-webcam-button");
-		const cursorButton = screen.getByTestId("launch-cursor-mode-button");
-		const studioButton = screen.getByTestId("launch-open-studio-button");
-
-		expect(recordButton).toHaveAttribute("aria-label");
-		expect(systemAudioButton).toHaveAttribute("aria-label");
-		expect(micButton).toHaveAttribute("aria-label");
-		expect(webcamButton).toHaveAttribute("aria-label");
-		expect(cursorButton).toHaveAttribute("aria-label");
-		expect(studioButton).toHaveAttribute("aria-label");
+		expect(await screen.findByTestId("launch-pause-button")).toHaveAttribute(
+			"aria-label",
+			"tooltips.pauseRecording",
+		);
+		expect(screen.getByTestId("launch-restart-button")).toHaveAttribute(
+			"aria-label",
+			"tooltips.restartRecording",
+		);
+		expect(screen.getByTestId("launch-cancel-button")).toHaveAttribute(
+			"aria-label",
+			"tooltips.cancelRecording",
+		);
 	});
 
 	it("clears record-after-selection intent when the source picker closes without a selection", async () => {
