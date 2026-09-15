@@ -117,6 +117,11 @@ import { registerNativeBridgeHandlers } from "./nativeBridge";
 import { createNativeMacMidCaptureErrorWatch } from "./nativeMacMidCaptureErrorWatch";
 import { registerRecordingPrefsHandlers } from "./recordingPrefs";
 import { RecordingStreamRegistry, registerRecordingStreamHandlers } from "./recordingStream";
+import {
+	resetSelectSource,
+	type SelectSourceContext,
+	selectSourceWithOwnership,
+} from "./selectSourceOwnership";
 
 const PROJECT_FILE_EXTENSION = "openscreen";
 export const SHORTCUTS_FILE = path.join(app.getPath("userData"), "shortcuts.json");
@@ -602,6 +607,7 @@ type AttachNativeMacWebcamRecordingInput = {
 let selectedSource: SelectedSource | null = null;
 let selectedDesktopSource: DesktopCapturerSource | null = null;
 let lastEnumeratedSources = new Map<string, DesktopCapturerSource>();
+const selectSourceGeneration = { value: 0 };
 let currentProjectPath: string | null = null;
 let currentRecordingSession: RecordingSession | null = null;
 
@@ -1982,54 +1988,49 @@ export function registerIpcHandlers(
 		}));
 	});
 
+	const selectSourceContext: SelectSourceContext<DesktopCapturerSource> = {
+		generation: selectSourceGeneration,
+		getSelected: () => ({ source: selectedSource, live: selectedDesktopSource }),
+		setSelected: (source, live) => {
+			selectedSource = source;
+			selectedDesktopSource = live;
+		},
+		getCached: (id) => lastEnumeratedSources.get(id) ?? null,
+		replaceCache: (sources) => {
+			lastEnumeratedSources = new Map(sources.map((candidate) => [candidate.id, candidate]));
+		},
+	};
+
 	ipcMain.handle(
 		"select-source",
 		async (_, source: SelectedSource, options?: { persist?: boolean }) => {
-			// Reuse the exact source object returned during enumeration to avoid
-			// Windows window-source id mismatches across separate getSources() calls.
-			selectedDesktopSource =
-				typeof source.id === "string" ? (lastEnumeratedSources.get(source.id) ?? null) : null;
-
-			if (!selectedDesktopSource && typeof source.id === "string") {
-				try {
-					const sources = await desktopCapturer.getSources({
-						types: ["screen", "window"],
-						thumbnailSize: { width: 0, height: 0 },
-						fetchWindowIcons: true,
-					});
-					lastEnumeratedSources = new Map(sources.map((candidate) => [candidate.id, candidate]));
-					selectedDesktopSource = lastEnumeratedSources.get(source.id) ?? null;
-				} catch {
-					selectedDesktopSource = null;
+			const next = await selectSourceWithOwnership(
+				selectSourceContext,
+				{ id: source.id, name: source.name, display_id: source.display_id },
+				options,
+				{
+					getSources: () =>
+						desktopCapturer.getSources({
+							types: ["screen", "window"],
+							thumbnailSize: { width: 0, height: 0 },
+							fetchWindowIcons: true,
+						}),
+					persist: (live) => {
+						appSettings.setLastSource(
+							describeRecordingSource(process.platform, live as Required<SelectedSource>),
+						);
+					},
+					broadcast: broadcastSelectedSource,
+					shouldPersist: shouldPersistSelectedSource,
+				},
+			);
+			if (next) {
+				const sourceSelectorWin = getSourceSelectorWindow();
+				if (sourceSelectorWin) {
+					sourceSelectorWin.close();
 				}
 			}
-			if (!selectedDesktopSource) {
-				selectedSource = null;
-				broadcastSelectedSource(null);
-				return null;
-			}
-			selectedSource = {
-				id: selectedDesktopSource.id,
-				name: selectedDesktopSource.name,
-				display_id: selectedDesktopSource.display_id,
-			};
-			// Persist only a descriptor built from the freshly enumerated live object.
-			// A failed write must not keep the picker open after a valid live pick.
-			if (shouldPersistSelectedSource(options)) {
-				try {
-					appSettings.setLastSource(
-						describeRecordingSource(process.platform, selectedSource as Required<SelectedSource>),
-					);
-				} catch (error) {
-					console.warn("Failed to persist the selected recording source:", error);
-				}
-			}
-			broadcastSelectedSource(selectedSource);
-			const sourceSelectorWin = getSourceSelectorWindow();
-			if (sourceSelectorWin) {
-				sourceSelectorWin.close();
-			}
-			return selectedSource;
+			return next;
 		},
 	);
 
@@ -2098,9 +2099,7 @@ export function registerIpcHandlers(
 		defaultRecordingPrefs,
 		getMainWindow,
 		() => {
-			selectedSource = null;
-			selectedDesktopSource = null;
-			broadcastSelectedSource(null);
+			resetSelectSource(selectSourceContext, broadcastSelectedSource);
 		},
 		() => BrowserWindow.getAllWindows(),
 	);

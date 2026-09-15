@@ -212,6 +212,24 @@ describe("AppSettings", () => {
 		expect(window.electronAPI.setRecordingPrefs).not.toHaveBeenCalled();
 	});
 
+	it("keeps an unsaved recording draft when appearance is saved", async () => {
+		vi.mocked(window.electronAPI.setProjectAppearanceDefaults).mockImplementation(
+			async (defaults) => ({
+				recording,
+				lastSource: null,
+				appearance: { version: 1 as const, custom: true, defaults },
+			}),
+		);
+		renderSettings();
+		await screen.findByTestId("app-settings-dialog");
+		fireEvent.click(screen.getByLabelText("appSettings.systemAudio"));
+		expect(screen.getByLabelText("appSettings.systemAudio")).toBeChecked();
+		fireEvent.click(screen.getByText("appSettings.useCurrentAppearance"));
+		await waitFor(() => expect(window.electronAPI.setProjectAppearanceDefaults).toHaveBeenCalled());
+		expect(screen.getByLabelText("appSettings.systemAudio")).toBeChecked();
+		expect(window.electronAPI.setRecordingPrefs).not.toHaveBeenCalled();
+	});
+
 	it("copies the current look and exposes both reset actions", async () => {
 		renderSettings();
 		await screen.findByTestId("app-settings-dialog");
