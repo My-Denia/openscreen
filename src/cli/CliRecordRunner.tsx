@@ -163,8 +163,14 @@ export function CliRecordRunner() {
 				requestRef.current = request;
 
 				const source = await pickSource(request);
-				await window.electronAPI.selectSource(source, { persist: false });
-				window.electronAPI.cliLog("info", `Recording source: ${source.name}`);
+				const selected = await window.electronAPI.selectSource(source, { persist: false });
+				if (!selected) {
+					throw new Error(
+						`Recording source "${source.name}" (${source.id}) is no longer available. ` +
+							"Re-list sources with `openscreen sources` and pick one that is currently shared.",
+					);
+				}
+				window.electronAPI.cliLog("info", `Recording source: ${selected.name}`);
 
 				setMicrophoneEnabled(Boolean(request.mic));
 				if (request.mic) {

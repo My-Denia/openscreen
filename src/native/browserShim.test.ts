@@ -136,4 +136,20 @@ describe("browserShim app settings", () => {
 		expect(localStorage.getItem("browser-shim-selected-source")).toBeNull();
 		expect((await window.electronAPI.getAppSettings()).lastSource).toBeNull();
 	});
+
+	it("getAppSettings after selectSource does not need Node process", async () => {
+		const source = (await window.electronAPI.getSources({ types: ["screen"] }))[0];
+		await window.electronAPI.selectSource(source);
+		const original = (globalThis as { process?: unknown }).process;
+		try {
+			delete (globalThis as { process?: unknown }).process;
+			await expect(window.electronAPI.getAppSettings()).resolves.toMatchObject({
+				lastSource: { id: source.id, name: source.name },
+			});
+		} finally {
+			if (original !== undefined) {
+				(globalThis as { process?: unknown }).process = original;
+			}
+		}
+	});
 });

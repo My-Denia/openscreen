@@ -650,7 +650,12 @@ export function LaunchWindow() {
 		if (startWhenDevicesReadyInFlight.current) {
 			return startWhenDevicesReadyInFlight.current;
 		}
-		const pending = (async () => {
+		let settle!: () => void;
+		const pending = new Promise<void>((resolve) => {
+			settle = resolve;
+		});
+		startWhenDevicesReadyInFlight.current = pending;
+		void (async () => {
 			try {
 				for (let attempt = 0; attempt < 100; attempt++) {
 					const ready = deviceReadinessRef.current;
@@ -666,10 +671,12 @@ export function LaunchWindow() {
 				}
 				console.warn("Recording did not start because device preferences could not be resolved.");
 			} finally {
-				startWhenDevicesReadyInFlight.current = null;
+				if (startWhenDevicesReadyInFlight.current === pending) {
+					startWhenDevicesReadyInFlight.current = null;
+				}
+				settle();
 			}
 		})();
-		startWhenDevicesReadyInFlight.current = pending;
 		return pending;
 	}, []);
 
@@ -740,6 +747,10 @@ export function LaunchWindow() {
 			if (saving) {
 				return;
 			}
+			if (recording) {
+				toggleRecording();
+				return;
+			}
 			// Linux never detours through the in-app picker: there is nothing for
 			// it to select, and waiting for a selection that can never arrive left
 			// the record button opening a modal instead of recording.
@@ -778,6 +789,7 @@ export function LaunchWindow() {
 			recording,
 			saving,
 			startWhenDevicesReady,
+			toggleRecording,
 		],
 	);
 	const handleRecordClick = useCallback(() => handleRecordButtonClick(), [handleRecordButtonClick]);

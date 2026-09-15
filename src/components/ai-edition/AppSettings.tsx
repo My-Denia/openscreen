@@ -75,10 +75,31 @@ function AppSettings({ open, onClose }: { open: boolean; onClose: () => void }) 
 		}
 	};
 
+	const recordingDevicesReady = recording
+		? (!recording.micEnabled || microphones.isReady) && (!recording.camEnabled || cameras.isReady)
+		: false;
+
 	const saveRecording = () => {
-		if (!recording) return;
+		if (!recording || !recordingDevicesReady) return;
+		const payload = { ...recording };
+		if (recording.micEnabled) {
+			const mic = microphones.devices.find(
+				(device) => device.deviceId === microphones.selectedDeviceId,
+			);
+			if (mic) {
+				payload.micDeviceId = mic.deviceId;
+				payload.micDeviceName = mic.label;
+			}
+		}
+		if (recording.camEnabled) {
+			const cam = cameras.devices.find((device) => device.deviceId === cameras.selectedDeviceId);
+			if (cam) {
+				payload.camDeviceId = cam.deviceId;
+				payload.camDeviceName = cam.label;
+			}
+		}
 		void run(async () => {
-			const saved = await window.electronAPI.setRecordingPrefs(recording);
+			const saved = await window.electronAPI.setRecordingPrefs(payload);
 			const next = await window.electronAPI.getAppSettings();
 			return { ...next, recording: saved };
 		});
@@ -193,7 +214,7 @@ function AppSettings({ open, onClose }: { open: boolean; onClose: () => void }) 
 									type="button"
 									className={`${styles.btn} ${styles.btnPrimary}`}
 									onClick={saveRecording}
-									disabled={status === "saving"}
+									disabled={status === "saving" || !recordingDevicesReady}
 								>
 									<Save size={14} /> {t("appSettings.saveRecording")}
 								</button>
