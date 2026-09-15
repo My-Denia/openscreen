@@ -1,5 +1,4 @@
 import { app, type BrowserWindow, ipcMain } from "electron";
-import type { ProjectAppearanceDefaults } from "../../src/lib/projectDefaults";
 import { AppSettingsStore } from "../app-settings";
 import type { RecordingPrefs } from "./handlers";
 
@@ -7,7 +6,6 @@ import type { RecordingPrefs } from "./handlers";
 export function registerRecordingPrefsHandlers(
 	defaults: RecordingPrefs,
 	getMainWindow: () => BrowserWindow | null,
-	onResetSource: () => void = () => undefined,
 	getAppWindows: () => BrowserWindow[] = () => {
 		const mainWindow = getMainWindow();
 		return mainWindow ? [mainWindow] : [];
@@ -31,18 +29,5 @@ export function registerRecordingPrefsHandlers(
 		recordingPrefs = settings.setRecordingPreferences(prefs).recording;
 		publish();
 		return recordingPrefs;
-	});
-
-	ipcMain.handle("get-app-settings", () => settings.getSnapshot());
-	ipcMain.handle("set-project-appearance-defaults", (_, value: ProjectAppearanceDefaults) =>
-		settings.setAppearanceDefaults(value),
-	);
-	ipcMain.handle("reset-project-appearance-defaults", () => settings.resetAppearanceDefaults());
-	ipcMain.handle("reset-recording-setup", () => {
-		const snapshot = settings.resetRecordingSetup();
-		recordingPrefs = snapshot.recording;
-		onResetSource();
-		publish();
-		return snapshot;
 	});
 }

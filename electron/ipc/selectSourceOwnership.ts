@@ -24,15 +24,6 @@ export function bumpSelectSourceGeneration(generation: { value: number }): numbe
 	return generation.value;
 }
 
-export function resetSelectSource<TLive extends { id: string; name: string; display_id: string }>(
-	ctx: SelectSourceContext<TLive>,
-	broadcast: (source: SelectedSourceSnapshot | null) => void,
-): void {
-	bumpSelectSourceGeneration(ctx.generation);
-	ctx.setSelected(null, null);
-	broadcast(null);
-}
-
 export async function selectSourceWithOwnership<
 	TLive extends { id: string; name: string; display_id: string },
 >(

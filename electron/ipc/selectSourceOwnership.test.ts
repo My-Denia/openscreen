@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-	resetSelectSource,
-	type SelectSourceContext,
-	selectSourceWithOwnership,
-} from "./selectSourceOwnership";
+import { type SelectSourceContext, selectSourceWithOwnership } from "./selectSourceOwnership";
 
 type Live = { id: string; name: string; display_id: string };
 
@@ -42,37 +38,6 @@ const sourceA: Live = { id: "screen:a", name: "Display A", display_id: "1" };
 const sourceB: Live = { id: "screen:b", name: "Display B", display_id: "2" };
 
 describe("selectSourceWithOwnership", () => {
-	it("does not restore A after reset while A is still enumerating", async () => {
-		const harness = createContext();
-		let resolveA!: (sources: Live[]) => void;
-		const persist = vi.fn();
-		const broadcast = vi.fn();
-		const pendingA = selectSourceWithOwnership(
-			harness.ctx,
-			sourceA,
-			{ persist: true },
-			{
-				getSources: () =>
-					new Promise<Live[]>((resolve) => {
-						resolveA = resolve;
-					}),
-				persist,
-				broadcast,
-				shouldPersist: () => true,
-			},
-		);
-
-		resetSelectSource(harness.ctx, broadcast);
-		expect(harness.selected.source).toBeNull();
-
-		resolveA([sourceA, sourceB]);
-		await pendingA;
-
-		expect(harness.selected.source).toBeNull();
-		expect(persist).not.toHaveBeenCalled();
-		expect(broadcast).toHaveBeenLastCalledWith(null);
-	});
-
 	it("keeps B when a slower A enumeration finishes later", async () => {
 		const harness = createContext();
 		harness.seedCache(sourceB);

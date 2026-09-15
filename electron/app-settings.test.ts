@@ -2,7 +2,6 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_PROJECT_APPEARANCE } from "../src/lib/projectDefaults";
 import { AppSettingsStore, DEFAULT_RECORDING_PREFERENCES } from "./app-settings";
 
 const dirs: string[] = [];
@@ -41,33 +40,23 @@ describe("app settings store", () => {
 		}
 	});
 
-	it("stores and resets versioned appearance and recording setup", () => {
+	it("stores the last source beside the recording preferences", () => {
 		const dir = temp();
 		const store = new AppSettingsStore(dir);
-		const custom = { ...DEFAULT_PROJECT_APPEARANCE, wallpaper: "#010203", padding: 7 };
-		expect(store.setAppearanceDefaults(custom).appearance).toMatchObject({ custom: true });
-		store.setLastSource({
+		const source = {
 			platform: "win32",
 			kind: "screen",
 			id: "screen:1",
 			name: "Display",
 			displayId: "1",
-		});
+		} as const;
 		store.setRecordingPreferences({ micEnabled: true, micDeviceId: "mic" });
-		expect(store.resetRecordingSetup()).toMatchObject({
-			recording: DEFAULT_RECORDING_PREFERENCES,
-			lastSource: null,
-		});
-		expect(store.resetAppearanceDefaults().appearance).toEqual({
-			version: 1,
-			custom: false,
-			defaults: DEFAULT_PROJECT_APPEARANCE,
-		});
+		expect(store.setLastSource(source).lastSource).toEqual(source);
 		expect(
 			JSON.parse(readFileSync(path.join(dir, "recording-settings.json"), "utf8")),
-		).toMatchObject({
-			projectAppearance: { version: 1, defaults: null },
-		});
+		).toMatchObject({ micEnabled: true, micDeviceId: "mic", lastSource: source });
+		expect(store.setLastSource(null).lastSource).toBeNull();
+		expect(store.getSnapshot().recording).toMatchObject({ micEnabled: true, micDeviceId: "mic" });
 	});
 
 	it("rejects invalid or failed writes without changing the published durable value", () => {
