@@ -281,9 +281,14 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			setMicrophoneEnabled(prefs.micEnabled);
 			setMicrophoneDeviceId(prefs.micDeviceId ?? undefined);
 			setMicrophoneDeviceName(prefs.micDeviceName ?? undefined);
-			setWebcamEnabledState(prefs.camEnabled);
-			setWebcamDeviceId(prefs.camDeviceId ?? undefined);
-			setWebcamDeviceName(prefs.camDeviceName ?? undefined);
+			const isCliRecord =
+				typeof window !== "undefined" &&
+				new URLSearchParams(window.location.search).get("windowType") === "cli-record";
+			if (!isCliRecord) {
+				setWebcamEnabledState(prefs.camEnabled);
+				setWebcamDeviceId(prefs.camDeviceId ?? undefined);
+				setWebcamDeviceName(prefs.camDeviceName ?? undefined);
+			}
 			setSystemAudioEnabled(prefs.systemAudioEnabled);
 			setCursorCaptureMode(prefs.cursorCaptureMode);
 			setRecordingPrefsLoaded(true);

@@ -3,7 +3,8 @@ import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import { getAvailableLocales, getLocaleName } from "@/i18n/loader";
 import { loadUserPreferences, saveUserPreferences } from "@/lib/userPreferences";
 import { nativeBridgeClient } from "@/native";
-import { type CameraDevice, useCameraDevices } from "../../hooks/useCameraDevices";
+import { type CameraDevice } from "../../hooks/useCameraDevices";
+import { useCameraHudSync } from "../../hooks/useCameraHudSync";
 import {
 	isPlaceholderMicrophoneLabel,
 	type MicrophoneDevice,
@@ -167,16 +168,22 @@ export function LaunchWindow() {
 	// Passing `webcamDeviceId` as the preferred device is what keeps the pick the
 	// user made in the editor's Rec stage: this window is destroyed and rebuilt
 	// for every recording, so the enumeration default would otherwise revert the
-	// camera to whatever the OS lists first on each take.
+	// camera to whatever the OS lists first on each take. Write-back waits for
+	// persisted prefs so an enumeration default cannot overwrite a late cam2.
 	const {
 		devices: cameraDevices,
-		selectedDevice: selectedCamera,
 		selectedDeviceId: selectedCameraId,
 		setSelectedDeviceId: setSelectedCameraId,
 		isLoading: isCameraDevicesLoading,
 		isReady: cameraDevicesReady,
 		error: cameraDevicesError,
-	} = useCameraDevices(true, webcamDeviceId, webcamDeviceName);
+	} = useCameraHudSync({
+		webcamDeviceId,
+		webcamDeviceName,
+		recordingPrefsLoaded,
+		setWebcamDeviceId,
+		setWebcamDeviceName,
+	});
 	// The microphone list stays lazy: enumerating it asks for mic permission,
 	// which would light the OS "in use" indicator just for opening the HUD.
 	const {
@@ -202,28 +209,6 @@ export function LaunchWindow() {
 			setMicrophoneDeviceName(undefined);
 		}
 	}, [selectedMicId, micDevices, micDevicesReady, setMicrophoneDeviceId, setMicrophoneDeviceName]);
-
-	// Keyed on the chosen device's own fields, never on the `cameraDevices` array.
-	// That array is rebuilt on every `devicechange`, and mirroring the selection
-	// back on each rebuild put this effect in a tug-of-war with the preference
-	// adoption inside `useCameraDevices`: the two wrote each other's value on
-	// every commit and the HUD spun without ever settling.
-	const selectedCameraLabel = selectedCamera?.label;
-	useEffect(() => {
-		if (selectedCameraId) {
-			setWebcamDeviceId(selectedCameraId);
-			setWebcamDeviceName(selectedCameraLabel);
-		} else if (cameraDevicesReady) {
-			setWebcamDeviceId(undefined);
-			setWebcamDeviceName(undefined);
-		}
-	}, [
-		selectedCameraId,
-		selectedCameraLabel,
-		cameraDevicesReady,
-		setWebcamDeviceId,
-		setWebcamDeviceName,
-	]);
 
 	useEffect(() => {
 		let cancelled = false;

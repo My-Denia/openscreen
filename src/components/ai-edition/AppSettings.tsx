@@ -58,7 +58,11 @@ function AppSettings({ open, onClose }: { open: boolean; onClose: () => void }) 
 		recording?.camDeviceName ?? undefined,
 	);
 
-	const run = async (work: () => Promise<AppSettingsSnapshot>) => {
+	const run = async (
+		work: () => Promise<AppSettingsSnapshot>,
+		options: { replaceRecording?: boolean } = {},
+	) => {
+		const replaceRecording = options.replaceRecording !== false;
 		const generation = ++generationRef.current;
 		setStatus("saving");
 		setError(null);
@@ -66,7 +70,9 @@ function AppSettings({ open, onClose }: { open: boolean; onClose: () => void }) 
 			const next = await work();
 			if (generation !== generationRef.current) return;
 			setSnapshot(next);
-			setRecording(next.recording);
+			if (replaceRecording) {
+				setRecording(next.recording);
+			}
 			setStatus("saved");
 		} catch (cause) {
 			if (generation !== generationRef.current) return;
@@ -256,7 +262,9 @@ function AppSettings({ open, onClose }: { open: boolean; onClose: () => void }) 
 										const defaults = projectAppearanceFromEditorSettings(
 											getEditorSettings(document),
 										);
-										void run(() => window.electronAPI.setProjectAppearanceDefaults(defaults));
+										void run(() => window.electronAPI.setProjectAppearanceDefaults(defaults), {
+											replaceRecording: false,
+										});
 									}}
 								>
 									{t("appSettings.useCurrentAppearance")}
@@ -265,7 +273,9 @@ function AppSettings({ open, onClose }: { open: boolean; onClose: () => void }) 
 									type="button"
 									className={styles.btn}
 									onClick={() =>
-										void run(() => window.electronAPI.resetProjectAppearanceDefaults())
+										void run(() => window.electronAPI.resetProjectAppearanceDefaults(), {
+											replaceRecording: false,
+										})
 									}
 									disabled={status === "saving"}
 								>
