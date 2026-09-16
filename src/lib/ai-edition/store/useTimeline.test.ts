@@ -1046,6 +1046,50 @@ describe("useTimeline undo history", () => {
 		expect(useProjectStore.getState().document?.timeline.clips).toHaveLength(2);
 	});
 
+	it("serialises rapid zoom-depth writes so one undo steps back one level", async () => {
+		seed(docWithZoom);
+		let releaseFirst!: () => void;
+		let saveCalls = 0;
+		bridgeMocks.save.mockImplementation(async (doc: AxcutDocument) => {
+			saveCalls += 1;
+			if (saveCalls === 1) {
+				await new Promise<void>((resolve) => {
+					releaseFirst = resolve;
+				});
+			}
+			return { success: true, document: doc };
+		});
+		const { result } = renderTimeline();
+
+		const p4 = result.current.updateZoomDepth("zoom_a", 4);
+		const pTitle = result.current.enqueue(async () => {
+			const doc = useProjectStore.getState().document;
+			if (!doc) return false;
+			return useProjectStore
+				.getState()
+				.saveDocument({ ...doc, project: { ...doc.project, title: "kept" } }, { history: true });
+		});
+		const p5 = result.current.updateZoomDepth("zoom_a", 5);
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(3);
+
+		await waitFor(() => {
+			expect(releaseFirst).toEqual(expect.any(Function));
+		});
+		await act(async () => {
+			releaseFirst();
+			await Promise.all([p4, pTitle, p5]);
+		});
+
+		const after = useProjectStore.getState().document;
+		expect(after?.zoomRanges[0]?.depth).toBe(5);
+		expect(after?.project.title).toBe("kept");
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(4);
+		expect(useProjectStore.getState().document?.project.title).toBe("kept");
+	});
+
 	it("leaves no undo step behind a focus drag whose commit failed", async () => {
 		// The drag used to push its pre-drag document from the FIRST `setDocument`. When
 		// the commit then failed, `commitZoomFocus` restored that same document through

@@ -40,7 +40,6 @@ import {
 } from "@/lib/ai-edition/store/transcriptionStore";
 import { useUndoRedoShortcuts } from "@/lib/ai-edition/store/undo";
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
-import { useSequentialTimelineOps } from "@/lib/ai-edition/store/useSequentialTimelineOps";
 import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { isGeneratedAssetId } from "@/lib/ai-edition/timeline/clip-parts";
 import { newRegionDurationSec } from "@/lib/ai-edition/timeline/newRegionDuration";
@@ -301,6 +300,9 @@ export function NewEditorShell() {
 		[document, transcriptions],
 	);
 	const tl = useTimeline();
+	// Shared with `updateZoomDepth`: one document queue, so a rapid zoom-level
+	// step cannot clobber a clip insert (or the other way around).
+	const enqueueTimelineWrite = tl.enqueue;
 	// An undo only puts the restored document back in the store and marks it dirty,
 	// so without this the reverted state never reached disk: close the window and the
 	// edit the user just undid came back. `history: false` is load-bearing — a
@@ -321,19 +323,6 @@ export function NewEditorShell() {
 		(window as unknown as { __osProjectStore?: typeof useProjectStore }).__osProjectStore =
 			useProjectStore;
 	}
-
-	// ponytail: serialise timeline-edit saves so two rapid Backspaces
-	// don't race each other's save and overwrite one another in the
-	// store. The hook reads the doc inside the chain (after awaiting the
-	// previous save) — see its source for the race this fixes.
-	// Only `enqueue` now: the two trim handlers were the last callers of `apply`, and both
-	// read the document inside the chain so a cut cannot be overwritten by a word edit
-	// landing between the read and the save. The `add_trim_range` / `remove_trim_range` ops
-	// stay for the agent, which addresses clips rather than moments.
-	const { enqueue: enqueueTimelineWrite } = useSequentialTimelineOps({
-		fallbackDocument: document,
-		saveDocument,
-	});
 
 	const promptUnsaved = useCallback(
 		(action: "close" | "new" | "open" | "record"): Promise<UnsavedChoice> => {
@@ -701,7 +690,8 @@ export function NewEditorShell() {
 	// intact, the word is just hidden by the skip overlay). Mirrors
 	// axcut's `queueAddTrimRange` / `queueRemoveTrimRange` callbacks in
 	// apps/web/src/App.tsx. The serialised save + inside-the-chain doc
-	// read is owned by `useSequentialTimelineOps` above.
+	// read is owned by `tl.enqueue` (the same `useSequentialTimelineOps`
+	// chain `updateZoomDepth` uses).
 	// transcript-pane → a cut, authored as a stretch of the RAW ruler (issue #560).
 	//
 	// The pane used to hand over the asset and clip the words belonged TO, which is how a

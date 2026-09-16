@@ -40,6 +40,7 @@ import {
 import { dropTrimPillsByIds, resolveTimelineSpanToTrim } from "../timeline/trim-mapping";
 import type { AutoZoomSuggestion } from "../timeline/zoom-suggestions";
 import { useProjectStore } from "./projectStore";
+import { useSequentialTimelineOps } from "./useSequentialTimelineOps";
 
 // How long a region lasts when the caller doesn't say. The timeline's toolbar
 // passes its own duration instead, derived from the current zoom so the new pill
@@ -108,6 +109,15 @@ export function useTimeline() {
 	const projectId = useProjectStore((s) => s.projectId);
 	const saveDocument = useProjectStore((s) => s.saveDocument);
 	const setDocument = useProjectStore((s) => s.setDocument);
+	// Same chain NewEditorShell uses for clip insert / trim / transcript writes:
+	// two rapid whole-document saves that read the doc at call time clobber each
+	// other even when the main process serialises disk I/O. Zoom-level buttons
+	// step while the previous save is in flight, so they belong on this queue
+	// and must read the committed document inside it.
+	const { enqueue } = useSequentialTimelineOps({
+		fallbackDocument: document,
+		saveDocument,
+	});
 	const [selection, setSelection] = useState<RegionHandle | null>(null);
 	// F2.7 — shift-click multi-selection. `selection` stays the inspector's
 	// focused region (the last one clicked); `multiSelection` is the full set
@@ -693,18 +703,25 @@ export function useTimeline() {
 	// Zoom-level control for the region-settings panel (1-6, matches
 	// zoomRegionSchema's depth literal union — 1.0x..3.5x in 0.5x steps per
 	// the `depth/2 + 0.5` label formula used throughout the timeline UI).
+	//
+	// Read and patch inside `enqueue`, after the previous timeline save has
+	// settled. Capturing `document` from this render made ArrowRight, ArrowRight
+	// build both D4 and D5 from D3, so one Ctrl+Z jumped 5 → 3 and a later
+	// save could drop an unrelated edit that landed in between.
 	const updateZoomDepth = useCallback(
-		async (id: string, depth: 1 | 2 | 3 | 4 | 5 | 6) => {
-			if (!document) return;
-			const next: AxcutDocument = {
-				...document,
-				zoomRanges: patchPillById(document.zoomRanges, id, {
-					depth,
-				}) as AxcutDocument["zoomRanges"],
-			};
-			await saveDocument(next, { history: true });
-		},
-		[document, saveDocument],
+		(id: string, depth: 1 | 2 | 3 | 4 | 5 | 6) =>
+			enqueue(async () => {
+				const doc = useProjectStore.getState().document;
+				if (!doc) return false;
+				const next: AxcutDocument = {
+					...doc,
+					zoomRanges: patchPillById(doc.zoomRanges, id, {
+						depth,
+					}) as AxcutDocument["zoomRanges"],
+				};
+				return saveDocument(next, { history: true });
+			}),
+		[enqueue, saveDocument],
 	);
 
 	// Same story as `focusMode` below: the 3D tilt was implemented end to end — schema
@@ -1496,6 +1513,7 @@ export function useTimeline() {
 		selectAudioTrack,
 		selectRegion,
 		clearSelection,
+		enqueue,
 		applyClipEdit,
 		insertClipAt,
 		moveClip,

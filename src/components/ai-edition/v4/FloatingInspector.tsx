@@ -382,35 +382,52 @@ export function ZoomLevelControl({
 }) {
 	const ts = useScopedT("settings");
 	const buttonsRef = useRef<Array<HTMLButtonElement | null>>([]);
-	// The level this control last asked for. `updateZoomDepth` saves the document, so the new
-	// `region.depth` only arrives a tick later — long enough for a second keystroke to read the
-	// old one. Without this, stepping 3 → 4 → 3 dropped the way back: the second press compared
-	// 3 against a prop that still said 3 and looked like a no-op, leaving the level on 4 with
-	// focus on 3.
-	//
-	// That save also echoes earlier requests after a later one is already in flight: 3 → 4 → 5
-	// can land `region.depth = 4` while we still want 5. Blindly copying the prop then made
-	// ArrowLeft a no-op (4 looked current) and left focus on 4 with the level on 5. Echoes of
-	// depths we asked for must not overwrite the latest request; a write from anywhere else
-	// (undo/redo, the agent) is not in that set, so it still wins.
+	// Last depth this instance asked for, and the generation of that request.
+	// Depth values repeat (only 1–6), so a Set of depths cannot tell "our older
+	// 4 landed" from "the latest request is 4" or from an undo that happens to
+	// land on 4. Each click/key gets a new gen; only that gen's settlement may
+	// confirm or fail it. `inFlight` is how many of those gens are still open,
+	// so an echo of an older request does not overwrite the latest while it is
+	// still in flight. A save that reports false clears the request so the same
+	// level can be retried; a region-id change drops the lot, because SelectionPane
+	// does not remount this control when the selected pill changes.
 	const requestedRef = useRef<ZoomDepth>(region.depth);
-	const pendingRef = useRef(new Set<ZoomDepth>());
+	const genRef = useRef(0);
+	const inFlightRef = useRef(0);
+	const regionRef = useRef(region);
+	regionRef.current = region;
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: region.id is the trigger, not a read — the body resets request state; depth is taken from the render's ref so a same-depth other pill still clears the previous pill's pending gen.
 	useEffect(() => {
-		if (region.depth === requestedRef.current) {
-			pendingRef.current.clear();
-			return;
-		}
-		if (pendingRef.current.has(region.depth)) return;
+		genRef.current += 1;
+		inFlightRef.current = 0;
+		requestedRef.current = regionRef.current.depth;
+	}, [region.id]);
+
+	useEffect(() => {
+		if (inFlightRef.current > 0) return;
 		requestedRef.current = region.depth;
-		pendingRef.current.clear();
 	}, [region.depth]);
 
 	const setDepth = (depth: ZoomDepth) => {
 		// Re-pressing the current level is not an edit: no save, no undo entry.
 		if (depth === requestedRef.current) return;
 		requestedRef.current = depth;
-		pendingRef.current.add(depth);
-		void tl.updateZoomDepth(region.id, depth);
+		const gen = ++genRef.current;
+		inFlightRef.current += 1;
+		const regionId = region.id;
+		void Promise.resolve(tl.updateZoomDepth(regionId, depth)).then(
+			(ok) => {
+				if (gen !== genRef.current) return;
+				inFlightRef.current -= 1;
+				if (ok === false) requestedRef.current = regionRef.current.depth;
+			},
+			() => {
+				if (gen !== genRef.current) return;
+				inFlightRef.current -= 1;
+				requestedRef.current = regionRef.current.depth;
+			},
+		);
 	};
 
 	return (
@@ -640,7 +657,7 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 			<div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
 				{paneHeader(<ZoomIn size={15} />, tt("labels.zoom"), onClose, tc("actions.close"))}
 				<div style={bodyStyle}>
-					<ZoomLevelControl region={region} tl={tl} />
+					<ZoomLevelControl key={region.id} region={region} tl={tl} />
 					{paneRow(
 						ts("zoom.threeD.title"),
 						<select

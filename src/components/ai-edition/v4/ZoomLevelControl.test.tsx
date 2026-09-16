@@ -14,9 +14,7 @@ vi.mock("@/contexts/I18nContext", () => ({
 import { ZoomLevelControl } from "./FloatingInspector";
 
 function renderControl(depth: ZoomDepth) {
-	const updateZoomDepth = vi.fn(async () => {
-		// the control only awaits the promise, never its value
-	});
+	const updateZoomDepth = vi.fn(async () => true);
 	render(<ZoomLevelControl region={{ id: "z1", depth }} tl={{ updateZoomDepth }} />);
 	const group = screen.getByRole("group", { name: "zoom.level" });
 	const buttons = screen.getAllByRole("button");
@@ -30,9 +28,7 @@ function renderControl(depth: ZoomDepth) {
  * every arrow would keep counting from the level the control opened on.
  */
 function renderControlled(initial: ZoomDepth) {
-	const updateZoomDepth = vi.fn(async (_id: string, _depth: ZoomDepth) => {
-		// the control only awaits the promise, never its value
-	});
+	const updateZoomDepth = vi.fn(async (_id: string, _depth: ZoomDepth) => true);
 	function Harness() {
 		const [depth, setDepth] = useState<ZoomDepth>(initial);
 		return (
@@ -44,7 +40,7 @@ function renderControlled(initial: ZoomDepth) {
 						// the next keystroke in a test then sees the same DOM a user's would.
 						updateZoomDepth(id, next);
 						setDepth(next);
-						return Promise.resolve();
+						return Promise.resolve(true);
 					},
 				}}
 			/>
@@ -91,15 +87,16 @@ describe("ZoomLevelControl", () => {
 	// The other half of that guard: undo/redo and the agent write the region without going
 	// through this control, so a request of ours must never outlive the prop. The moment the
 	// region says something else, that is the level to compare against.
-	it("follows the region when the level is changed from elsewhere", () => {
-		const updateZoomDepth = vi.fn(async (_id: string, _depth: ZoomDepth) => {
-			// the control only awaits the promise, never its value
-		});
+	it("follows the region when the level is changed from elsewhere", async () => {
+		const updateZoomDepth = vi.fn(async (_id: string, _depth: ZoomDepth) => true);
 		const { rerender } = render(
 			<ZoomLevelControl region={{ id: "z1", depth: 3 }} tl={{ updateZoomDepth }} />,
 		);
 		fireEvent.click(screen.getAllByRole("button")[4] as HTMLButtonElement);
 		expect(updateZoomDepth).toHaveBeenCalledWith("z1", 5);
+		await act(async () => {
+			// Let the request settle so the follow-effect is allowed to copy the prop.
+		});
 
 		// An undo lands on 2 instead of the 5 this control asked for.
 		rerender(<ZoomLevelControl region={{ id: "z1", depth: 2 }} tl={{ updateZoomDepth }} />);
@@ -143,9 +140,7 @@ describe("ZoomLevelControl", () => {
 	// Focus moves in the keystroke itself, which is why holding an arrow down keeps advancing
 	// instead of re-applying the same step against a `depth` prop that has not landed yet.
 	it("keeps stepping while the write is still in flight", () => {
-		const updateZoomDepth = vi.fn(async (_id: string, _depth: ZoomDepth) => {
-			// the control only awaits the promise, never its value
-		});
+		const updateZoomDepth = vi.fn(async (_id: string, _depth: ZoomDepth) => true);
 		function Harness() {
 			const [depth, setDepth] = useState<ZoomDepth>(3);
 			return (
@@ -155,6 +150,7 @@ describe("ZoomLevelControl", () => {
 						updateZoomDepth: async (id, next) => {
 							await updateZoomDepth(id, next);
 							setDepth(next);
+							return true;
 						},
 					}}
 				/>
@@ -176,9 +172,7 @@ describe("ZoomLevelControl", () => {
 	// still says 3 because the first write has not landed -- or the user's second keystroke
 	// is dropped and the level stays on 4.
 	it("does not drop a step back while the first write is still in flight", () => {
-		const updateZoomDepth = vi.fn(async (_id: string, _depth: ZoomDepth) => {
-			// the control only awaits the promise, never its value
-		});
+		const updateZoomDepth = vi.fn(async (_id: string, _depth: ZoomDepth) => true);
 		function Harness() {
 			const [depth, setDepth] = useState<ZoomDepth>(3);
 			return (
@@ -188,6 +182,7 @@ describe("ZoomLevelControl", () => {
 						updateZoomDepth: async (id, next) => {
 							await updateZoomDepth(id, next);
 							setDepth(next);
+							return true;
 						},
 					}}
 				/>
@@ -211,8 +206,8 @@ describe("ZoomLevelControl", () => {
 	it("does not treat an earlier in-flight write as the latest request", async () => {
 		const resolvers: Array<() => void> = [];
 		const updateZoomDepth = vi.fn((_id: string, _depth: ZoomDepth) => {
-			return new Promise<void>((resolve) => {
-				resolvers.push(resolve);
+			return new Promise<boolean>((resolve) => {
+				resolvers.push(() => resolve(true));
 			});
 		});
 		function Harness() {
@@ -248,6 +243,77 @@ describe("ZoomLevelControl", () => {
 		fireEvent.keyDown(group, { key: "ArrowLeft" });
 		expect(updateZoomDepth.mock.calls.map(([, depth]) => depth)).toEqual([4, 5, 4]);
 		expect(buttons[3]).toHaveFocus();
+	});
+
+	// Depth values repeat, so an older request landing on 4 must not look like
+	// the later request for 4 has confirmed, or the 5 in between is treated as
+	// an external write and the latest 4 is lost.
+	it("does not treat an older request for the same depth as the latest one", async () => {
+		const resolvers: Array<() => void> = [];
+		const updateZoomDepth = vi.fn((_id: string, _depth: ZoomDepth) => {
+			return new Promise<boolean>((resolve) => {
+				resolvers.push(() => resolve(true));
+			});
+		});
+		function Harness() {
+			const [depth, setDepth] = useState<ZoomDepth>(3);
+			return (
+				<ZoomLevelControl
+					region={{ id: "z1", depth }}
+					tl={{
+						updateZoomDepth: (id, next) => {
+							const pending = updateZoomDepth(id, next);
+							void pending.then(() => setDepth(next));
+							return pending;
+						},
+					}}
+				/>
+			);
+		}
+		render(<Harness />);
+		const group = screen.getByRole("group", { name: "zoom.level" });
+		const buttons = screen.getAllByRole("button");
+		(buttons[2] as HTMLButtonElement).focus();
+		fireEvent.keyDown(group, { key: "ArrowRight" });
+		fireEvent.keyDown(group, { key: "ArrowRight" });
+		fireEvent.keyDown(group, { key: "ArrowLeft" });
+		expect(updateZoomDepth.mock.calls.map(([, depth]) => depth)).toEqual([4, 5, 4]);
+
+		await act(async () => {
+			resolvers[0]!();
+		});
+		await act(async () => {
+			resolvers[1]!();
+		});
+		fireEvent.click(buttons[4] as HTMLButtonElement);
+		expect(updateZoomDepth.mock.calls.map(([, depth]) => depth)).toEqual([4, 5, 4, 5]);
+	});
+
+	it("does not leak a pending request onto a different zoom region", async () => {
+		const updateZoomDepth = vi.fn(async (_id: string, _depth: ZoomDepth) => true);
+		const { rerender } = render(
+			<ZoomLevelControl region={{ id: "A", depth: 3 }} tl={{ updateZoomDepth }} />,
+		);
+		fireEvent.click(screen.getAllByRole("button")[4] as HTMLButtonElement);
+		expect(updateZoomDepth).toHaveBeenCalledWith("A", 5);
+
+		rerender(<ZoomLevelControl region={{ id: "B", depth: 3 }} tl={{ updateZoomDepth }} />);
+		fireEvent.click(screen.getAllByRole("button")[4] as HTMLButtonElement);
+		expect(updateZoomDepth).toHaveBeenLastCalledWith("B", 5);
+		expect(updateZoomDepth).toHaveBeenCalledTimes(2);
+	});
+
+	it("retries the same level after a failed save", async () => {
+		const updateZoomDepth = vi.fn(async (_id: string, _depth: ZoomDepth) => false);
+		render(<ZoomLevelControl region={{ id: "z1", depth: 3 }} tl={{ updateZoomDepth }} />);
+		const buttons = screen.getAllByRole("button");
+		fireEvent.click(buttons[4] as HTMLButtonElement);
+		await act(async () => {
+			// settle the failed write so the same target is not stuck as current
+		});
+		fireEvent.click(buttons[4] as HTMLButtonElement);
+		expect(updateZoomDepth).toHaveBeenCalledTimes(2);
+		expect(updateZoomDepth).toHaveBeenLastCalledWith("z1", 5);
 	});
 
 	it("clamps at the lowest level instead of wrapping", () => {
