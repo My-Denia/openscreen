@@ -1248,6 +1248,172 @@ describe("useTimeline undo history", () => {
 		});
 	});
 
+	it("keeps a pending depth write when a zoom is added before the save lands", async () => {
+		seed(docWithZoom);
+		let releaseFirst!: () => void;
+		let saveCalls = 0;
+		bridgeMocks.save.mockImplementation(async (doc: AxcutDocument) => {
+			saveCalls += 1;
+			if (saveCalls === 1) {
+				await new Promise<void>((resolve) => {
+					releaseFirst = resolve;
+				});
+			}
+			return { success: true, document: doc };
+		});
+		const { result } = renderTimeline();
+
+		const pDepth = result.current.updateZoomDepth("zoom_a", 4);
+		const pAdd = result.current.addZoom(1);
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(3);
+		expect(useProjectStore.getState().document?.zoomRanges).toHaveLength(1);
+
+		await waitFor(() => {
+			expect(releaseFirst).toEqual(expect.any(Function));
+		});
+		await act(async () => {
+			releaseFirst();
+			await Promise.all([pDepth, pAdd]);
+		});
+
+		const zooms = useProjectStore.getState().document?.zoomRanges ?? [];
+		expect(zooms.find((z) => z.id === "zoom_a")?.depth).toBe(4);
+		expect(zooms.length).toBeGreaterThan(1);
+	});
+
+	it("keeps a pending depth write when focus is dragged and committed before the save lands", async () => {
+		seed(docWithZoom);
+		let releaseFirst!: () => void;
+		let saveCalls = 0;
+		bridgeMocks.save.mockImplementation(async (doc: AxcutDocument) => {
+			saveCalls += 1;
+			if (saveCalls === 1) {
+				await new Promise<void>((resolve) => {
+					releaseFirst = resolve;
+				});
+			}
+			return { success: true, document: doc };
+		});
+		const { result } = renderTimeline();
+
+		const pDepth = result.current.updateZoomDepth("zoom_a", 4);
+		act(() => {
+			result.current.updateZoomFocusLive("zoom_a", { cx: 0.8, cy: 0.2 });
+		});
+		const pCommit = result.current.commitZoomFocus();
+
+		await waitFor(() => {
+			expect(releaseFirst).toEqual(expect.any(Function));
+		});
+		await act(async () => {
+			releaseFirst();
+			await Promise.all([pDepth, pCommit]);
+		});
+
+		expect(useProjectStore.getState().document?.zoomRanges[0]).toMatchObject({
+			depth: 4,
+			focus: { cx: 0.8, cy: 0.2 },
+		});
+	});
+
+	it("keeps a pending depth write when an annotation is committed before the save lands", async () => {
+		seed({
+			...docWithZoom,
+			annotations: [
+				{
+					id: "ann_a",
+					startMs: 1000,
+					endMs: 3000,
+					clipId: "clip_a",
+					sourceStartSec: 1,
+					sourceEndSec: 3,
+					type: "text",
+					content: "before",
+					textContent: "",
+					position: { x: 50, y: 50 },
+					size: { width: 30, height: 20 },
+					style: {
+						color: "#ffffff",
+						backgroundColor: "transparent",
+						fontSize: 32,
+						fontFamily: "Inter",
+						fontWeight: "bold",
+						fontStyle: "normal",
+						textDecoration: "none",
+						textAlign: "center",
+						textAnimation: "none",
+					},
+					zIndex: 1,
+				},
+			],
+		});
+		let releaseFirst!: () => void;
+		let saveCalls = 0;
+		bridgeMocks.save.mockImplementation(async (doc: AxcutDocument) => {
+			saveCalls += 1;
+			if (saveCalls === 1) {
+				await new Promise<void>((resolve) => {
+					releaseFirst = resolve;
+				});
+			}
+			return { success: true, document: doc };
+		});
+		const { result } = renderTimeline();
+
+		const pDepth = result.current.updateZoomDepth("zoom_a", 4);
+		act(() => {
+			result.current.updateAnnotationLive("ann_a", { content: "typed" });
+		});
+		const pCommit = result.current.commitAnnotationChange();
+
+		await waitFor(() => {
+			expect(releaseFirst).toEqual(expect.any(Function));
+		});
+		await act(async () => {
+			releaseFirst();
+			await Promise.all([pDepth, pCommit]);
+		});
+
+		const after = useProjectStore.getState().document;
+		expect(after?.zoomRanges[0]?.depth).toBe(4);
+		expect(after?.annotations[0]?.content).toBe("typed");
+	});
+
+	it("does not restore a buried pre-depth snapshot when a later focus commit fails", async () => {
+		seed(docWithZoom);
+		let releaseFirst!: () => void;
+		let saveCalls = 0;
+		bridgeMocks.save.mockImplementation(async (doc: AxcutDocument) => {
+			saveCalls += 1;
+			if (saveCalls === 1) {
+				await new Promise<void>((resolve) => {
+					releaseFirst = resolve;
+				});
+				return { success: true, document: doc };
+			}
+			return { success: false, error: "disk full" };
+		});
+		const { result } = renderTimeline();
+
+		const pDepth = result.current.updateZoomDepth("zoom_a", 4);
+		await waitFor(() => {
+			expect(releaseFirst).toEqual(expect.any(Function));
+		});
+		act(() => {
+			result.current.updateZoomFocusLive("zoom_a", { cx: 0.8, cy: 0.2 });
+		});
+		const pCommit = result.current.commitZoomFocus();
+		await act(async () => {
+			releaseFirst();
+			await Promise.all([pDepth, pCommit]);
+		});
+
+		expect(useProjectStore.getState().document?.zoomRanges[0]).toMatchObject({
+			depth: 4,
+			focus: { cx: 0.5, cy: 0.5 },
+		});
+	});
+
 	it("leaves no undo step behind a focus drag whose commit failed", async () => {
 		// The drag used to push its pre-drag document from the FIRST `setDocument`. When
 		// the commit then failed, `commitZoomFocus` restored that same document through
