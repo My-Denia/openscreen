@@ -22,6 +22,14 @@ const probeVideoDimensionsMock = vi.hoisted(() =>
 );
 const probeAudioDurationMock = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 const toastErrorMock = vi.hoisted(() => vi.fn());
+// Real implementation unless a test forces an answer (the backfill's timeout branch).
+const waitForDocumentSavesMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./projectStore", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./projectStore")>();
+	waitForDocumentSavesMock.mockImplementation(actual.waitForDocumentSaves);
+	return { ...actual, waitForDocumentSaves: waitForDocumentSavesMock };
+});
 
 vi.mock("sonner", () => ({ toast: { error: toastErrorMock } }));
 
@@ -302,6 +310,122 @@ describe("useTimeline backfills missing source dimensions on load", () => {
 		renderTimeline();
 		await waitFor(() => expect(bridgeMocks.save).toHaveBeenCalledTimes(1));
 		expect(probeVideoDimensionsMock).toHaveBeenCalledTimes(1);
+		const saved = useProjectStore.getState().document?.assets.find((a) => a.id === "asset_1");
+		expect(saved?.video).toMatchObject({ width: 1920, height: 1080 });
+	});
+
+	// A fresh recording: the document is rewritten (duration, camera link, auto-zoom) while
+	// the probe is still out. That re-render used to cancel the probe's write for good.
+	it("still persists probed dims when the document changes while the probe is running", async () => {
+		let resolveProbe!: (dims: { width: number; height: number }) => void;
+		probeVideoDimensionsMock.mockReturnValue(
+			new Promise((resolve) => {
+				resolveProbe = resolve;
+			}),
+		);
+		const unprobed = { ...sampleDoc, assets: [{ ...sampleDoc.assets[0], video: undefined }] };
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: unprobed,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+		renderTimeline();
+		await waitFor(() => expect(probeVideoDimensionsMock).toHaveBeenCalledTimes(1));
+		act(() => {
+			useProjectStore.setState({ document: { ...unprobed, zoomRanges: [] }, revision: 2 });
+		});
+		await act(async () => {
+			resolveProbe({ width: 1080, height: 1920 });
+		});
+		await waitFor(() => expect(bridgeMocks.save).toHaveBeenCalledTimes(1));
+		const saved = useProjectStore.getState().document?.assets.find((a) => a.id === "asset_1");
+		expect(saved?.video).toMatchObject({ width: 1080, height: 1920 });
+	});
+
+	// The fresh-recording auto-zooms are saved while the probe is out. The store only takes
+	// them once that save returns, so a backfill built on the store before then erased them.
+	it("keeps a save that is still in flight when the probe resolves", async () => {
+		let resolveProbe!: (dims: { width: number; height: number }) => void;
+		probeVideoDimensionsMock.mockReturnValue(
+			new Promise((resolve) => {
+				resolveProbe = resolve;
+			}),
+		);
+		const unprobed = { ...sampleDoc, assets: [{ ...sampleDoc.assets[0], video: undefined }] };
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: unprobed,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+		renderTimeline();
+		await waitFor(() => expect(probeVideoDimensionsMock).toHaveBeenCalledTimes(1));
+
+		let releaseZoomSave!: () => void;
+		const zoomSaveGate = new Promise<void>((resolve) => {
+			releaseZoomSave = resolve;
+		});
+		bridgeMocks.save.mockImplementationOnce(async (doc: typeof sampleDoc) => {
+			await zoomSaveGate;
+			return { success: true, document: doc };
+		});
+		const zoomed = {
+			...unprobed,
+			zoomRanges: [
+				{ id: "zoom_1", startMs: 0, endMs: 1000, depth: 3, focus: { cx: 0.5, cy: 0.5 } },
+			],
+		} as AxcutDocument;
+		let zoomSave!: Promise<boolean>;
+		act(() => {
+			zoomSave = useProjectStore.getState().saveDocument(zoomed, { history: true });
+		});
+		await act(async () => {
+			resolveProbe({ width: 1080, height: 1920 });
+			await new Promise((r) => setTimeout(r, 0));
+		});
+		await act(async () => {
+			releaseZoomSave();
+			await zoomSave;
+		});
+
+		await waitFor(() => expect(bridgeMocks.save).toHaveBeenCalledTimes(2));
+		await waitFor(() => {
+			const doc = useProjectStore.getState().document;
+			expect(doc?.zoomRanges).toHaveLength(1);
+			expect(doc?.assets.find((a) => a.id === "asset_1")?.video).toMatchObject({
+				width: 1080,
+				height: 1920,
+			});
+		});
+	});
+
+	// A wait that times out says nothing about what landed, so the backfill writes nothing.
+	// It must not leave the asset marked attempted either, or no later run ever probes it.
+	it("probes again on the next document change after the save wait timed out", async () => {
+		waitForDocumentSavesMock.mockResolvedValueOnce("timeout");
+		const unprobed = { ...sampleDoc, assets: [{ ...sampleDoc.assets[0], video: undefined }] };
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: unprobed,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+		renderTimeline();
+		await waitFor(() => expect(waitForDocumentSavesMock).toHaveBeenCalledTimes(1));
+		await act(async () => {
+			await new Promise((r) => setTimeout(r, 0));
+		});
+		expect(bridgeMocks.save).not.toHaveBeenCalled();
+
+		act(() => {
+			useProjectStore.setState({ document: { ...unprobed, zoomRanges: [] }, revision: 2 });
+		});
+		await waitFor(() => expect(bridgeMocks.save).toHaveBeenCalledTimes(1));
+		expect(probeVideoDimensionsMock).toHaveBeenCalledTimes(2);
 		const saved = useProjectStore.getState().document?.assets.find((a) => a.id === "asset_1");
 		expect(saved?.video).toMatchObject({ width: 1920, height: 1080 });
 	});
@@ -1044,6 +1168,75 @@ describe("useTimeline undo history", () => {
 			expect(redo()).toBe(true);
 		});
 		expect(useProjectStore.getState().document?.timeline.clips).toHaveLength(2);
+	});
+
+	// Holds the first document save until the test releases it; every later one lands at once.
+	const gateFirstSave = () => {
+		const gate: { release?: () => void } = {};
+		let calls = 0;
+		bridgeMocks.save.mockImplementation(async (doc: AxcutDocument) => {
+			calls += 1;
+			if (calls === 1) {
+				await new Promise<void>((resolve) => {
+					gate.release = resolve;
+				});
+			}
+			return { success: true, document: doc };
+		});
+		return gate;
+	};
+
+	it("lands rapid zoom-level steps in order, one undo step each", async () => {
+		seed(docWithZoom);
+		const gate = gateFirstSave();
+		const { result } = renderTimeline();
+
+		const p4 = result.current.updateZoomDepth("zoom_a", 4);
+		const p5 = result.current.updateZoomDepth("zoom_a", 5);
+		await waitFor(() => expect(gate.release).toEqual(expect.any(Function)));
+		await act(async () => {
+			gate.release?.();
+			await Promise.all([p4, p5]);
+		});
+
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(5);
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(4);
+	});
+
+	it("keeps a pending zoom level when the 3D tilt is changed before it lands", async () => {
+		seed(docWithZoom);
+		const gate = gateFirstSave();
+		const { result } = renderTimeline();
+
+		const pDepth = result.current.updateZoomDepth("zoom_a", 4);
+		const pRotation = result.current.updateZoomRotation("zoom_a", "iso");
+		await waitFor(() => expect(gate.release).toEqual(expect.any(Function)));
+		await act(async () => {
+			gate.release?.();
+			await Promise.all([pDepth, pRotation]);
+		});
+
+		expect(useProjectStore.getState().document?.zoomRanges[0]).toMatchObject({
+			depth: 4,
+			rotationPreset: "iso",
+		});
+	});
+
+	it("resolves a zoom-level write with whether the save took effect", async () => {
+		seed(docWithZoom);
+		const { result } = renderTimeline();
+		bridgeMocks.save.mockResolvedValueOnce({ success: false, error: "read-only" });
+
+		let ok: boolean | undefined;
+		await act(async () => {
+			ok = await result.current.updateZoomDepth("zoom_a", 4);
+		});
+
+		expect(ok).toBe(false);
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(3);
 	});
 
 	it("leaves no undo step behind a focus drag whose commit failed", async () => {
