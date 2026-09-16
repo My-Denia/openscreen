@@ -1090,6 +1090,40 @@ describe("useTimeline undo history", () => {
 		expect(useProjectStore.getState().document?.project.title).toBe("kept");
 	});
 
+	it("keeps a pending depth write when rotation is changed before the save lands", async () => {
+		seed(docWithZoom);
+		let releaseFirst!: () => void;
+		let saveCalls = 0;
+		bridgeMocks.save.mockImplementation(async (doc: AxcutDocument) => {
+			saveCalls += 1;
+			if (saveCalls === 1) {
+				await new Promise<void>((resolve) => {
+					releaseFirst = resolve;
+				});
+			}
+			return { success: true, document: doc };
+		});
+		const { result } = renderTimeline();
+
+		const pDepth = result.current.updateZoomDepth("zoom_a", 4);
+		const pRotation = result.current.updateZoomRotation("zoom_a", "iso");
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(3);
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.rotationPreset).toBeUndefined();
+
+		await waitFor(() => {
+			expect(releaseFirst).toEqual(expect.any(Function));
+		});
+		await act(async () => {
+			releaseFirst();
+			await Promise.all([pDepth, pRotation]);
+		});
+
+		expect(useProjectStore.getState().document?.zoomRanges[0]).toMatchObject({
+			depth: 4,
+			rotationPreset: "iso",
+		});
+	});
+
 	it("leaves no undo step behind a focus drag whose commit failed", async () => {
 		// The drag used to push its pre-drag document from the FIRST `setDocument`. When
 		// the commit then failed, `commitZoomFocus` restored that same document through

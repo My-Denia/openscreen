@@ -303,6 +303,25 @@ describe("ZoomLevelControl", () => {
 		expect(updateZoomDepth).toHaveBeenCalledTimes(2);
 	});
 
+	it("follows an undo after rapid steps have all settled", async () => {
+		const updateZoomDepth = vi.fn(async (_id: string, _depth: ZoomDepth) => true);
+		const { rerender } = render(
+			<ZoomLevelControl region={{ id: "z1", depth: 3 }} tl={{ updateZoomDepth }} />,
+		);
+		const buttons = screen.getAllByRole("button");
+		fireEvent.click(buttons[3] as HTMLButtonElement);
+		fireEvent.click(buttons[4] as HTMLButtonElement);
+		expect(updateZoomDepth.mock.calls.map(([, depth]) => depth)).toEqual([4, 5]);
+		await act(async () => {
+			// both generations must drain, or the follow-effect stays blocked
+		});
+
+		rerender(<ZoomLevelControl region={{ id: "z1", depth: 4 }} tl={{ updateZoomDepth }} />);
+		fireEvent.click(buttons[4] as HTMLButtonElement);
+		expect(updateZoomDepth).toHaveBeenCalledTimes(3);
+		expect(updateZoomDepth).toHaveBeenLastCalledWith("z1", 5);
+	});
+
 	it("retries the same level after a failed save", async () => {
 		const updateZoomDepth = vi.fn(async (_id: string, _depth: ZoomDepth) => false);
 		render(<ZoomLevelControl region={{ id: "z1", depth: 3 }} tl={{ updateZoomDepth }} />);

@@ -385,27 +385,25 @@ export function ZoomLevelControl({
 	// Last depth this instance asked for, and the generation of that request.
 	// Depth values repeat (only 1–6), so a Set of depths cannot tell "our older
 	// 4 landed" from "the latest request is 4" or from an undo that happens to
-	// land on 4. Each click/key gets a new gen; only that gen's settlement may
-	// confirm or fail it. `inFlight` is how many of those gens are still open,
-	// so an echo of an older request does not overwrite the latest while it is
-	// still in flight. A save that reports false clears the request so the same
-	// level can be retried; a region-id change drops the lot, because SelectionPane
-	// does not remount this control when the selected pill changes.
+	// land on 4. Each click/key gets a new gen. Every gen belonging to this
+	// region epoch is removed from `pending` when it settles — a superseded 4
+	// must still drain, or `pending` stays non-empty and undo/redo can never
+	// overwrite `requestedRef`. Only the latest gen may change `requestedRef`.
 	const requestedRef = useRef<ZoomDepth>(region.depth);
 	const genRef = useRef(0);
-	const inFlightRef = useRef(0);
+	const pendingRef = useRef(new Set<number>());
 	const regionRef = useRef(region);
 	regionRef.current = region;
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: region.id is the trigger, not a read — the body resets request state; depth is taken from the render's ref so a same-depth other pill still clears the previous pill's pending gen.
 	useEffect(() => {
 		genRef.current += 1;
-		inFlightRef.current = 0;
+		pendingRef.current.clear();
 		requestedRef.current = regionRef.current.depth;
 	}, [region.id]);
 
 	useEffect(() => {
-		if (inFlightRef.current > 0) return;
+		if (pendingRef.current.size > 0) return;
 		requestedRef.current = region.depth;
 	}, [region.depth]);
 
@@ -414,17 +412,17 @@ export function ZoomLevelControl({
 		if (depth === requestedRef.current) return;
 		requestedRef.current = depth;
 		const gen = ++genRef.current;
-		inFlightRef.current += 1;
+		pendingRef.current.add(gen);
 		const regionId = region.id;
 		void Promise.resolve(tl.updateZoomDepth(regionId, depth)).then(
 			(ok) => {
+				pendingRef.current.delete(gen);
 				if (gen !== genRef.current) return;
-				inFlightRef.current -= 1;
 				if (ok === false) requestedRef.current = regionRef.current.depth;
 			},
 			() => {
+				pendingRef.current.delete(gen);
 				if (gen !== genRef.current) return;
-				inFlightRef.current -= 1;
 				requestedRef.current = regionRef.current.depth;
 			},
 		);
