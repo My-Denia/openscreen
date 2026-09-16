@@ -78,32 +78,9 @@ export function useSequentialTimelineOps(options: {
 }): SequentialTimelineOps {
 	const { fallbackDocument, saveDocument } = options;
 	const saveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
-	// Nested enqueue is only the case where `task()` itself calls `enqueue`
-	// before it returns or hits an await — `enqueue(() => innerEnqueue())` and
-	// `enqueue(async () => { await innerEnqueue() })`. A later-turn sibling
-	// (Add Zoom while an insert save is in flight) must still wait on this
-	// chain. A flag that stayed true for the whole `await task()` treated that
-	// sibling as nested and ran two whole-document writes in parallel.
-	const syncDepthRef = useRef(0);
 
 	const enqueue = useCallback(<T>(task: () => Promise<T> | T): Promise<T> => {
-		if (syncDepthRef.current > 0) {
-			try {
-				return Promise.resolve(task());
-			} catch (err) {
-				return Promise.reject(err);
-			}
-		}
-		const queued = saveQueueRef.current.then(() => {
-			syncDepthRef.current += 1;
-			let result: Promise<T> | T;
-			try {
-				result = task();
-			} finally {
-				syncDepthRef.current -= 1;
-			}
-			return result;
-		});
+		const queued = saveQueueRef.current.then(() => task());
 		// Swallow rejection when advancing the queue so a failed save
 		// doesn't poison the queue — the next call still has a
 		// resolved promise to chain off. The original `queued` is

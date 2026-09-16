@@ -85,9 +85,6 @@ function makeDoc() {
 	};
 }
 
-// Same fixture, split into two clips: FloatingInspector's "Edit clip" button
-// only renders its picker popover past one clip (clips.length === 1 jumps
-// straight to onEditClip instead), so testing the popover needs a second clip.
 // Same fixture with one zoom region on the only clip, so the inspector's zoom pane —
 // and the level row inside it — has something to select. Depth 3 is the editor's default,
 // and `ZOOM_DEPTH_SCALES` renders it as the "1.80×" the pill is addressed by below.
@@ -108,6 +105,9 @@ function makeZoomDoc(): ReturnType<typeof makeDoc> {
 	return doc;
 }
 
+// Same fixture, split into two clips: FloatingInspector's "Edit clip" button
+// only renders its picker popover past one clip (clips.length === 1 jumps
+// straight to onEditClip instead), so testing the popover needs a second clip.
 function makeTwoClipDoc(): ReturnType<typeof makeDoc> {
 	const doc = makeDoc();
 	doc.timeline.clips = [
