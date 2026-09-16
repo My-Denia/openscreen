@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ZOOM_DEPTH_SCALES, type ZoomDepth } from "@/components/video-editor/types";
@@ -201,6 +201,53 @@ describe("ZoomLevelControl", () => {
 		fireEvent.keyDown(group, { key: "ArrowLeft" });
 		expect(updateZoomDepth.mock.calls.map(([, depth]) => depth)).toEqual([4, 3]);
 		expect(buttons[2]).toHaveFocus();
+	});
+
+	// `saveDocument` writes the returned document into the store and only then
+	// resolves, so an earlier request can echo back while a later one is still in
+	// flight. Copying that echo into the no-op guard made ArrowLeft look like a
+	// re-press of the current level: 3 → 4 → 5, 4 lands, ArrowLeft dropped, and
+	// the level stayed on 5 with focus on 4.
+	it("does not treat an earlier in-flight write as the latest request", async () => {
+		const resolvers: Array<() => void> = [];
+		const updateZoomDepth = vi.fn((_id: string, _depth: ZoomDepth) => {
+			return new Promise<void>((resolve) => {
+				resolvers.push(resolve);
+			});
+		});
+		function Harness() {
+			const [depth, setDepth] = useState<ZoomDepth>(3);
+			return (
+				<ZoomLevelControl
+					region={{ id: "z1", depth }}
+					tl={{
+						updateZoomDepth: (id, next) => {
+							const pending = updateZoomDepth(id, next);
+							void pending.then(() => setDepth(next));
+							return pending;
+						},
+					}}
+				/>
+			);
+		}
+		render(<Harness />);
+		const group = screen.getByRole("group", { name: "zoom.level" });
+		const buttons = screen.getAllByRole("button");
+		(buttons[2] as HTMLButtonElement).focus();
+		fireEvent.keyDown(group, { key: "ArrowRight" });
+		fireEvent.keyDown(group, { key: "ArrowRight" });
+		expect(updateZoomDepth.mock.calls.map(([, depth]) => depth)).toEqual([4, 5]);
+		expect(resolvers).toHaveLength(2);
+
+		await act(async () => {
+			resolvers[0]!();
+		});
+		expect(buttons[3]).toHaveAttribute("aria-pressed", "true");
+		expect(buttons[4]).toHaveFocus();
+
+		fireEvent.keyDown(group, { key: "ArrowLeft" });
+		expect(updateZoomDepth.mock.calls.map(([, depth]) => depth)).toEqual([4, 5, 4]);
+		expect(buttons[3]).toHaveFocus();
 	});
 
 	it("clamps at the lowest level instead of wrapping", () => {

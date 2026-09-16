@@ -386,17 +386,30 @@ export function ZoomLevelControl({
 	// `region.depth` only arrives a tick later — long enough for a second keystroke to read the
 	// old one. Without this, stepping 3 → 4 → 3 dropped the way back: the second press compared
 	// 3 against a prop that still said 3 and looked like a no-op, leaving the level on 4 with
-	// focus on 3. Whatever the prop says wins as soon as it moves, so a write from anywhere else
-	// (undo/redo, the agent) is never masked by a stale request of ours.
+	// focus on 3.
+	//
+	// That save also echoes earlier requests after a later one is already in flight: 3 → 4 → 5
+	// can land `region.depth = 4` while we still want 5. Blindly copying the prop then made
+	// ArrowLeft a no-op (4 looked current) and left focus on 4 with the level on 5. Echoes of
+	// depths we asked for must not overwrite the latest request; a write from anywhere else
+	// (undo/redo, the agent) is not in that set, so it still wins.
 	const requestedRef = useRef<ZoomDepth>(region.depth);
+	const pendingRef = useRef(new Set<ZoomDepth>());
 	useEffect(() => {
+		if (region.depth === requestedRef.current) {
+			pendingRef.current.clear();
+			return;
+		}
+		if (pendingRef.current.has(region.depth)) return;
 		requestedRef.current = region.depth;
+		pendingRef.current.clear();
 	}, [region.depth]);
 
 	const setDepth = (depth: ZoomDepth) => {
 		// Re-pressing the current level is not an edit: no save, no undo entry.
 		if (depth === requestedRef.current) return;
 		requestedRef.current = depth;
+		pendingRef.current.add(depth);
 		void tl.updateZoomDepth(region.id, depth);
 	};
 
