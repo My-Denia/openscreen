@@ -222,6 +222,7 @@ impl View {
             perspective: self.focal,
             offset: project([0.0; 3]),
             projective: true,
+            lamp: true,
         }
     }
 }

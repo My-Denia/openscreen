@@ -2237,6 +2237,12 @@ impl Compositor {
                 dof_pyramid.as_ref(),
             ),
         }
+        // L'appareil modelé (mode 17) passe APRÈS l'écran, et non sous lui comme le chrome plat :
+        // son socle vient DEVANT le plan du métrage et sa lunette mord dessus. Le shader s'arrête
+        // au plan du métrage dans l'ouverture, donc il ne recouvre jamais l'image.
+        if let Some(cb) = g.device_frame_cb([rw, rh]) {
+            self.draw_solid(enc, &cb);
+        }
 
         enc.end_encoding();
 
@@ -3538,6 +3544,100 @@ mod tests {
             compose_dof(&comp, &screen, "null", true) == compose_dof(&comp, &screen, "null", false),
             "rotation nulle : la profondeur de champ a changé la frame"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Cadres d'appareil modelés (mode 17) : pendant de `tests/device_frame_render.rs` (Windows)
+    // et du test Linux du même nom. Il tourne sur la CI macOS : c'est la seule compilation et la
+    // seule exécution du mode 17 en MSL.
+    // -----------------------------------------------------------------------
+
+    /// Un écran seul sur un fond magenta, avec le cadre `frame` (fragment JSON) et la rotation
+    /// `rotation`. Même forme que `compose_dof`, dont il ne diffère que par la clé lue.
+    fn compose_device(comp: &super::Compositor, screen: &FakeFrame, frame: &str, rotation: &str) -> Vec<u8> {
+        let json = format!(
+            r##"{{"clips":[],
+                "layout":{{"preset":"no-webcam","webcamSize":1,"webcamShape":"rectangle",
+                           "webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false}},
+                "effects":{{"padding":0.25,"blur":false,"shadow":0.6,"roundnessFrac":0.02,
+                            "motionBlur":0{frame}}},
+                "background":{{"kind":"color","color":"#ff00ff"}},
+                "zoomRegions":[{{"clipIndex":0,"startSec":0,"endSec":6,"scale":1.0,
+                                 "focusX":0.5,"focusY":0.5,"focusMode":"manual",
+                                 "rotation":{rotation}}}],
+                "annotations":[],
+                "cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,
+                           "clipToBounds":false,"theme":"default"}},
+                "cropByClip":[],
+                "output":{{"width":1280,"height":720,"fps":30}}}}"##
+        );
+        let scene = crate::scene::Scene::from_json(&json).expect("scene json");
+        comp.set_live_params(live_params_from_scene(&scene));
+        comp.set_has_webcam(false);
+        comp.set_scene(Some(scene));
+        let mut cfg = crate::config::Cfg::c8();
+        cfg.cursor = false;
+        cfg.mblur_n = 1;
+        unsafe {
+            comp.compose_frame(screen.as_ptr(), std::ptr::null(), 180.0, &cfg).expect("compose_frame");
+            comp.readback_direct().expect("readback_direct").2
+        }
+    }
+
+    /// Les quatre appareils se dessinent AUTOUR du métrage : chacun change beaucoup de pixels par
+    /// rapport à « pas de cadre », aucun ne ressemble aux autres, et le centre de l'ouverture
+    /// reste le métrage — c'est toute la thèse du mode 17, qui arrête ses rayons au plan que le
+    /// mode 8 dessine.
+    #[test]
+    fn the_device_frames_draw_around_the_footage() {
+        let Ok(gpu) = crate::d3d::Gpu::create(false) else {
+            eprintln!("pas de device Metal — test sauté");
+            return;
+        };
+        let (w, h) = (1280u32, 720u32);
+        let comp = super::Compositor::new_sized(&gpu, w, h).expect("Compositor::new_sized");
+        // Métrage UNIFORME, et gris moyen : un damier changerait d'échelle avec la boîte que le
+        // cadre rétrécit, et le pixel du centre ne serait plus comparable d'un cas à l'autre.
+        let screen = FakeFrame::new(640, 360, |_, _| 140);
+        let differing = |a: &[u8], b: &[u8]| {
+            a.chunks_exact(4)
+                .zip(b.chunks_exact(4))
+                .filter(|(p, q)| p.iter().zip(q.iter()).take(3).any(|(x, y)| x.abs_diff(*y) > 8))
+                .count()
+        };
+        // Le métrage est un aplat : compter ses pixels dit combien il en reste sous le cadre,
+        // sans avoir à reprojeter l'ouverture — ce que fait, lui, le test Windows
+        // (`tests/device_frame_render.rs`), point par point le long de la lunette.
+        let footage = |rgba: &[u8], c: [u8; 3]| {
+            rgba.chunks_exact(4).filter(|p| p[0] == c[0] && p[1] == c[1] && p[2] == c[2]).count()
+        };
+        let centre = |rgba: &[u8]| {
+            let i = (((h / 2) * w + w / 2) * 4) as usize;
+            [rgba[i], rgba[i + 1], rgba[i + 2]]
+        };
+        for (name, rotation) in [("flat", "null"), ("iso", r#""iso""#)] {
+            let none = compose_device(&comp, &screen, r#","frame":"none""#, rotation);
+            // Sans cadre, l'écran est centré : le pixel du centre EST le métrage.
+            let tone = centre(&none);
+            let bare = footage(&none, tone);
+            let mut shots = Vec::new();
+            for device in ["browser", "laptop", "phone", "monitor"] {
+                let rgba = compose_device(&comp, &screen, &format!(r#","frame":"{device}""#), rotation);
+                let seen = differing(&none, &rgba);
+                let kept = footage(&rgba, tone);
+                println!("{name:<5} {device:<8} {seen:>7} px de cadre, {kept:>7} px de métrage");
+                assert!(seen > 30_000, "{name} {device} : cadre invisible ({seen} px)");
+                // Le cadre rétrécit la boîte écran — le socle du portable en mange le plus, ~22 %
+                // de l'aire d'origine —, mais il ne doit RIEN recouvrir : le métrage reste là.
+                assert!(kept > bare / 8, "{name} {device} : métrage couvert ({kept} sur {bare})");
+                shots.push((device, rgba));
+            }
+            for (i, (a, ra)) in shots.iter().enumerate() {
+                for (b, rb) in &shots[i + 1..] {
+                    assert!(differing(ra, rb) > 10_000, "{name} : {a} et {b} se confondent");
+                }
+            }
+        }
     }
 
     // -----------------------------------------------------------------------

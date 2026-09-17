@@ -19,15 +19,15 @@
 
 struct Layer {
     dst: vec4<f32>,       // x,y,w,h sortie 0..1 (origine haut-gauche)
-    src: vec4<f32>,       // u0,v0,u1,v1 source 0..1 ; mode 14 : .x = 1 si warp projectif ; mode 15 : (decalage px du rayon, P, unite du modele px)
+    src: vec4<f32>,       // u0,v0,u1,v1 source 0..1 ; mode 14 : .x = 1 si warp projectif ; modes 15 et 17 : (decalage px du rayon, P, unite du modele px)
     quad_px: vec2<f32>,   // taille du quad en px de sortie (pour la SDF isotrope)
-    radius_px: f32,       // mode 15 : rapport w/h du sprite (son plus grand cote vaut 1 unite)
-    mode: f32,            // 0 = vidéo NV12, 1 = couleur pleine, 2 = ombre, 8 = écran tilté, 9 = flèche, 10 = flou/mosaïque, 12 = ombre du quad tilté, 13 = curseur tilté, 14 = cadre de fenetre, 15 = curseur modelise, 16 = impact du clic (emplacements : `cursor_impact_cb`)
-    color: vec4<f32>,     // mode 8 (camera reelle) : .xy = gradient d'eclairage ; mode 14 : fond de la barre de titre ; mode 15 : .rg = coin du sprite (unites du modele), .b = ecrasement de l'epaisseur, .a = opacite
-    fx: vec4<f32>,        // mode 2 : spread ombre en px ; mode 5 : (direction xy, temps programme replie, mouvement 0..3) ; modes 8/12/13/14 : coins TL,TR du quad projeté ; mode 9 : hampe de la flèche ; mode 10 : (flou?, rayon/bloc px, ovale?, teinté?) ; mode 15 : (rotation du plan X, Y, Z en rad, tangage)
-    src_prev: vec4<f32>,  // modes 8/12/13/14 : coins BR,BL du quad projeté ; mode 9 : barbe 1 ; mode 10 incliné : coins BR,BL du masque ; mode 15 : (hotspot du dessus, repere du plan en px ; lacet)
-    dst_prev: vec4<f32>,  // mode 8 : .xy = taille du plan en px AVANT projection (le rayon y vit), .z = 1 si coins hauts carres (sous un cadre), .w = 1 si warp projectif ; mode 14 : .xy = taille du plan du cadre, .z = hauteur de la barre, .w = epaisseur du filet (px du plan) ; modes 13 et 15 : rect de clip ; mode 9 : barbe 2 ; mode 10 incliné : coins TL,TR du masque
-    mb: vec4<f32>,        // mode 8 : [gx, gy, z_focus, k], profondeur du plan et flou (texels source) par px d'ecart, k = 0 coupe ; mode 0 : .x taps, .y force du flou, .w = 1 si coins hauts carres (sous un cadre) ; mode 5 : mb.x = aspect w/h de la sortie (fond anime) ; mode 12 : mb.y = spread de la pénombre en px ; mode 9 : mb.y = demi-épaisseur du trait en px ; mode 10 : mb.z = 1 si masque incliné, mb.w = 1 si son warp est projectif ; mode 13 : mb.x = 1 si warp projectif ; mode 14 : couleur du filet (alpha droit) ; mode 15 : .xy = demi-taille du plan dans son repere (px), .zw = translation du plan (repere camera, px)
+    radius_px: f32,       // mode 15 : rapport w/h du sprite (son plus grand cote vaut 1 unite) ; mode 17 : rayon exterieur du corps (unites du modele)
+    mode: f32,            // 0 = vidéo NV12, 1 = couleur pleine, 2 = ombre, 8 = écran tilté, 9 = flèche, 10 = flou/mosaïque, 12 = ombre du quad tilté, 13 = curseur tilté, 14 = cadre de fenetre, 15 = curseur modelise, 16 = impact du clic (emplacements : `cursor_impact_cb`), 17 = cadre d'appareil modelise (`device_frame_cb`)
+    color: vec4<f32>,     // mode 8 (camera reelle) : .xy = gradient d'eclairage ; mode 14 : fond de la barre de titre ; mode 15 : .rg = coin du sprite (unites du modele), .b = ecrasement de l'epaisseur, .a = opacite ; mode 17 : .r = l'appareil (1 navigateur, 2 portable, 3 telephone, 4 moniteur), .a = opacite
+    fx: vec4<f32>,        // mode 2 : spread ombre en px ; mode 5 : (direction xy, temps programme replie, mouvement 0..3) ; modes 8/12/13/14 : coins TL,TR du quad projeté ; mode 9 : hampe de la flèche ; mode 10 : (flou?, rayon/bloc px, ovale?, teinté?) ; mode 15 : (rotation du plan X, Y, Z en rad, tangage) ; mode 17 : (rotation du plan X, Y, Z en rad, epaisseur du corps)
+    src_prev: vec4<f32>,  // modes 8/12/13/14 : coins BR,BL du quad projeté ; mode 9 : barbe 1 ; mode 10 incliné : coins BR,BL du masque ; mode 15 : (hotspot du dessus, repere du plan en px ; lacet) ; mode 17 : marges du corps (gauche, haut, droite, bas ; unites du modele)
+    dst_prev: vec4<f32>,  // mode 8 : .xy = taille du plan en px AVANT projection (le rayon y vit), .z = 1 si coins hauts carres (sous un cadre), .w = 1 si warp projectif ; mode 14 : .xy = taille du plan du cadre, .z = hauteur de la barre, .w = epaisseur du filet (px du plan) ; modes 13 et 15 : rect de clip ; mode 9 : barbe 2 ; mode 10 incliné : coins TL,TR du masque ; mode 17 : libre
+    mb: vec4<f32>,        // mode 8 : [gx, gy, z_focus, k], profondeur du plan et flou (texels source) par px d'ecart, k = 0 coupe ; mode 0 : .x taps, .y force du flou, .w = 1 si coins hauts carres (sous un cadre) ; mode 5 : mb.x = aspect w/h de la sortie (fond anime) ; mode 12 : mb.y = spread de la pénombre en px ; mode 9 : mb.y = demi-épaisseur du trait en px ; mode 10 : mb.z = 1 si masque incliné, mb.w = 1 si son warp est projectif ; mode 13 : mb.x = 1 si warp projectif ; mode 14 : couleur du filet (alpha droit) ; modes 15 et 17 : .xy = demi-taille du plan dans son repere (px pour le 15, unites pour le 17), .zw = translation du plan (repere camera, px)
 }
 
 @group(0) @binding(0) var<uniform> layer: Layer;
@@ -597,6 +597,275 @@ fn cursor_impact(local: vec2<f32>) -> vec4<f32> {
     return vec4<f32>(layer.color.rgb * ring, a) * layer.color.a; // premultiplie, ombre noire
 }
 
+// ---- Cadre d'APPAREIL modelise (mode 17) ----
+// Port ligne pour ligne de `device_frame` (HLSL), dont les commentaires font foi : un portable,
+// un telephone, une fenetre de navigateur ou un moniteur modeles en vraie 3D autour du metrage,
+// lances de rayons dans la MEME camera que le plan, la face ecran exactement sur le plan du
+// metrage (mode 8), qui continue de le dessiner dans l'ouverture. Formes neutres dessinees ici :
+// aucune marque. Constantes : miroir de `frame_geometry.rs` (DEV_*) ; emplacements du cbuffer :
+// `frame_geometry::device_frame_cb`, resume au-dessus de `device_frame` dans le HLSL.
+const DEV_BEVEL: f32 = 0.010;
+const DEV_BEZEL_OVERLAP: f32 = 0.004;
+const DEV_DECK_ANGLE: f32 = 0.9075712;
+const DEV_DECK_LEN: f32 = 0.26;
+const DEV_DECK_THICK: f32 = 0.022;
+const DEV_DECK_OVERHANG: f32 = 0.055;
+const DEV_NECK_W: f32 = 0.075;
+const DEV_NECK_LEN: f32 = 0.085;
+const DEV_FOOT_W: f32 = 0.21;
+const DEV_FOOT_H: f32 = 0.035;
+const DEV_STAND_Z: f32 = 0.060;
+const DEV_SHELL = vec3<f32>(0.784, 0.804, 0.831);
+const DEV_SHELL_DARK = vec3<f32>(0.635, 0.659, 0.694);
+const DEV_BEZEL_RGB = vec3<f32>(0.047, 0.051, 0.063);
+const DEV_TABBAR = vec3<f32>(0.886, 0.906, 0.933);
+const DEV_TOOLBAR = vec3<f32>(0.933, 0.945, 0.961);
+const DEV_INK = vec3<f32>(0.580, 0.639, 0.722);
+
+fn dev_body_c() -> vec2<f32> {
+    return vec2<f32>((layer.src_prev.z - layer.src_prev.x) * 0.5, (layer.src_prev.w - layer.src_prev.y) * 0.5);
+}
+
+fn dev_body_h() -> vec2<f32> {
+    return layer.mb.xy + vec2<f32>((layer.src_prev.x + layer.src_prev.z) * 0.5,
+                                   (layer.src_prev.y + layer.src_prev.w) * 0.5);
+}
+
+// Chanfrein borne par la demi-epaisseur ET par la plus fine des marges (cf. HLSL).
+fn dev_bevel() -> f32 {
+    let thin = min(min(layer.src_prev.x, layer.src_prev.y), min(layer.src_prev.z, layer.src_prev.w));
+    return min(DEV_BEVEL, min(layer.fx.w * 0.4, thin * 0.5));
+}
+
+fn dev_is(k: f32) -> bool {
+    return abs(layer.color.r - k) < 0.5;
+}
+
+fn sd_dev_box(p: vec3<f32>, h: vec3<f32>, r: f32) -> f32 {
+    let q = abs(p) - h + vec3<f32>(r);
+    return length(max(q, vec3<f32>(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0) - r;
+}
+
+fn sd_dev_body(p: vec3<f32>) -> f32 {
+    let t = layer.fx.w;
+    let bev = dev_bevel();
+    let w = vec2<f32>(sd_round_rect(p.xy - dev_body_c(), dev_body_h(), layer.radius_px) + bev,
+                      abs(p.z + t * 0.5) - (t * 0.5 - bev));
+    let body = min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0))) - bev;
+    let ah = layer.mb.xy - vec2<f32>(DEV_BEZEL_OVERLAP);
+    var ar = max(layer.radius_px - layer.src_prev.x, 0.0);
+    ar = select(min(ar, min(ah.x, ah.y)), 0.0, dev_is(1.0) && p.y < 0.0);
+    let hole = max(sd_round_rect(p.xy, ah, ar), -p.z - t * 0.55);
+    return max(body, -hole);
+}
+
+fn sd_dev_deck(p: vec3<f32>) -> f32 {
+    let c = dev_body_c();
+    let h = dev_body_h();
+    let d = p - vec3<f32>(0.0, c.y + h.y, -layer.fx.w * 0.5);
+    let ca = cos(DEV_DECK_ANGLE);
+    let sa = sin(DEV_DECK_ANGLE);
+    let q = vec3<f32>(d.x, d.y * ca + d.z * sa, -d.y * sa + d.z * ca);
+    return sd_dev_box(q - vec3<f32>(0.0, DEV_DECK_LEN * 0.5, -DEV_DECK_THICK * 0.5),
+                      vec3<f32>(h.x + DEV_DECK_OVERHANG, DEV_DECK_LEN * 0.5, DEV_DECK_THICK * 0.5),
+                      DEV_DECK_THICK * 0.45);
+}
+
+fn sd_dev_stand(p: vec3<f32>) -> f32 {
+    let y0 = dev_body_c().y + dev_body_h().y;
+    let z0 = -layer.fx.w * 0.3 - DEV_STAND_Z * 0.5;
+    let neck = sd_dev_box(p - vec3<f32>(0.0, y0 + DEV_NECK_LEN * 0.5 - 0.01, z0),
+                          vec3<f32>(DEV_NECK_W, DEV_NECK_LEN * 0.5 + 0.01, DEV_STAND_Z * 0.5), 0.010);
+    let foot = sd_dev_box(p - vec3<f32>(0.0, y0 + DEV_NECK_LEN + DEV_FOOT_H * 0.5, z0),
+                          vec3<f32>(DEV_FOOT_W, DEV_FOOT_H * 0.5, DEV_STAND_Z * 0.5), 0.012);
+    return min(neck, foot);
+}
+
+fn sd_dev_extra(p: vec3<f32>) -> f32 {
+    if dev_is(2.0) {
+        return sd_dev_deck(p);
+    }
+    if dev_is(4.0) {
+        return sd_dev_stand(p);
+    }
+    return 1e9;
+}
+
+fn sd_device(p: vec3<f32>) -> f32 {
+    return min(sd_dev_body(p), sd_dev_extra(p));
+}
+
+fn device_normal(p: vec3<f32>) -> vec3<f32> {
+    let e = 0.0015;
+    let ka = vec3<f32>(1.0, -1.0, -1.0);
+    let kb = vec3<f32>(-1.0, -1.0, 1.0);
+    let kc = vec3<f32>(-1.0, 1.0, -1.0);
+    let kd = vec3<f32>(1.0, 1.0, 1.0);
+    return normalize(ka * sd_device(p + ka * e) + kb * sd_device(p + kb * e) +
+                     kc * sd_device(p + kc * e) + kd * sd_device(p + kd * e));
+}
+
+fn dev_cov(d: f32, aa: f32) -> f32 {
+    return clamp(0.5 - d / max(aa, 1e-6), 0.0, 1.0);
+}
+
+fn dev_browser_chrome(q: vec2<f32>, bar: f32, aa: f32) -> vec3<f32> {
+    let tabs = bar * 0.463;
+    var c = select(DEV_TOOLBAR, DEV_TABBAR, q.y < tabs);
+    c = mix(c, DEV_INK * 0.9, 0.35 * dev_cov(abs(q.y - bar) - aa * 0.5, aa));
+    if q.y < tabs {
+        let r = bar * 0.070;
+        var d = vec2<f32>(bar * 0.188 + r, bar * 0.161 + r);
+        c = mix(c, vec3<f32>(1.000, 0.373, 0.341), dev_cov(length(q - d) - r, aa));
+        d.x = d.x + bar * 0.242;
+        c = mix(c, vec3<f32>(0.996, 0.737, 0.180), dev_cov(length(q - d) - r, aa));
+        d.x = d.x + bar * 0.242;
+        c = mix(c, vec3<f32>(0.157, 0.784, 0.251), dev_cov(length(q - d) - r, aa));
+        let th = vec2<f32>(bar * 1.974, bar * 0.181);
+        let tc = vec2<f32>(bar * 1.974 + bar * 1.974, tabs - th.y);
+        c = mix(c, DEV_TOOLBAR, dev_cov(sd_round_rect(q - tc, th, bar * 0.10), aa));
+    } else {
+        let ph = vec2<f32>(max(dev_body_h().x - bar * 0.60, bar), bar * 0.165);
+        let pc = vec2<f32>(dev_body_h().x, (tabs + bar) * 0.5);
+        c = mix(c, vec3<f32>(0.910, 0.925, 0.945), dev_cov(sd_round_rect(q - pc, ph, ph.y), aa));
+        c = mix(c, DEV_INK, 0.8 * dev_cov(sd_round_rect(q - pc + vec2<f32>(ph.x * 0.70, 0.0),
+                                                        vec2<f32>(ph.x * 0.10, bar * 0.045), bar * 0.03), aa));
+    }
+    return c;
+}
+
+fn device_albedo(p: vec3<f32>, n: vec3<f32>, aa: f32) -> vec3<f32> {
+    if sd_dev_body(p) > sd_dev_extra(p) {
+        if !dev_is(2.0) {
+            return DEV_SHELL_DARK;
+        }
+        let c = dev_body_c();
+        let h = dev_body_h();
+        let d = p - vec3<f32>(0.0, c.y + h.y, -layer.fx.w * 0.5);
+        let ca = cos(DEV_DECK_ANGLE);
+        let sa = sin(DEV_DECK_ANGLE);
+        let q = vec3<f32>(d.x, d.y * ca + d.z * sa, -d.y * sa + d.z * ca);
+        if q.z < -DEV_DECK_THICK * 0.4 {
+            return DEV_SHELL_DARK;
+        }
+        var top = mix(DEV_SHELL * 0.82, DEV_SHELL * 1.04, clamp(q.y / DEV_DECK_LEN, 0.0, 1.0));
+        let hw = h.x + DEV_DECK_OVERHANG;
+        let key = sd_round_rect(q.xy - vec2<f32>(0.0, DEV_DECK_LEN * 0.40),
+                                vec2<f32>(hw * 0.80, DEV_DECK_LEN * 0.22), DEV_DECK_LEN * 0.03);
+        top = mix(top, DEV_SHELL * 0.58, 0.9 * dev_cov(key, aa));
+        let pad = sd_round_rect(q.xy - vec2<f32>(0.0, DEV_DECK_LEN * 0.79),
+                                vec2<f32>(hw * 0.26, DEV_DECK_LEN * 0.13), DEV_DECK_LEN * 0.02);
+        return mix(top, DEV_SHELL * 0.90, dev_cov(pad, aa));
+    }
+    let shell = mix(DEV_SHELL_DARK, DEV_SHELL, clamp(n.z + 0.5, 0.0, 1.0));
+    let front = select(smoothstep(0.25, 0.70, n.z), 0.0, p.z < -layer.fx.w * 0.5);
+    if front <= 0.0 {
+        return shell;
+    }
+    if dev_is(1.0) {
+        let bar = layer.src_prev.y;
+        let q = vec2<f32>(p.x - (dev_body_c().x - dev_body_h().x), p.y + layer.mb.y + bar);
+        let face = select(DEV_SHELL, dev_browser_chrome(q, bar, aa), q.y >= 0.0 && q.y <= bar);
+        return mix(shell, face, front);
+    }
+    var c = DEV_BEZEL_RGB;
+    if dev_is(3.0) {
+        let y = -layer.mb.y - layer.src_prev.y * 0.5;
+        c = mix(c, vec3<f32>(0.227, 0.247, 0.278),
+                dev_cov(sd_round_rect(p.xy - vec2<f32>(-0.012, y), vec2<f32>(0.075, 0.0055), 0.0055), aa));
+        c = mix(c, vec3<f32>(0.086, 0.106, 0.145), dev_cov(length(p.xy - vec2<f32>(0.105, y)) - 0.009, aa));
+    } else if dev_is(2.0) {
+        c = mix(c, vec3<f32>(0.149, 0.165, 0.200),
+                dev_cov(length(p.xy - vec2<f32>(0.0, -layer.mb.y - layer.src_prev.y * 0.5)) - 0.004, aa));
+    }
+    return mix(shell, c, front);
+}
+
+fn device_frame(local: vec2<f32>) -> vec4<f32> {
+    var f: ModelFrame;
+    f.c = cos(layer.fx.xyz);
+    f.s = sin(layer.fx.xyz);
+    f.cp = 1.0;
+    f.sp = 0.0;
+    f.cy = 1.0;
+    f.sy = 0.0;
+    let persp = layer.src.z;
+    let unit = layer.src.w;
+
+    let dw = vec3<f32>(local + layer.src.xy, -persp);
+    let dlen = length(dw);
+    let ro = world_to_plane(vec3<f32>(-layer.mb.z, -layer.mb.w, persp), f) / unit;
+    let rd = world_to_plane(dw / dlen, f);
+    let l = world_to_plane(MODEL_LIGHT, f);
+
+    // Le plan du metrage occulte tout ce qui est derriere lui DANS l'ouverture.
+    var t_max = 1e9;
+    if rd.z < -1e-5 {
+        let ts = -ro.z / rd.z;
+        let p0 = ro.xy + rd.xy * ts;
+        let ah = layer.mb.xy - vec2<f32>(DEV_BEZEL_OVERLAP);
+        if ts > 0.0 && all(abs(p0) < ah) {
+            t_max = ts;
+        }
+    }
+
+    let bc = dev_body_c();
+    let bh = dev_body_h();
+    var lo = vec3<f32>(bc - bh, -layer.fx.w);
+    var hi = vec3<f32>(bc + bh, 0.0);
+    if dev_is(2.0) {
+        let reach = DEV_DECK_LEN + DEV_DECK_THICK;
+        lo = vec3<f32>(min(lo.x, -bh.x - DEV_DECK_OVERHANG), lo.y, min(lo.z, -layer.fx.w));
+        hi = vec3<f32>(max(hi.x, bh.x + DEV_DECK_OVERHANG),
+                       hi.y + reach * cos(DEV_DECK_ANGLE) + DEV_DECK_THICK,
+                       hi.z + reach * sin(DEV_DECK_ANGLE));
+    } else if dev_is(4.0) {
+        lo = vec3<f32>(min(lo.x, -DEV_FOOT_W), lo.y, lo.z - DEV_STAND_Z);
+        hi = vec3<f32>(max(hi.x, DEV_FOOT_W), hi.y + DEV_NECK_LEN + DEV_FOOT_H, hi.z);
+    }
+
+    let tb = ray_box(ro, rd, lo - vec3<f32>(0.01), hi + vec3<f32>(0.01));
+    let t1 = min(tb.y, t_max);
+    if tb.x >= t1 || t1 <= 0.0 {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+
+    var t = max(tb.x, 0.0);
+    var best = 1e9;
+    var t_best = t;
+    var hit = false;
+    for (var k = 0; k < 72; k = k + 1) {
+        let d = sd_device(ro + rd * t);
+        let fp = t / dlen;
+        if d < 0.08 * fp {
+            hit = true;
+            t_best = t;
+            break;
+        }
+        if d / fp < best {
+            best = d / fp;
+            t_best = t;
+        }
+        t = t + max(d, 0.25 * fp);
+        if t > t1 {
+            break;
+        }
+    }
+    let cov = select(clamp(1.0 - best, 0.0, 1.0), 1.0, hit);
+    if cov <= 0.0 {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    let q = ro + rd * t_best;
+    let n = device_normal(q);
+    let albedo = device_albedo(q, n, t_best / dlen);
+    let diffuse = clamp(dot(n, l), 0.0, 1.0);
+    let gloss = 1.0 - smoothstep(0.97, 0.995, abs(n.z));
+    let spec = gloss * pow(clamp(dot(n, normalize(l - rd)), 0.0, 1.0), 60.0);
+    let rgb = albedo * (MODEL_AMBIENT + MODEL_DIFFUSE * diffuse) + vec3<f32>(0.25 * spec);
+    let a = cov * layer.color.a;
+    return vec4<f32>(rgb * a, a); // premultiplie
+}
+
 @fragment
 fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
     var rgb: vec3<f32>;
@@ -944,6 +1213,9 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
     } else if layer.mode > 15.5 && layer.mode < 16.5 {
         // Mode 16 -- impact du clic sous le curseur modelise (`cursor_impact`).
         return cursor_impact(i.local);
+    } else if layer.mode > 16.5 && layer.mode < 17.5 {
+        // Mode 17 -- cadre d'appareil modelise (`device_frame`).
+        return device_frame(i.local);
     } else {
         // Mode 2 — ombre portée (SDF d'un quad arrondi élargi de `fx.x`).
         let spread = layer.fx.x;

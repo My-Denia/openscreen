@@ -1988,6 +1988,12 @@ impl Compositor {
                 &suv,
             );
         }
+        // L'appareil modelé (mode 17) passe APRÈS l'écran, et non sous lui comme le chrome plat :
+        // son socle vient DEVANT le plan du métrage et sa lunette mord dessus. Le shader s'arrête
+        // au plan du métrage dans l'ouverture, donc il ne recouvre jamais l'image.
+        if let Some(cb) = g.device_frame_cb(render_px) {
+            self.draw_solid(&cb);
+        }
 
         // --- curseur custom : suit le mapping src/dst (zoom+layout), click bounce,
         // et flou de mouvement (parité `compositor_macos.rs` et `compositor_linux.rs`) ---

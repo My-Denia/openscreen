@@ -937,9 +937,15 @@ pub struct TiltedQuad {
     pub perspective: f32,
     /// Où tombe le centre du plan à l'image, en px relatifs au centre du rect d'origine.
     pub offset: [f32; 2],
-    /// `true` : le plan se dessine par l'homographie EXACTE de ses coins (caméra réelle) ;
-    /// `false` : par le warp bilinéaire des angles fixes, inchangé à l'octet.
+    /// `true` : le plan se dessine par l'homographie EXACTE de ses coins ; `false` : par le warp
+    /// bilinéaire des angles fixes, inchangé à l'octet. La caméra réelle l'exige, et un cadre
+    /// d'appareil aussi (le mode 17 lance ses rayons dans la perspective exacte).
     pub projective: bool,
+    /// `true` : une lampe posée sur la caméra éclaire un peu plus le côté proche du plan
+    /// (`CAMERA_LIGHT_GAIN`, cf. `tilted_screen_cb`). Elle appartient à la caméra RÉELLE, pas au
+    /// warp : sous un angle fixe, allumer l'un sans l'autre est précisément ce qu'il faut pour
+    /// qu'un cadre d'appareil recale l'image sans la réexposer.
+    pub lamp: bool,
 }
 
 /// Les 4 coins (TL, TR, BR, BL) du quad tilté en 3D, en px relatifs au CENTRE du rect d'origine
@@ -973,6 +979,7 @@ pub fn rotated_quad_corners_px(
             perspective,
             offset: [0.0; 2],
             projective: false,
+            lamp: false,
         };
     };
     // La profondeur suit l'angle RÉELLEMENT dessiné (base + dynamique), sinon le flou se
@@ -994,6 +1001,7 @@ pub fn rotated_quad_corners_px(
         perspective,
         offset: [0.0; 2],
         projective: false,
+        lamp: false,
     }
 }
 

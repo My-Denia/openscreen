@@ -2148,6 +2148,10 @@ impl Compositor {
         // Le cadre (mode 14), dessine entre l'ombre et l'ecran : l'ecran le recouvre et ne
         // laisse voir que la barre de titre et le filet.
         let window_frame = g.window_frame_cb([rw, rh]).map(|cb| self.make_bind(&cb, None, &dummy));
+        // L'appareil modele (mode 17), lui, passe APRES l'ecran : son socle vient DEVANT le plan
+        // du metrage et sa lunette mord dessus. Le shader s'arrete au plan du metrage dans
+        // l'ouverture, donc il ne recouvre jamais l'image.
+        let device_frame = g.device_frame_cb([rw, rh]).map(|cb| self.make_bind(&cb, None, &dummy));
 
         // Fond (gradient mode 5 OU image mode 6), dessine dans la passe de fond.
         let bg_draw = bg_layer.and_then(|bl| match bl {
@@ -2939,6 +2943,10 @@ impl Compositor {
             }
             rpass.set_bind_group(0, &screen_bind, &[]);
             rpass.draw(0..4, 0..1);
+            if let Some((_buf, bind)) = &device_frame {
+                rpass.set_bind_group(0, bind, &[]);
+                rpass.draw(0..4, 0..1);
+            }
             if let Some((_buf, bind)) = &webcam_shadow {
                 rpass.set_bind_group(0, bind, &[]);
                 rpass.draw(0..4, 0..1);
@@ -4771,6 +4779,65 @@ mod tests {
             assert!(bright(&light) > 10_000, "{name}: barre claire absente ({} px)", bright(&light));
             assert!(differing(&none, &dark) > 10_000, "{name}: cadre sombre absent");
             assert!(differing(&light, &dark) > 10_000, "{name}: les deux themes se confondent");
+        }
+    }
+
+    /// Les cadres d'APPAREIL modeles (mode 17) se dessinent sur Linux comme ailleurs : chacun
+    /// change beaucoup de pixels par rapport a « pas de cadre », aucun ne ressemble aux autres,
+    /// et le metrage reste intact au centre de l'ouverture — c'est toute la these du mode : le
+    /// modele s'arrete au plan du metrage, que le mode 8 continue de dessiner.
+    /// `OPENSCREEN_FRAME_OUT` recoit les PNG.
+    #[test]
+    fn the_device_frames_draw_around_the_footage() {
+        let Some(gpu) = gpu() else { return };
+        let comp = Compositor::new_sized(&gpu, 1280, 720).expect("Compositor::new_sized");
+        let out_dir = std::env::var("OPENSCREEN_FRAME_OUT").ok();
+        let differing = |a: &[u8], b: &[u8]| {
+            a.chunks_exact(4)
+                .zip(b.chunks_exact(4))
+                .filter(|(p, q)| p.iter().zip(q.iter()).take(3).any(|(x, y)| x.abs_diff(*y) > 8))
+                .count()
+        };
+        // Le metrage de `compose_framed` est un aplat : compter ses pixels dit combien il en
+        // reste sous le cadre, sans avoir a reprojeter l'ouverture — ce que fait, lui, le test
+        // Windows (`tests/device_frame_render.rs`), point par point le long de la lunette.
+        let footage = |rgba: &[u8], c: [u8; 3]| {
+            rgba.chunks_exact(4).filter(|p| p[0] == c[0] && p[1] == c[1] && p[2] == c[2]).count()
+        };
+        let centre = |rgba: &[u8]| {
+            let i = ((360 * 1280 + 640) * 4) as usize;
+            [rgba[i], rgba[i + 1], rgba[i + 2]]
+        };
+        for (name, rotation) in [("flat", "null"), ("iso", r#""iso""#)] {
+            let none = compose_framed(&comp, &gpu, r#","frame":"none""#, rotation);
+            // Sans cadre, l'ecran est centre : le pixel du centre EST le metrage.
+            let tone = centre(&none);
+            let bare = footage(&none, tone);
+            let mut shots = Vec::new();
+            for device in ["browser", "laptop", "phone", "monitor"] {
+                let rgba =
+                    compose_framed(&comp, &gpu, &format!(r#","frame":"{device}""#), rotation);
+                if let Some(dir) = &out_dir {
+                    let path = format!("{dir}/linux-{name}-{device}.png");
+                    image::RgbaImage::from_raw(1280, 720, rgba.clone())
+                        .expect("dimensions du readback")
+                        .save(&path)
+                        .unwrap_or_else(|e| panic!("ecriture {path} : {e}"));
+                }
+                let seen = differing(&none, &rgba);
+                let kept = footage(&rgba, tone);
+                println!("{name:<5} {device:<8} {seen:>7} px de cadre, {kept:>7} px de metrage");
+                assert!(seen > 30_000, "{name} {device} : cadre invisible ({seen} px)");
+                // Le cadre retrecit la boite ecran — le socle du portable en mange le plus, ~22 %
+                // de l'aire d'origine —, mais il ne doit RIEN recouvrir : le metrage reste la.
+                assert!(kept > bare / 8, "{name} {device} : metrage couvert ({kept} sur {bare})");
+                shots.push((device, rgba));
+            }
+            for (i, (a, ra)) in shots.iter().enumerate() {
+                for (b, rb) in &shots[i + 1..] {
+                    assert!(differing(ra, rb) > 10_000, "{name} : {a} et {b} se confondent");
+                }
+            }
         }
     }
 

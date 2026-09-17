@@ -401,7 +401,102 @@ de la pastille ; plus rien après sa fenêtre.
 
 ---
 
-## C. Découpage en PR
+## C. Les cadres d'appareil modelés (mode 17)
+
+### C.1 Le réglage
+
+`effects.frame` (`RecordingFrame`, `src/lib/projectDefaults.ts`) portait `none | window-light |
+window-dark`. Il gagne **quatre appareils** : `browser`, `laptop`, `phone`, `monitor`. Même
+tuyauterie que le chrome de fenêtre — réglages d'éditeur, préréglages de style, `sceneDescription`,
+`SceneFrame`, sélecteur du panneau Effets, i18n ×14 —, sans schéma ni migration : une valeur
+inconnue se relit « aucun cadre », des deux côtés (`isRecordingFrame`, `serde(other)`). `none`
+rend la frame d'avant à l'octet, et `window-light` / `window-dark` restent le mode 14 plat.
+
+Le **téléphone est le seul portrait**. Le sélecteur le laisse dans la liste mais le grise quand le
+ratio de sortie est paysage, avec la raison sur la ligne (`recordingFrameBlockedReason`) : un
+contrôle qui disparaît en silence envoie chercher un cadre qui était là hier.
+
+### C.2 Les formes
+
+Modelées en **vraie 3D**, pas une image plate gauchie sur le plan : la caméra tourne vraiment
+autour d'elles. Un corps avec épaisseur, arêtes chanfreinées et lunette, dont la **face écran
+tombe exactement sur le plan du métrage** — le mode 8 continue de dessiner l'image dans
+l'ouverture, que le mode 17 creuse dans la face avant. Formes neutres dessinées par nous : aucune
+marque, aucun logo.
+
+Proportions relevées sur les maquettes plates de la spec (`design-pr0/Frame*.dc.html`), en
+largeurs de la boîte écran (`device_body_margins`, `device_thickness`, `frame_geometry.rs`) :
+
+| appareil | lunette G/H/D/B | épaisseur | ce qui dépasse |
+|---|---|---|---|
+| `browser` | 0,006 / 0,050 / 0,006 / 0,008 | 0,022 | — |
+| `laptop` | 0,030 / 0,028 / 0,030 / 0,029 | 0,018 | socle articulé à 52°, long de 0,26, débordant de 0,055 |
+| `phone` | 0,040 / 0,043 / 0,040 / 0,043 | 0,095 | — |
+| `monitor` | 0,018 / 0,018 / 0,018 / 0,042 | 0,028 | colonne (0,085) puis semelle (0,21 × 0,035) |
+
+Le corps porte en plus un rayon MINIMAL par appareil (`device_min_radius_frac`) : Roundness peut
+arrondir davantage, jamais carrer — un téléphone à coins vifs ne se lit plus comme un téléphone.
+Le chanfrein (0,010) est borné par l'épaisseur ET par la plus fine des marges, sans quoi il
+mangerait tout le liseré latéral du navigateur.
+
+Matières : coque claire, lunette noire, chrome de navigateur (onglets, trois pastilles, un onglet,
+barre d'adresse), dessus de socle avec clavier et pavé tactile, haut-parleur et œil de caméra du
+téléphone. Tout est **peint** sur la face touchée, jamais modelé : une SDF 2D de plus par pixel
+touché, aucune marche supplémentaire.
+
+### C.3 Layout, ancrage et ombre
+
+- `fit_in_device_frame` rétrécit la boîte écran pour que l'appareil ENTIER — corps ET débords —
+  tienne là où l'écran seul tenait. Annotations, masques de confidentialité et curseurs suivent
+  `s_dst` comme sous le chrome de fenêtre : ils restent ancrés au contenu encadré.
+- L'**ombre de contact** est portée par le CADRE, pas par l'écran : `shadow_caster` prolonge le
+  plan aux marges de l'EMPREINTE (`WindowFrame::outer`), qui majorent la descente du socle et du
+  pied. Un seul calque (mode 2 ou 12), comme pour le chrome plat.
+- **Le plan passe au warp projectif.** Le mode 17 lance ses rayons dans la perspective exacte,
+  alors que les angles fixes dessinaient l'écran par un warp BILINÉAIRE de ses coins. Les deux
+  coïncident aux quatre coins et s'écartent de **7,7 % de la largeur de l'écran au milieu d'un
+  bord** sous `iso` (113 px à 1080p) : une bande de fond d'écran entre l'image et la lunette. Sous
+  un cadre d'appareil, `screen_tilt` lève donc `TiltedQuad::projective`, ce que les modes 8, 10,
+  13 et 14 savent déjà lire (PR 6) et ce que `point_px` applique côté CPU. L'homographie des
+  quatre coins EST la projection exacte, donc l'image se recolle sur le modèle partout. Sans
+  appareil — sans cadre ou sous le chrome plat — rien ne change, à l'octet.
+- **La lampe de la caméra, elle, reste éteinte.** Elle était portée par le même drapeau que le
+  warp ; un cadre d'appareil l'aurait donc allumée sous un angle fixe, et posé un dégradé de ±4 %
+  en travers du métrage. `TiltedQuad` porte maintenant les deux séparément (`projective`, `lamp`) :
+  un appareil RECALE l'image, il ne la réexpose pas.
+
+### C.4 Le mode 17
+
+Un seul mode de shader, identique en HLSL, MSL et WGSL (`device_frame`), lancé de rayons par pixel
+dans la boîte de dessin. La caméra est reconstruite comme au mode 15 (`regions::rotate_point` puis
+`P / (P − z)`), mais l'origine du modèle est le **centre du plan** : rien à ancrer, aucun décalage.
+
+- **Repère du MODÈLE** : unité = largeur de la boîte écran, x à droite, y vers le bas, z vers la
+  caméra ; le corps occupe z de −épaisseur à 0.
+- **Le corps** est une boîte arrondie en xy et épaisse en z, chanfreinée, MOINS le creux de
+  l'écran : l'ouverture (le rect du métrage rentré de `DEV_BEZEL_OVERLAP` = 0,004) ouverte vers la
+  caméra et fermée au fond. Un trou débouchant laisserait voir au travers par le côté.
+- **La marche s'arrête au plan du métrage dans l'ouverture** : c'est ce qui laisse le mode 8
+  dessiner l'image dans le cadre, et ce qui empêche de voir à travers l'appareil.
+- **Éclairage** : celui du curseur modélisé (`MODEL_LIGHT` / `AMBIENT` / `DIFFUSE`), pour que les
+  deux objets d'une même frame soient vus sous la même lampe. Reflet sur les arrondis seulement.
+- 72 pas au plus, silhouette antialiasée sur un pixel comme au mode 15.
+- **Emplacements du cbuffer** : en tête de `device_frame_cb` (`frame_geometry.rs`), qui fait foi,
+  et résumés dans les trois structs de shader. `LayerCB` reste à 128 octets.
+
+### C.5 Limites
+
+- Le **MSL n'est compilé et exécuté que par la CI macOS**, comme le mode 15.
+- L'ombre reste un quad plat prolongé dans le plan de l'écran : elle majore le socle du portable
+  et le pied du moniteur au lieu d'épouser leur silhouette.
+- Le socle du portable ne reçoit pas l'ombre calculée de l'écran, seulement un dégradé qui la
+  suggère près de la charnière.
+- Rien ne coupe l'appareil au bord du canevas : il tient dans la boîte parce que
+  `fit_in_device_frame` l'y fait tenir, pas parce qu'un clip l'y forcerait.
+
+---
+
+## D. Découpage en PR
 
 | PR | Titre | Contenu | Dépend de |
 |---|---|---|---|
@@ -409,6 +504,7 @@ de la pastille ; plus rien après sa fenêtre.
 | **7** | `feat(cursor): model the default arrow in 3D` | `cursor.model3d`, mode 15, pose, ombre, retrait de `volume`/`hover` | PR 6 |
 | **7b** | `feat(cursor): model every default cursor state in 3D` | champ de distance tiré de chaque sprite (`cursor_sdf.rs`), mode 15 générique, pose selon le hotspot, i18n ×14 | 7 |
 | **7c** | `feat(cursor): tap the screen where the click happened` | convergence sur le point cliqué brut, écrasement, impact (mode 16), vidéo de revue | 7b |
+| **7d** | `feat(frames): model the device frames in 3D` | §C : `RecordingFrame` ×4, mode 17, `fit_in_device_frame`, warp projectif sous un appareil, i18n ×14 | 7c |
 | **8** | `feat(zoom): dolly the camera` | distance de fuite par région, dolly-zoom | PR 6 |
 | **9** | `feat(cursor): the cursor picks things up` *(plus tard)* | long press : le plan reste pressé pendant un glisser (v1 §PR 2b « Later ») | 7 |
 
@@ -421,4 +517,9 @@ La PR 7 ajoute un mode de shader, donc elle se vérifie sur les trois backends :
 Rust de la pose, du contact, de l'ancrage et de la boîte ; rendus D3D11 sur une frame NV12
 synthétique ; le même test de rendu dans les modules Linux (lavapipe) et macOS (CI).
 
-**État** : PR 6, 7, 7b et 7c écrites et testées. 8 et 9 restent à faire.
+La PR 7d ajoute le mode 17, donc elle se vérifie de la même façon : tests unitaires Rust de la
+face écran, de la boîte et du réglage ; rendus D3D11 sur une frame NV12 synthétique
+(`tests/device_frame_render.rs`) ; le même test de rendu dans les modules Linux (lavapipe) et
+macOS (CI).
+
+**État** : PR 6, 7, 7b, 7c et 7d écrites et testées. 8 et 9 restent à faire.

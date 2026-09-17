@@ -4,18 +4,19 @@
 cbuffer Layer : register(b0)
 {
     float4 dst;       // x,y,w,h dans l'espace sortie 0..1 (origine haut-gauche)
-    float4 src;       // u0,v0,u1,v1 dans l'espace source 0..1 ; mode 15 : décalage px du rayon, P, U
+    float4 src;       // u0,v0,u1,v1 dans l'espace source 0..1 ; modes 15 et 17 : décalage px du rayon, P, U
     float2 quad_px;   // taille du quad en pixels (pour les SDF)
-    float  radius_px; // rayon des coins arrondis en px (0 = aucun)
-    float  mode;      // 0 = vidéo NV12, 1 = couleur pleine, 2 = ombre portée, 4 = curseur, 15 = curseur 3D, 16 = impact du clic
-    float4 color;     // couleur pleine / teinte (ombre : rgb + opacité dans a) ; mode 15 : coin du sprite, écrasement, opacité
-    float4 fx;        // fx.x = spread ombre (px), fx.y,fx.z libres ; mode 15 : rotation du plan (rad), tangage
-    float4 src_prev;  // src à la frame précédente (flou de mouvement par vélocité) ; mode 15 : hotspot, lacet
-    float4 dst_prev;  // dst à la frame précédente ; modes 13 et 15 : rect de clip
-    float4 mb;        // mb.x = nombre de taps de motion blur (1 = désactivé) ; mode 15 : demi-taille du plan, translation
+    float  radius_px; // rayon des coins arrondis en px (0 = aucun) ; mode 17 : rayon du corps (unités du modèle)
+    float  mode;      // 0 = vidéo NV12, 1 = couleur pleine, 2 = ombre portée, 4 = curseur, 15 = curseur 3D, 16 = impact du clic, 17 = appareil modelé
+    float4 color;     // couleur pleine / teinte (ombre : rgb + opacité dans a) ; mode 15 : coin du sprite, écrasement, opacité ; mode 17 : .r = l'appareil, .a = opacité
+    float4 fx;        // fx.x = spread ombre (px), fx.y,fx.z libres ; mode 15 : rotation du plan (rad), tangage ; mode 17 : rotation du plan (rad), épaisseur
+    float4 src_prev;  // src à la frame précédente (flou de mouvement par vélocité) ; mode 15 : hotspot, lacet ; mode 17 : marges du corps (unités du modèle)
+    float4 dst_prev;  // dst à la frame précédente ; modes 13 et 15 : rect de clip ; mode 17 : libre
+    float4 mb;        // mb.x = nombre de taps de motion blur (1 = désactivé) ; modes 15 et 17 : demi-taille du plan, translation
 };
 // Mode 15 (curseur modélisé) : le détail des emplacements est dans `frame_geometry.rs`, en tête
-// de la section « Curseur modélisé » (`cursor_model_cb`).
+// de la section « Curseur modélisé » (`cursor_model_cb`). Mode 17 (appareil modelé) : en tête de
+// « Appareils modelés » (`device_frame_cb`), et résumé au-dessus de `device_frame` ci-dessous.
 
 struct VSOut
 {
@@ -643,8 +644,351 @@ float4 cursor_impact(float2 local)
     return float4(color.rgb * ring, a) * color.a; // prémultiplié, ombre noire
 }
 
+// ============ Cadre d'APPAREIL modelé (mode 17) ============
+// Un portable, un téléphone, une fenêtre de navigateur ou un moniteur, modelés en VRAIE 3D
+// autour du métrage : un corps qui a une épaisseur, des arêtes chanfreinées et une lunette, dont
+// la face écran tombe EXACTEMENT sur le plan du métrage — le mode 8 continue donc de le dessiner
+// dans l'ouverture, que ce mode creuse dans la face avant. Lancé de rayons par pixel dans la MÊME
+// caméra que le plan, reconstruite comme au mode 15 (`regions::rotate_point` puis perspective
+// P / (P − z)). Des formes neutres que l'on dessine soi-même : aucune marque, aucun logo.
+//
+// Repère du MODÈLE : unité = largeur de la boîte écran, origine au CENTRE du plan, x à droite,
+// y vers le bas, z vers la caméra. L'écran occupe ±`mb.xy`, le corps l'entoure de `src_prev` et
+// va de z = −`fx.w` à 0 ; ce qui dépasse (socle, pied) sort vers +y et ±z.
+// Emplacements du cbuffer — miroir de `frame_geometry::device_frame_cb`, qui en fait foi :
+//   src       = (décalage px du rayon, P, unité du modèle en px)
+//   radius_px = rayon extérieur du corps (unités du modèle)
+//   color.r   = l'appareil (1 navigateur, 2 portable, 3 téléphone, 4 moniteur) ; color.a = opacité
+//   fx        = (rotation du plan X, Y, Z en rad ; épaisseur du corps)
+//   src_prev  = marges du corps (gauche, haut, droite, bas), unités du modèle
+//   mb        = (demi-taille de l'écran ; translation du plan dans le repère caméra, px)
+//   dst_prev  = libre.
+// Constantes : miroir exact de `frame_geometry.rs` (DEV_*), sauf le chanfrein, qui ne change que
+// la matière et la silhouette — jamais l'encombrement — et n'existe donc que côté shader.
+// L'éclairage est celui du curseur modélisé (MODEL_LIGHT/AMBIENT/DIFFUSE), pour que les deux
+// objets d'une même frame soient vus sous la même lampe.
+//
+// Le chanfrein : sans lui, un appareil vu de trois quarts montre des arêtes de couteau, que l'œil
+// lit comme un découpage à plat et non comme un objet.
+static const float DEV_BEVEL = 0.010;
+static const float DEV_BEZEL_OVERLAP = 0.004;
+static const float DEV_DECK_ANGLE = 0.9075712;
+static const float DEV_DECK_LEN = 0.26;
+static const float DEV_DECK_THICK = 0.022;
+static const float DEV_DECK_OVERHANG = 0.055;
+static const float DEV_NECK_W = 0.075;
+static const float DEV_NECK_LEN = 0.085;
+static const float DEV_FOOT_W = 0.21;
+static const float DEV_FOOT_H = 0.035;
+static const float DEV_STAND_Z = 0.060;
+// Teintes (alpha droit), relevées sur les maquettes de référence : coque claire, lunette noire,
+// chrome de navigateur. Neutres — c'est ce qui fait un appareil « schématique » et non une marque.
+static const float3 DEV_SHELL = float3(0.784, 0.804, 0.831);
+static const float3 DEV_SHELL_DARK = float3(0.635, 0.659, 0.694);
+static const float3 DEV_BEZEL_RGB = float3(0.047, 0.051, 0.063);
+static const float3 DEV_TABBAR = float3(0.886, 0.906, 0.933);
+static const float3 DEV_TOOLBAR = float3(0.933, 0.945, 0.961);
+static const float3 DEV_INK = float3(0.580, 0.639, 0.722);
+
+float2 dev_body_c() { return float2((src_prev.z - src_prev.x) * 0.5, (src_prev.w - src_prev.y) * 0.5); }
+float2 dev_body_h() { return mb.xy + float2((src_prev.x + src_prev.z) * 0.5, (src_prev.y + src_prev.w) * 0.5); }
+// Le chanfrein, borné par la demi-épaisseur ET par la plus fine des marges : le liseré latéral
+// d'un navigateur ne fait que 0,6 % de la largeur, et un chanfrein plus large que lui le
+// mangerait entièrement — le fond d'écran passerait alors par le côté de la fenêtre.
+float dev_bevel()
+{
+    float thin = min(min(src_prev.x, src_prev.y), min(src_prev.z, src_prev.w));
+    return min(DEV_BEVEL, min(fx.w * 0.4, thin * 0.5));
+}
+bool dev_is(float k) { return abs(color.r - k) < 0.5; }
+
+// Boîte 3D à arêtes arrondies.
+float sd_dev_box(float3 p, float3 h, float r)
+{
+    float3 q = abs(p) - h + r;
+    return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0) - r;
+}
+
+// Le CORPS : une boîte arrondie en xy et épaisse en z, moins le creux de l'écran. Ce creux est
+// l'ouverture (le rect du métrage, rentré du recouvrement de la lunette) ouverte vers la caméra et
+// fermée au fond — un trou débouchant laisserait voir au travers par le côté.
+float sd_dev_body(float3 p)
+{
+    float t = fx.w;
+    float bev = dev_bevel();
+    float2 w = float2(sd_round_rect(p.xy - dev_body_c(), dev_body_h(), radius_px) + bev,
+                      abs(p.z + t * 0.5) - (t * 0.5 - bev));
+    float body = min(max(w.x, w.y), 0.0) + length(max(w, 0.0)) - bev;
+    // Coins hauts carrés sous une barre de titre (navigateur), comme le mode 8 dessine l'écran.
+    float2 ah = mb.xy - DEV_BEZEL_OVERLAP;
+    float ar = max(radius_px - src_prev.x, 0.0);
+    ar = (dev_is(1.0) && p.y < 0.0) ? 0.0 : min(ar, min(ah.x, ah.y));
+    float hole = max(sd_round_rect(p.xy, ah, ar), -p.z - t * 0.55);
+    return max(body, -hole);
+}
+
+// Le socle du portable : une dalle articulée à la charnière (le bord bas du corps, à mi-épaisseur),
+// relevée de DEV_DECK_ANGLE vers la caméra. Miroir de `DeviceView::model_points`.
+float sd_dev_deck(float3 p)
+{
+    float2 c = dev_body_c();
+    float2 h = dev_body_h();
+    float3 q = p - float3(0.0, c.y + h.y, -fx.w * 0.5);
+    float ca = cos(DEV_DECK_ANGLE);
+    float sa = sin(DEV_DECK_ANGLE);
+    q = float3(q.x, q.y * ca + q.z * sa, -q.y * sa + q.z * ca);
+    return sd_dev_box(q - float3(0.0, DEV_DECK_LEN * 0.5, -DEV_DECK_THICK * 0.5),
+                      float3(h.x + DEV_DECK_OVERHANG, DEV_DECK_LEN * 0.5, DEV_DECK_THICK * 0.5),
+                      DEV_DECK_THICK * 0.45);
+}
+
+// Le pied du moniteur : colonne puis semelle, derrière le dos du corps.
+float sd_dev_stand(float3 p)
+{
+    float2 c = dev_body_c();
+    float y0 = c.y + dev_body_h().y;
+    float z0 = -fx.w * 0.3 - DEV_STAND_Z * 0.5;
+    float neck = sd_dev_box(p - float3(0.0, y0 + DEV_NECK_LEN * 0.5 - 0.01, z0),
+                            float3(DEV_NECK_W, DEV_NECK_LEN * 0.5 + 0.01, DEV_STAND_Z * 0.5), 0.010);
+    float foot = sd_dev_box(p - float3(0.0, y0 + DEV_NECK_LEN + DEV_FOOT_H * 0.5, z0),
+                            float3(DEV_FOOT_W, DEV_FOOT_H * 0.5, DEV_STAND_Z * 0.5), 0.012);
+    return min(neck, foot);
+}
+
+// Ce qui sort du corps : le socle du portable, le pied du moniteur, rien pour les deux autres.
+float sd_dev_extra(float3 p)
+{
+    if (dev_is(2.0)) { return sd_dev_deck(p); }
+    if (dev_is(4.0)) { return sd_dev_stand(p); }
+    return 1e9;
+}
+
+float sd_device(float3 p)
+{
+    return min(sd_dev_body(p), sd_dev_extra(p));
+}
+
+float3 device_normal(float3 p)
+{
+    const float e = 0.0015;
+    return normalize(float3(1, -1, -1) * sd_device(p + float3(1, -1, -1) * e) +
+                     float3(-1, -1, 1) * sd_device(p + float3(-1, -1, 1) * e) +
+                     float3(-1, 1, -1) * sd_device(p + float3(-1, 1, -1) * e) +
+                     float3(1, 1, 1) * sd_device(p + float3(1, 1, 1) * e));
+}
+
+// Couverture d'une SDF 2D adoucie sur un pixel (`aa` = un pixel en unités du modèle).
+float dev_cov(float d, float aa)
+{
+    return saturate(0.5 - d / max(aa, 1e-6));
+}
+
+// Le chrome du navigateur, peint sur la face avant au-dessus de l'ouverture : bandeau d'onglets,
+// trois pastilles, un onglet, puis la barre d'adresse. Proportions de la maquette, en hauteurs de
+// chrome (`bar`) ; `q` est relatif au coin haut-gauche du chrome.
+float3 dev_browser_chrome(float2 q, float bar, float aa)
+{
+    float tabs = bar * 0.463;
+    float3 c = (q.y < tabs) ? DEV_TABBAR : DEV_TOOLBAR;
+    // Séparation entre les deux bandeaux, et sous le chrome.
+    c = lerp(c, DEV_INK * 0.9, 0.35 * dev_cov(abs(q.y - bar) - aa * 0.5, aa));
+    if (q.y < tabs)
+    {
+        float r = bar * 0.070;
+        float2 d = float2(bar * 0.188 + r, bar * 0.161 + r);
+        c = lerp(c, float3(1.000, 0.373, 0.341), dev_cov(length(q - d) - r, aa));
+        d.x += bar * 0.242;
+        c = lerp(c, float3(0.996, 0.737, 0.180), dev_cov(length(q - d) - r, aa));
+        d.x += bar * 0.242;
+        c = lerp(c, float3(0.157, 0.784, 0.251), dev_cov(length(q - d) - r, aa));
+        // L'onglet actif, posé sur le bas du bandeau.
+        float2 th = float2(bar * 1.974, bar * 0.181);
+        float2 tc = float2(bar * 1.974 + bar * 1.974, tabs - th.y);
+        c = lerp(c, DEV_TOOLBAR, dev_cov(sd_round_rect(q - tc, th, bar * 0.10), aa));
+    }
+    else
+    {
+        // Barre d'adresse : une gélule pâle qui court sur toute la largeur restante.
+        float2 ph = float2(max(dev_body_h().x - bar * 0.60, bar), bar * 0.165);
+        float2 pc = float2(dev_body_h().x, (tabs + bar) * 0.5);
+        c = lerp(c, float3(0.910, 0.925, 0.945), dev_cov(sd_round_rect(q - pc, ph, ph.y), aa));
+        c = lerp(c, DEV_INK, 0.8 * dev_cov(sd_round_rect(q - pc + float2(ph.x * 0.70, 0.0),
+                                                         float2(ph.x * 0.10, bar * 0.045), bar * 0.03), aa));
+    }
+    return c;
+}
+
+// La matière au point `p` du modèle, normale `n` : la coque, la lunette, le chrome, le clavier.
+float3 device_albedo(float3 p, float3 n, float aa)
+{
+    bool on_body = sd_dev_body(p) <= sd_dev_extra(p);
+    if (!on_body)
+    {
+        // Socle du portable : le dessus porte un clavier et un pavé tactile, et s'assombrit près
+        // de la charnière comme s'il recevait l'ombre de l'écran. Le pied du moniteur reste nu.
+        if (!dev_is(2.0)) { return DEV_SHELL_DARK; }
+        float2 c = dev_body_c();
+        float2 h = dev_body_h();
+        float3 q = p - float3(0.0, c.y + h.y, -fx.w * 0.5);
+        float ca = cos(DEV_DECK_ANGLE);
+        float sa = sin(DEV_DECK_ANGLE);
+        q = float3(q.x, q.y * ca + q.z * sa, -q.y * sa + q.z * ca);
+        if (q.z < -DEV_DECK_THICK * 0.4) { return DEV_SHELL_DARK; }
+        float3 top = lerp(DEV_SHELL * 0.82, DEV_SHELL * 1.04, saturate(q.y / DEV_DECK_LEN));
+        float hw = h.x + DEV_DECK_OVERHANG;
+        float key = sd_round_rect(q.xy - float2(0.0, DEV_DECK_LEN * 0.40),
+                                  float2(hw * 0.80, DEV_DECK_LEN * 0.22), DEV_DECK_LEN * 0.03);
+        top = lerp(top, DEV_SHELL * 0.58, 0.9 * dev_cov(key, aa));
+        float pad = sd_round_rect(q.xy - float2(0.0, DEV_DECK_LEN * 0.79),
+                                  float2(hw * 0.26, DEV_DECK_LEN * 0.13), DEV_DECK_LEN * 0.02);
+        return lerp(top, DEV_SHELL * 0.90, dev_cov(pad, aa));
+    }
+    // Le dos et les flancs : la coque, plus sombre quand elle tourne le dos à la caméra. La
+    // bascule vers la face avant est FONDUE sur la normale : une coupure franche posait un
+    // liseré clair d'un pixel tout autour du chanfrein, qui s'aliasait en pointillés.
+    float3 shell = lerp(DEV_SHELL_DARK, DEV_SHELL, saturate(n.z + 0.5));
+    float front = (p.z < -fx.w * 0.5) ? 0.0 : smoothstep(0.25, 0.70, n.z);
+    if (front <= 0.0) { return shell; }
+
+    // La face avant. Le navigateur y peint son chrome, les trois autres une lunette noire.
+    if (dev_is(1.0))
+    {
+        float bar = src_prev.y;
+        float2 q = float2(p.x - (dev_body_c().x - dev_body_h().x), p.y + mb.y + bar);
+        float3 face = (q.y >= 0.0 && q.y <= bar) ? dev_browser_chrome(q, bar, aa) : DEV_SHELL;
+        return lerp(shell, face, front);
+    }
+    float3 c = DEV_BEZEL_RGB;
+    if (dev_is(3.0))
+    {
+        // Téléphone : haut-parleur en gélule et œil de caméra, dans la lunette du haut.
+        float y = -mb.y - src_prev.y * 0.5;
+        c = lerp(c, float3(0.227, 0.247, 0.278),
+                 dev_cov(sd_round_rect(p.xy - float2(-0.012, y), float2(0.075, 0.0055), 0.0055), aa));
+        c = lerp(c, float3(0.086, 0.106, 0.145), dev_cov(length(p.xy - float2(0.105, y)) - 0.009, aa));
+    }
+    else if (dev_is(2.0))
+    {
+        // Portable : l'œil de caméra, 1,5 px pour 249 px de contenu sur la maquette.
+        c = lerp(c, float3(0.149, 0.165, 0.200),
+                 dev_cov(length(p.xy - float2(0.0, -mb.y - src_prev.y * 0.5)) - 0.004, aa));
+    }
+    // Le moniteur n'a rien de plus : son menton plus haut que les trois autres bords suffit à le
+    // dire, et un témoin d'alimentation coloré serait le seul pixel non neutre de tout le cadre.
+    return lerp(shell, c, front);
+}
+
+float4 device_frame(float2 local)
+{
+    ModelFrame f;
+    f.c = cos(fx.xyz);
+    f.s = sin(fx.xyz);
+    f.cp = 1.0;
+    f.sp = 0.0;
+    f.cy = 1.0;
+    f.sy = 0.0;
+    float persp = src.z;
+    float unit = src.w;
+
+    // Le rayon de ce pixel, dans le repère DU PLAN (= celui du modèle, à `unit` près) : caméra en
+    // (0, 0, P) du repère caméra, plan translaté de `mb.zw` dans ce même repère.
+    float3 dw = float3(local + src.xy, -persp);
+    float dlen = length(dw);
+    float3 ro = world_to_plane(float3(-mb.z, -mb.w, persp), f) / unit;
+    float3 rd = world_to_plane(dw / dlen, f);
+    float3 l = world_to_plane(MODEL_LIGHT, f);
+
+    // Le plan du métrage occulte tout ce qui est derrière lui DANS l'ouverture : la marche s'y
+    // arrête. C'est ce qui laisse le mode 8 dessiner le métrage dans le cadre, et ce qui empêche
+    // de voir au travers de l'appareil par son ouverture.
+    float t_max = 1e9;
+    if (rd.z < -1e-5)
+    {
+        float ts = -ro.z / rd.z;
+        float2 hit = ro.xy + rd.xy * ts;
+        float2 ah = mb.xy - DEV_BEZEL_OVERLAP;
+        if (ts > 0.0 && all(abs(hit) < ah)) { t_max = ts; }
+    }
+
+    // La boîte du modèle, corps et débords compris : le socle du portable vient vers la caméra,
+    // le pied du moniteur s'en éloigne.
+    float2 bc = dev_body_c();
+    float2 bh = dev_body_h();
+    float3 lo = float3(bc - bh, -fx.w);
+    float3 hi = float3(bc + bh, 0.0);
+    if (dev_is(2.0))
+    {
+        float reach = DEV_DECK_LEN + DEV_DECK_THICK;
+        lo = float3(min(lo.x, -bh.x - DEV_DECK_OVERHANG), lo.y, min(lo.z, -fx.w));
+        hi = float3(max(hi.x, bh.x + DEV_DECK_OVERHANG), hi.y + reach * cos(DEV_DECK_ANGLE) + DEV_DECK_THICK,
+                    hi.z + reach * sin(DEV_DECK_ANGLE));
+    }
+    else if (dev_is(4.0))
+    {
+        lo = float3(min(lo.x, -DEV_FOOT_W), lo.y, lo.z - DEV_STAND_Z);
+        hi = float3(max(hi.x, DEV_FOOT_W), hi.y + DEV_NECK_LEN + DEV_FOOT_H, hi.z);
+    }
+
+    float2 tb = ray_box(ro, rd, lo - 0.01, hi + 0.01);
+    float t1 = min(tb.y, t_max);
+    if (tb.x >= t1 || t1 <= 0.0)
+    {
+        return float4(0.0, 0.0, 0.0, 0.0);
+    }
+
+    // Marche, avec la même silhouette antialiasée qu'au mode 15 : un rayon qui frôle le modèle à
+    // moins d'un pixel le couvre en partie.
+    float t = max(tb.x, 0.0);
+    float best = 1e9;
+    float t_best = t;
+    bool hit = false;
+    [loop] for (int k = 0; k < 72; k++)
+    {
+        float d = sd_device(ro + rd * t);
+        float fp = t / dlen;
+        if (d < 0.08 * fp)
+        {
+            hit = true;
+            t_best = t;
+            break;
+        }
+        if (d / fp < best)
+        {
+            best = d / fp;
+            t_best = t;
+        }
+        t += max(d, 0.25 * fp);
+        if (t > t1)
+        {
+            break;
+        }
+    }
+    float cov = hit ? 1.0 : saturate(1.0 - best);
+    if (cov <= 0.0)
+    {
+        return float4(0.0, 0.0, 0.0, 0.0);
+    }
+    float3 q = ro + rd * t_best;
+    float3 n = device_normal(q);
+    float3 albedo = device_albedo(q, n, t_best / dlen);
+    float diffuse = saturate(dot(n, l));
+    // Reflet sur les arrondis seulement, comme au mode 15 : une grande face plane s'allumerait
+    // d'un bloc sous une lumière directionnelle.
+    float gloss = 1.0 - smoothstep(0.97, 0.995, abs(n.z));
+    float spec = gloss * pow(saturate(dot(n, normalize(l - rd))), 60.0);
+    float3 rgb = albedo * (MODEL_AMBIENT + MODEL_DIFFUSE * diffuse) + 0.25 * spec;
+    float a = cov * color.a;
+    return float4(rgb * a, a); // prémultiplié
+}
+
 float4 ps_main(VSOut i) : SV_Target
 {
+    // mode 17 : CADRE D'APPAREIL MODELÉ (cf. `device_frame`). Testé en premier, comme le 16.
+    if (mode > 16.5)
+    {
+        return device_frame(i.local);
+    }
+
     // mode 16 : IMPACT DU CLIC (cf. `cursor_impact`). Testé en premier, comme le mode 15.
     if (mode > 15.5)
     {

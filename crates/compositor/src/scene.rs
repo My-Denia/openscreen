@@ -183,14 +183,28 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SceneFrame {
-    /// Chrome de fenêtre : barre de titre, trois pastilles, filet. Thème clair.
+    /// Chrome de fenêtre : barre de titre, trois pastilles, filet. Thème clair. Dessiné à plat
+    /// dans le plan de l'écran (mode 14).
     WindowLight,
     /// Le même chrome, thème sombre.
     WindowDark,
+    /// Les quatre appareils, modelés en vraie 3D (mode 17) : un corps avec épaisseur, un
+    /// chanfrein et une lunette, la face écran exactement sur le plan du métrage.
+    Browser,
+    Laptop,
+    Phone,
+    Monitor,
     /// Dernier : serde n'accepte `other` que sur la dernière variante.
     #[default]
     #[serde(other)]
     None,
+}
+
+impl SceneFrame {
+    /// Le cadre est-il un appareil modelé (mode 17) plutôt que le chrome plat (mode 14) ?
+    pub fn is_device(self) -> bool {
+        matches!(self, Self::Browser | Self::Laptop | Self::Phone | Self::Monitor)
+    }
 }
 
 /// Fond derrière l'écran (parsé depuis `settings.wallpaper`).
@@ -738,8 +752,13 @@ mod tests {
         assert_eq!(effects(r#","frame":"none""#).frame, SceneFrame::None);
         assert_eq!(effects(r#","frame":"window-light""#).frame, SceneFrame::WindowLight);
         assert_eq!(effects(r#","frame":"window-dark""#).frame, SceneFrame::WindowDark);
+        // Les quatre appareils modelés (mode 17).
+        assert_eq!(effects(r#","frame":"browser""#).frame, SceneFrame::Browser);
+        assert_eq!(effects(r#","frame":"laptop""#).frame, SceneFrame::Laptop);
+        assert_eq!(effects(r#","frame":"phone""#).frame, SceneFrame::Phone);
+        assert_eq!(effects(r#","frame":"monitor""#).frame, SceneFrame::Monitor);
         // Un cadre d'une version plus récente de l'app : pas de cadre, mais la scène se lit.
-        assert_eq!(effects(r#","frame":"browser""#).frame, SceneFrame::None);
+        assert_eq!(effects(r#","frame":"holo-visor""#).frame, SceneFrame::None);
     }
 
     #[test]

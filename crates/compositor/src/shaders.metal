@@ -48,18 +48,19 @@ using namespace metal;
 struct Layer
 {
     float4 dst;       // x,y,w,h dans l'espace sortie 0..1 (origine haut-gauche)
-    float4 src;       // u0,v0,u1,v1 dans l'espace source 0..1 ; mode 15 : décalage px du rayon, P, U
+    float4 src;       // u0,v0,u1,v1 dans l'espace source 0..1 ; modes 15 et 17 : décalage px du rayon, P, U
     float2 quad_px;   // taille du quad en pixels (pour les SDF)
-    float  radius_px; // rayon des coins arrondis en px (0 = aucun)
-    float  mode;      // 0 = vidéo NV12, 1 = couleur pleine, 2 = ombre portée, ..., 15 = curseur 3D
-    float4 color;     // couleur pleine / teinte (ombre : rgb + opacité dans a) ; mode 15 : coin du sprite, texel, opacité
-    float4 fx;        // fx.x = spread ombre (px), fx.y,fx.z libres ; mode 15 : rotation du plan (rad), tangage
-    float4 src_prev;  // src à la frame précédente (flou de mouvement par vélocité) ; mode 15 : hotspot, lacet
-    float4 dst_prev;  // dst à la frame précédente ; modes 13 et 15 : rect de clip
-    float4 mb;        // mb.x = nombre de taps de motion blur (1 = désactivé) ; mode 15 : demi-taille du plan, translation
+    float  radius_px; // rayon des coins arrondis en px (0 = aucun) ; mode 17 : rayon du corps (unités du modèle)
+    float  mode;      // 0 = vidéo NV12, 1 = couleur pleine, 2 = ombre portée, ..., 15 = curseur 3D, 16 = impact du clic, 17 = appareil modelé
+    float4 color;     // couleur pleine / teinte (ombre : rgb + opacité dans a) ; mode 15 : coin du sprite, texel, opacité ; mode 17 : .r = l'appareil, .a = opacité
+    float4 fx;        // fx.x = spread ombre (px), fx.y,fx.z libres ; mode 15 : rotation du plan (rad), tangage ; mode 17 : rotation du plan (rad), épaisseur
+    float4 src_prev;  // src à la frame précédente (flou de mouvement par vélocité) ; mode 15 : hotspot, lacet ; mode 17 : marges du corps (unités du modèle)
+    float4 dst_prev;  // dst à la frame précédente ; modes 13 et 15 : rect de clip ; mode 17 : libre
+    float4 mb;        // mb.x = nombre de taps de motion blur (1 = désactivé) ; modes 15 et 17 : demi-taille du plan, translation
 };
 // Mode 15 (curseur modélisé) : le détail des emplacements est dans `frame_geometry.rs`, en tête
-// de la section « Curseur modélisé » (`cursor_model_cb`).
+// de la section « Curseur modélisé » (`cursor_model_cb`). Mode 17 (appareil modelé) : en tête de
+// « Appareils modelés » (`device_frame_cb`), et résumé au-dessus de `device_frame` dans le HLSL.
 
 // `layer` est passé en `constant Layer& [[buffer(0)]]` à chaque entry point qui le lit
 // (cf. la note « DIFFÉRENCE STRUCTURELLE » en tête de fichier). Côté Rust, il est lié par
@@ -654,6 +655,295 @@ static float4 cursor_impact(float2 local, constant Layer &layer)
     return float4(layer.color.rgb * ring, a) * layer.color.a; // prémultiplié, ombre noire
 }
 
+// ============ Cadre d'APPAREIL modelé (mode 17) ============
+// Port ligne pour ligne de `device_frame` (HLSL), dont les commentaires font foi : un portable,
+// un téléphone, une fenêtre de navigateur ou un moniteur modelés en vraie 3D autour du métrage,
+// lancés de rayons dans la MÊME caméra que le plan, la face écran exactement sur le plan du
+// métrage (mode 8), qui continue de le dessiner dans l'ouverture. Formes neutres dessinées ici :
+// aucune marque. Constantes : miroir de `frame_geometry.rs` (DEV_*) ; emplacements du cbuffer :
+// `frame_geometry::device_frame_cb`, résumé au-dessus de `device_frame` dans le HLSL.
+constant float DEV_BEVEL = 0.010;
+constant float DEV_BEZEL_OVERLAP = 0.004;
+constant float DEV_DECK_ANGLE = 0.9075712;
+constant float DEV_DECK_LEN = 0.26;
+constant float DEV_DECK_THICK = 0.022;
+constant float DEV_DECK_OVERHANG = 0.055;
+constant float DEV_NECK_W = 0.075;
+constant float DEV_NECK_LEN = 0.085;
+constant float DEV_FOOT_W = 0.21;
+constant float DEV_FOOT_H = 0.035;
+constant float DEV_STAND_Z = 0.060;
+constant float3 DEV_SHELL = float3(0.784, 0.804, 0.831);
+constant float3 DEV_SHELL_DARK = float3(0.635, 0.659, 0.694);
+constant float3 DEV_BEZEL_RGB = float3(0.047, 0.051, 0.063);
+constant float3 DEV_TABBAR = float3(0.886, 0.906, 0.933);
+constant float3 DEV_TOOLBAR = float3(0.933, 0.945, 0.961);
+constant float3 DEV_INK = float3(0.580, 0.639, 0.722);
+
+static inline float2 dev_body_c(constant Layer &layer)
+{
+    return float2((layer.src_prev.z - layer.src_prev.x) * 0.5, (layer.src_prev.w - layer.src_prev.y) * 0.5);
+}
+
+static inline float2 dev_body_h(constant Layer &layer)
+{
+    return layer.mb.xy + float2((layer.src_prev.x + layer.src_prev.z) * 0.5,
+                                (layer.src_prev.y + layer.src_prev.w) * 0.5);
+}
+
+/// Chanfrein borné par la demi-épaisseur ET par la plus fine des marges (cf. HLSL).
+static inline float dev_bevel(constant Layer &layer)
+{
+    float thin = min(min(layer.src_prev.x, layer.src_prev.y), min(layer.src_prev.z, layer.src_prev.w));
+    return min(DEV_BEVEL, min(layer.fx.w * 0.4, thin * 0.5));
+}
+
+static inline bool dev_is(constant Layer &layer, float k)
+{
+    return abs(layer.color.r - k) < 0.5;
+}
+
+static float sd_dev_box(float3 p, float3 h, float r)
+{
+    float3 q = abs(p) - h + r;
+    return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0) - r;
+}
+
+static float sd_dev_body(float3 p, constant Layer &layer)
+{
+    float t = layer.fx.w;
+    float bev = dev_bevel(layer);
+    float2 w = float2(sd_round_rect(p.xy - dev_body_c(layer), dev_body_h(layer), layer.radius_px) + bev,
+                      abs(p.z + t * 0.5) - (t * 0.5 - bev));
+    float body = min(max(w.x, w.y), 0.0) + length(max(w, 0.0)) - bev;
+    float2 ah = layer.mb.xy - DEV_BEZEL_OVERLAP;
+    float ar = max(layer.radius_px - layer.src_prev.x, 0.0);
+    ar = (dev_is(layer, 1.0) && p.y < 0.0) ? 0.0 : min(ar, min(ah.x, ah.y));
+    float hole = max(sd_round_rect(p.xy, ah, ar), -p.z - t * 0.55);
+    return max(body, -hole);
+}
+
+static float sd_dev_deck(float3 p, constant Layer &layer)
+{
+    float2 c = dev_body_c(layer);
+    float2 h = dev_body_h(layer);
+    float3 d = p - float3(0.0, c.y + h.y, -layer.fx.w * 0.5);
+    float ca = cos(DEV_DECK_ANGLE);
+    float sa = sin(DEV_DECK_ANGLE);
+    float3 q = float3(d.x, d.y * ca + d.z * sa, -d.y * sa + d.z * ca);
+    return sd_dev_box(q - float3(0.0, DEV_DECK_LEN * 0.5, -DEV_DECK_THICK * 0.5),
+                      float3(h.x + DEV_DECK_OVERHANG, DEV_DECK_LEN * 0.5, DEV_DECK_THICK * 0.5),
+                      DEV_DECK_THICK * 0.45);
+}
+
+static float sd_dev_stand(float3 p, constant Layer &layer)
+{
+    float y0 = dev_body_c(layer).y + dev_body_h(layer).y;
+    float z0 = -layer.fx.w * 0.3 - DEV_STAND_Z * 0.5;
+    float neck = sd_dev_box(p - float3(0.0, y0 + DEV_NECK_LEN * 0.5 - 0.01, z0),
+                            float3(DEV_NECK_W, DEV_NECK_LEN * 0.5 + 0.01, DEV_STAND_Z * 0.5), 0.010);
+    float foot = sd_dev_box(p - float3(0.0, y0 + DEV_NECK_LEN + DEV_FOOT_H * 0.5, z0),
+                            float3(DEV_FOOT_W, DEV_FOOT_H * 0.5, DEV_STAND_Z * 0.5), 0.012);
+    return min(neck, foot);
+}
+
+static float sd_dev_extra(float3 p, constant Layer &layer)
+{
+    if (dev_is(layer, 2.0)) { return sd_dev_deck(p, layer); }
+    if (dev_is(layer, 4.0)) { return sd_dev_stand(p, layer); }
+    return 1e9;
+}
+
+static float sd_device(float3 p, constant Layer &layer)
+{
+    return min(sd_dev_body(p, layer), sd_dev_extra(p, layer));
+}
+
+static float3 device_normal(float3 p, constant Layer &layer)
+{
+    const float e = 0.0015;
+    return normalize(float3(1, -1, -1) * sd_device(p + float3(1, -1, -1) * e, layer) +
+                     float3(-1, -1, 1) * sd_device(p + float3(-1, -1, 1) * e, layer) +
+                     float3(-1, 1, -1) * sd_device(p + float3(-1, 1, -1) * e, layer) +
+                     float3(1, 1, 1) * sd_device(p + float3(1, 1, 1) * e, layer));
+}
+
+static inline float dev_cov(float d, float aa)
+{
+    return saturate(0.5 - d / max(aa, 1e-6));
+}
+
+static float3 dev_browser_chrome(float2 q, float bar, float aa, constant Layer &layer)
+{
+    float tabs = bar * 0.463;
+    float3 c = (q.y < tabs) ? DEV_TABBAR : DEV_TOOLBAR;
+    c = mix(c, DEV_INK * 0.9, 0.35 * dev_cov(abs(q.y - bar) - aa * 0.5, aa));
+    if (q.y < tabs)
+    {
+        float r = bar * 0.070;
+        float2 d = float2(bar * 0.188 + r, bar * 0.161 + r);
+        c = mix(c, float3(1.000, 0.373, 0.341), dev_cov(length(q - d) - r, aa));
+        d.x += bar * 0.242;
+        c = mix(c, float3(0.996, 0.737, 0.180), dev_cov(length(q - d) - r, aa));
+        d.x += bar * 0.242;
+        c = mix(c, float3(0.157, 0.784, 0.251), dev_cov(length(q - d) - r, aa));
+        float2 th = float2(bar * 1.974, bar * 0.181);
+        float2 tc = float2(bar * 1.974 + bar * 1.974, tabs - th.y);
+        c = mix(c, DEV_TOOLBAR, dev_cov(sd_round_rect(q - tc, th, bar * 0.10), aa));
+    }
+    else
+    {
+        float2 ph = float2(max(dev_body_h(layer).x - bar * 0.60, bar), bar * 0.165);
+        float2 pc = float2(dev_body_h(layer).x, (tabs + bar) * 0.5);
+        c = mix(c, float3(0.910, 0.925, 0.945), dev_cov(sd_round_rect(q - pc, ph, ph.y), aa));
+        c = mix(c, DEV_INK, 0.8 * dev_cov(sd_round_rect(q - pc + float2(ph.x * 0.70, 0.0),
+                                                        float2(ph.x * 0.10, bar * 0.045), bar * 0.03), aa));
+    }
+    return c;
+}
+
+static float3 device_albedo(float3 p, float3 n, float aa, constant Layer &layer)
+{
+    if (sd_dev_body(p, layer) > sd_dev_extra(p, layer))
+    {
+        if (!dev_is(layer, 2.0)) { return DEV_SHELL_DARK; }
+        float2 c = dev_body_c(layer);
+        float2 h = dev_body_h(layer);
+        float3 d = p - float3(0.0, c.y + h.y, -layer.fx.w * 0.5);
+        float ca = cos(DEV_DECK_ANGLE);
+        float sa = sin(DEV_DECK_ANGLE);
+        float3 q = float3(d.x, d.y * ca + d.z * sa, -d.y * sa + d.z * ca);
+        if (q.z < -DEV_DECK_THICK * 0.4) { return DEV_SHELL_DARK; }
+        float3 top = mix(DEV_SHELL * 0.82, DEV_SHELL * 1.04, saturate(q.y / DEV_DECK_LEN));
+        float hw = h.x + DEV_DECK_OVERHANG;
+        float key = sd_round_rect(q.xy - float2(0.0, DEV_DECK_LEN * 0.40),
+                                  float2(hw * 0.80, DEV_DECK_LEN * 0.22), DEV_DECK_LEN * 0.03);
+        top = mix(top, DEV_SHELL * 0.58, 0.9 * dev_cov(key, aa));
+        float pad = sd_round_rect(q.xy - float2(0.0, DEV_DECK_LEN * 0.79),
+                                  float2(hw * 0.26, DEV_DECK_LEN * 0.13), DEV_DECK_LEN * 0.02);
+        return mix(top, DEV_SHELL * 0.90, dev_cov(pad, aa));
+    }
+    float3 shell = mix(DEV_SHELL_DARK, DEV_SHELL, saturate(n.z + 0.5));
+    float front = (p.z < -layer.fx.w * 0.5) ? 0.0 : smoothstep(0.25, 0.70, n.z);
+    if (front <= 0.0) { return shell; }
+
+    if (dev_is(layer, 1.0))
+    {
+        float bar = layer.src_prev.y;
+        float2 q = float2(p.x - (dev_body_c(layer).x - dev_body_h(layer).x), p.y + layer.mb.y + bar);
+        float3 face = (q.y >= 0.0 && q.y <= bar) ? dev_browser_chrome(q, bar, aa, layer) : DEV_SHELL;
+        return mix(shell, face, front);
+    }
+    float3 c = DEV_BEZEL_RGB;
+    if (dev_is(layer, 3.0))
+    {
+        float y = -layer.mb.y - layer.src_prev.y * 0.5;
+        c = mix(c, float3(0.227, 0.247, 0.278),
+                dev_cov(sd_round_rect(p.xy - float2(-0.012, y), float2(0.075, 0.0055), 0.0055), aa));
+        c = mix(c, float3(0.086, 0.106, 0.145), dev_cov(length(p.xy - float2(0.105, y)) - 0.009, aa));
+    }
+    else if (dev_is(layer, 2.0))
+    {
+        c = mix(c, float3(0.149, 0.165, 0.200),
+                dev_cov(length(p.xy - float2(0.0, -layer.mb.y - layer.src_prev.y * 0.5)) - 0.004, aa));
+    }
+    return mix(shell, c, front);
+}
+
+static float4 device_frame(float2 local, constant Layer &layer)
+{
+    ModelFrame f;
+    f.c = cos(layer.fx.xyz);
+    f.s = sin(layer.fx.xyz);
+    f.cp = 1.0;
+    f.sp = 0.0;
+    f.cy = 1.0;
+    f.sy = 0.0;
+    float persp = layer.src.z;
+    float unit = layer.src.w;
+
+    float3 dw = float3(local + layer.src.xy, -persp);
+    float dlen = length(dw);
+    float3 ro = world_to_plane(float3(-layer.mb.z, -layer.mb.w, persp), f) / unit;
+    float3 rd = world_to_plane(dw / dlen, f);
+    float3 l = world_to_plane(MODEL_LIGHT, f);
+
+    // Le plan du métrage occulte tout ce qui est derrière lui DANS l'ouverture.
+    float t_max = 1e9;
+    if (rd.z < -1e-5)
+    {
+        float ts = -ro.z / rd.z;
+        float2 p0 = ro.xy + rd.xy * ts;
+        float2 ah = layer.mb.xy - DEV_BEZEL_OVERLAP;
+        if (ts > 0.0 && all(abs(p0) < ah)) { t_max = ts; }
+    }
+
+    float2 bc = dev_body_c(layer);
+    float2 bh = dev_body_h(layer);
+    float3 lo = float3(bc - bh, -layer.fx.w);
+    float3 hi = float3(bc + bh, 0.0);
+    if (dev_is(layer, 2.0))
+    {
+        float reach = DEV_DECK_LEN + DEV_DECK_THICK;
+        lo = float3(min(lo.x, -bh.x - DEV_DECK_OVERHANG), lo.y, min(lo.z, -layer.fx.w));
+        hi = float3(max(hi.x, bh.x + DEV_DECK_OVERHANG),
+                    hi.y + reach * cos(DEV_DECK_ANGLE) + DEV_DECK_THICK,
+                    hi.z + reach * sin(DEV_DECK_ANGLE));
+    }
+    else if (dev_is(layer, 4.0))
+    {
+        lo = float3(min(lo.x, -DEV_FOOT_W), lo.y, lo.z - DEV_STAND_Z);
+        hi = float3(max(hi.x, DEV_FOOT_W), hi.y + DEV_NECK_LEN + DEV_FOOT_H, hi.z);
+    }
+
+    float2 tb = ray_box(ro, rd, lo - 0.01, hi + 0.01);
+    float t1 = min(tb.y, t_max);
+    if (tb.x >= t1 || t1 <= 0.0)
+    {
+        return float4(0.0, 0.0, 0.0, 0.0);
+    }
+
+    float t = max(tb.x, 0.0);
+    float best = 1e9;
+    float t_best = t;
+    bool hit = false;
+    for (int k = 0; k < 72; k++)
+    {
+        float d = sd_device(ro + rd * t, layer);
+        float fp = t / dlen;
+        if (d < 0.08 * fp)
+        {
+            hit = true;
+            t_best = t;
+            break;
+        }
+        if (d / fp < best)
+        {
+            best = d / fp;
+            t_best = t;
+        }
+        t += max(d, 0.25 * fp);
+        if (t > t1)
+        {
+            break;
+        }
+    }
+    float cov = hit ? 1.0 : saturate(1.0 - best);
+    if (cov <= 0.0)
+    {
+        return float4(0.0, 0.0, 0.0, 0.0);
+    }
+    float3 q = ro + rd * t_best;
+    float3 n = device_normal(q, layer);
+    float3 albedo = device_albedo(q, n, t_best / dlen, layer);
+    float diffuse = saturate(dot(n, l));
+    float gloss = 1.0 - smoothstep(0.97, 0.995, abs(n.z));
+    float spec = gloss * pow(saturate(dot(n, normalize(l - rd))), 60.0);
+    float3 rgb = albedo * (MODEL_AMBIENT + MODEL_DIFFUSE * diffuse) + 0.25 * spec;
+    float a = cov * layer.color.a;
+    return float4(rgb * a, a); // prémultiplié
+}
+
 fragment float4 ps_main(VSOut i [[stage_in]],
                         constant Layer &layer [[buffer(0)]],
                         texture2d<float, access::sample> texY [[texture(0)]],
@@ -668,6 +958,12 @@ fragment float4 ps_main(VSOut i [[stage_in]],
                         // modes 7 et 13.
                         texture2d<float, access::sample> texSdf [[texture(4)]])
 {
+    // mode 17 : CADRE D'APPAREIL MODELÉ (`device_frame`). Testé en premier, comme le 16.
+    if (layer.mode > 16.5)
+    {
+        return device_frame(i.local, layer);
+    }
+
     // mode 16 : IMPACT DU CLIC (`cursor_impact`). Testé en premier, comme le mode 15.
     if (layer.mode > 15.5)
     {
