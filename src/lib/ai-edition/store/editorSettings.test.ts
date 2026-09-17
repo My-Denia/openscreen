@@ -308,9 +308,11 @@ describe("patchEditorSettings", () => {
 
 	it("round-trips the recording frame and reads an unknown one as no frame", () => {
 		expect(getEditorSettings(baseDoc).frame).toBe("none");
-		const patched = patchEditorSettings(baseDoc, { frame: "window-dark" });
-		expect(getEditorSettings(patched).frame).toBe("window-dark");
-		const unknown = { ...baseDoc, legacyEditor: { frame: "browser" } } as typeof baseDoc;
+		for (const frame of ["window-dark", "browser", "laptop", "phone", "monitor"] as const) {
+			const patched = patchEditorSettings(baseDoc, { frame });
+			expect(getEditorSettings(patched).frame).toBe(frame);
+		}
+		const unknown = { ...baseDoc, legacyEditor: { frame: "holo-visor" } } as typeof baseDoc;
 		expect(getEditorSettings(unknown).frame).toBe("none");
 	});
 

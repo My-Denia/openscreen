@@ -47,7 +47,10 @@ import { WALLPAPER_MOTIONS, type WallpaperMotion } from "@/components/video-edit
 import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import { resolveCaptionLane } from "@/lib/ai-edition/captions/settings";
 import { collapseTracksToPills, trackGroupId } from "@/lib/ai-edition/document/audioTracks";
-import { collectNativeFormats } from "@/lib/ai-edition/document/outputFormat";
+import {
+	collectNativeFormats,
+	resolveAspectRatioValue,
+} from "@/lib/ai-edition/document/outputFormat";
 import type { InsertSide } from "@/lib/ai-edition/document/transcript";
 import type {
 	AxcutAsset,
@@ -94,7 +97,11 @@ import {
 	themePickerPreviewAssets,
 } from "@/lib/cursor/cursorThemes";
 import { buildGradientFromEditor } from "@/lib/gradientBuilder";
-import { RECORDING_FRAMES, type RecordingFrame } from "@/lib/projectDefaults";
+import {
+	RECORDING_FRAMES,
+	type RecordingFrame,
+	recordingFrameBlockedReason,
+} from "@/lib/projectDefaults";
 import {
 	classifyWallpaper,
 	resolveImageWallpaperUrl,
@@ -2380,6 +2387,10 @@ const RECORDING_FRAME_LABEL_KEYS: Record<RecordingFrame, string> = {
 	none: "effects.windowNone",
 	"window-light": "effects.windowLight",
 	"window-dark": "effects.windowDark",
+	browser: "effects.frameBrowser",
+	laptop: "effects.frameLaptop",
+	phone: "effects.framePhone",
+	monitor: "effects.frameMonitor",
 };
 
 /**
@@ -2404,6 +2415,12 @@ export function VideoEffectsPane() {
 	// can never disagree about what shape the footage is. Already sorted by clip count then by
 	// pixel area, so [0] is "the shape most of this timeline is in" with no heuristic of ours.
 	const nativeFormats = useMemo(() => (document ? collectNativeFormats(document) : []), [document]);
+	// The shape the export will actually have, `"native"` resolved — what decides whether a
+	// portrait device frame can wrap this recording at all.
+	const outputAspect = useMemo(
+		() => resolveAspectRatioValue(document, settings.aspectRatio),
+		[document, settings.aspectRatio],
+	);
 	const hasTiltedZoom = (document?.zoomRanges ?? []).some((z) => z.rotationPreset != null);
 	const [fitMenuOpen, setFitMenuOpen] = useState(false);
 	const [ratioMenuOpen, setRatioMenuOpen] = useState(false);
@@ -2621,24 +2638,33 @@ export function VideoEffectsPane() {
 						className="w-auto border-0 bg-transparent p-0 shadow-none"
 					>
 						<div className={styles.actionMenu} role="menu" aria-label={ts("effects.window")}>
-							{RECORDING_FRAMES.map((frame) => (
-								<button
-									type="button"
-									role="menuitem"
-									key={frame}
-									className={`${styles.actionMenuRow}${
-										frame === settings.frame ? ` ${styles.isActive}` : ""
-									}`}
-									onClick={() => {
-										setFrameMenuOpen(false);
-										void set({ frame });
-									}}
-								>
-									<span className={styles.actionMenuMain}>
-										{ts(RECORDING_FRAME_LABEL_KEYS[frame])}
-									</span>
-								</button>
-							))}
+							{RECORDING_FRAMES.map((frame) => {
+								// A device this project's shape cannot carry STAYS in the list, greyed,
+								// with the reason on the row. A control that silently disappears leaves
+								// the user hunting for a frame that was there yesterday.
+								const blocked = recordingFrameBlockedReason(frame, outputAspect);
+								return (
+									<button
+										type="button"
+										role="menuitem"
+										key={frame}
+										disabled={blocked != null}
+										title={blocked ? ts(blocked) : undefined}
+										className={`${styles.actionMenuRow}${
+											frame === settings.frame ? ` ${styles.isActive}` : ""
+										}`}
+										onClick={() => {
+											setFrameMenuOpen(false);
+											void set({ frame });
+										}}
+									>
+										<span className={styles.actionMenuMain}>
+											{ts(RECORDING_FRAME_LABEL_KEYS[frame])}
+										</span>
+										{blocked ? <span className={styles.actionMenuCount}>{ts(blocked)}</span> : null}
+									</button>
+								);
+							})}
 						</div>
 					</PopoverContent>
 				</Popover>

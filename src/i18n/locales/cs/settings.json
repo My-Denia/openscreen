@@ -122,7 +122,12 @@
 		"windowNone": "Žádné",
 		"windowLight": "Světlé",
 		"windowDark": "Tmavé",
-		"windowHelp": "Kolem záznamu vykreslí záhlaví a okraj okna."
+		"frameBrowser": "Prohlížeč",
+		"frameLaptop": "Notebook",
+		"framePhone": "Telefon",
+		"frameMonitor": "Monitor",
+		"frameNeedsPortrait": "Jen projekty na výšku",
+		"windowHelp": "Nakreslí okenní rám nebo zařízení modelované ve 3D kolem nahrávky."
 	},
 	"stylePresets": {
 		"button": "Předvolby",

@@ -122,7 +122,12 @@
 		"windowNone": "Keins",
 		"windowLight": "Hell",
 		"windowDark": "Dunkel",
-		"windowHelp": "Zeichnet eine Fenstertitelleiste und einen Rahmen um die Aufnahme."
+		"frameBrowser": "Browser",
+		"frameLaptop": "Notebook",
+		"framePhone": "Smartphone",
+		"frameMonitor": "Monitor",
+		"frameNeedsPortrait": "Nur Hochformat-Projekte",
+		"windowHelp": "Zeichnet einen Fensterrahmen oder ein in 3D modelliertes Gerät um die Aufnahme."
 	},
 	"stylePresets": {
 		"button": "Vorgaben",

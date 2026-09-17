@@ -908,8 +908,12 @@
 	cursor: pointer;
 	text-align: left;
 }
-.actionMenuRow:hover { background: var(--surface-2); }
+.actionMenuRow:hover:not(:disabled) { background: var(--surface-2); }
 .actionMenuRow.isActive { background: color-mix(in oklab, var(--brand), transparent 82%); }
+/* A row the project cannot take (a portrait device frame on a landscape timeline) stays in the
+   list so the option is still discoverable, but has to LOOK unavailable — and the reason rides
+   in its `actionMenuCount` slot on the right. */
+.actionMenuRow:disabled { cursor: default; opacity: 0.5; }
 /* Separates the fixed presets from the shapes this timeline actually holds. */
 .actionMenuGroup {
 	padding: 8px 8px 4px;
@@ -947,7 +951,6 @@
 	padding-left: 4px;
 	border-left: 1px solid var(--border);
 }
-.presetActions .actionMenuRow:disabled { cursor: default; opacity: 0.5; }
 .presetStatus {
 	display: flex;
 	align-items: center;

@@ -122,7 +122,12 @@
 		"windowNone": "なし",
 		"windowLight": "ライト",
 		"windowDark": "ダーク",
-		"windowHelp": "録画の周りにウィンドウのタイトルバーと枠を描画します。"
+		"frameBrowser": "ブラウザー",
+		"frameLaptop": "ノートPC",
+		"framePhone": "スマートフォン",
+		"frameMonitor": "モニター",
+		"frameNeedsPortrait": "縦向きのプロジェクトのみ",
+		"windowHelp": "録画の周囲にウィンドウ枠、または 3D でモデリングされたデバイスを描画します。"
 	},
 	"stylePresets": {
 		"button": "プリセット",

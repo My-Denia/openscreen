@@ -1,17 +1,58 @@
 /**
  * The frame drawn around the recording, a project setting like the wallpaper. "none" draws
  * nothing and renders exactly as before the setting existed.
+ *
+ * Two families, and the difference is not cosmetic: the window chrome is drawn FLAT in the
+ * screen's own plane (shader mode 14), while the four devices are modelled in real 3D around it
+ * (mode 17) — a body with thickness, a bevel and a bezel, ray-marched in the same camera as the
+ * footage. Which is why the camera can move around them.
  */
-export type RecordingFrame = "none" | "window-light" | "window-dark";
+export type RecordingFrame =
+	| "none"
+	| "window-light"
+	| "window-dark"
+	| "browser"
+	| "laptop"
+	| "phone"
+	| "monitor";
 
 export const RECORDING_FRAMES = [
 	"none",
 	"window-light",
 	"window-dark",
+	"browser",
+	"laptop",
+	"phone",
+	"monitor",
+] as const satisfies readonly RecordingFrame[];
+
+/**
+ * The devices modelled in 3D, in menu order. They are the values that shader mode 17 draws;
+ * everything else is flat.
+ */
+export const DEVICE_FRAMES = [
+	"browser",
+	"laptop",
+	"phone",
+	"monitor",
 ] as const satisfies readonly RecordingFrame[];
 
 export function isRecordingFrame(value: unknown): value is RecordingFrame {
 	return typeof value === "string" && (RECORDING_FRAMES as readonly string[]).includes(value);
+}
+
+/**
+ * The phone is the only PORTRAIT device: wrapped around a landscape recording it would read as a
+ * phone held sideways with its screen stretched across, which is not a thing. The picker offers
+ * it only when the output is at least as tall as it is wide, and says so when it does not.
+ *
+ * `null` = the frame is offered. A string = the reason it is not, as an i18n key.
+ */
+export function recordingFrameBlockedReason(
+	frame: RecordingFrame,
+	outputAspect: number,
+): string | null {
+	return frame === "phone" && outputAspect > 1 ? "effects.frameNeedsPortrait" : null;
 }
 
 export interface ProjectAppearanceDefaults {

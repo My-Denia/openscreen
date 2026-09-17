@@ -122,7 +122,12 @@
 		"windowNone": "Không",
 		"windowLight": "Sáng",
 		"windowDark": "Tối",
-		"windowHelp": "Vẽ thanh tiêu đề và viền cửa sổ quanh bản ghi."
+		"frameBrowser": "Trình duyệt",
+		"frameLaptop": "Máy tính xách tay",
+		"framePhone": "Điện thoại",
+		"frameMonitor": "Màn hình",
+		"frameNeedsPortrait": "Chỉ dự án dọc",
+		"windowHelp": "Vẽ khung cửa sổ, hoặc một thiết bị dựng 3D, quanh bản ghi."
 	},
 	"stylePresets": {
 		"button": "Cài đặt sẵn",

@@ -122,7 +122,12 @@
 		"windowNone": "None",
 		"windowLight": "Light",
 		"windowDark": "Dark",
-		"windowHelp": "Draws a window title bar and border around the recording."
+		"frameBrowser": "Browser",
+		"frameLaptop": "Laptop",
+		"framePhone": "Phone",
+		"frameMonitor": "Monitor",
+		"frameNeedsPortrait": "Portrait projects only",
+		"windowHelp": "Draws a window chrome, or a device modelled in 3D, around the recording."
 	},
 	"stylePresets": {
 		"button": "Presets",

@@ -122,7 +122,12 @@
 		"windowNone": "Yok",
 		"windowLight": "Açık",
 		"windowDark": "Koyu",
-		"windowHelp": "Kaydın çevresine bir pencere başlık çubuğu ve kenarlığı çizer."
+		"frameBrowser": "Tarayıcı",
+		"frameLaptop": "Dizüstü",
+		"framePhone": "Telefon",
+		"frameMonitor": "Monitör",
+		"frameNeedsPortrait": "Yalnızca dikey projeler",
+		"windowHelp": "Kaydın çevresine bir pencere çerçevesi ya da 3B modellenmiş bir cihaz çizer."
 	},
 	"stylePresets": {
 		"button": "Ön ayarlar",

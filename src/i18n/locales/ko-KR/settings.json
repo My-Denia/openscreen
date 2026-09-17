@@ -122,7 +122,12 @@
 		"windowNone": "없음",
 		"windowLight": "밝게",
 		"windowDark": "어둡게",
-		"windowHelp": "녹화 화면 주위에 창 제목 표시줄과 테두리를 그립니다."
+		"frameBrowser": "브라우저",
+		"frameLaptop": "노트북",
+		"framePhone": "휴대폰",
+		"frameMonitor": "모니터",
+		"frameNeedsPortrait": "세로 프로젝트만 가능",
+		"windowHelp": "녹화 주위에 창 테두리 또는 3D로 모델링된 기기를 그립니다."
 	},
 	"stylePresets": {
 		"button": "프리셋",

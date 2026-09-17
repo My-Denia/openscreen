@@ -122,7 +122,12 @@
 		"windowNone": "Ninguna",
 		"windowLight": "Clara",
 		"windowDark": "Oscura",
-		"windowHelp": "Dibuja una barra de título y un borde de ventana alrededor de la grabación."
+		"frameBrowser": "Navegador",
+		"frameLaptop": "Portátil",
+		"framePhone": "Teléfono",
+		"frameMonitor": "Monitor",
+		"frameNeedsPortrait": "Solo proyectos verticales",
+		"windowHelp": "Dibuja un marco de ventana, o un dispositivo modelado en 3D, alrededor de la grabación."
 	},
 	"stylePresets": {
 		"button": "Preajustes",

@@ -122,7 +122,12 @@
 		"windowNone": "Aucune",
 		"windowLight": "Claire",
 		"windowDark": "Sombre",
-		"windowHelp": "Dessine une barre de titre et une bordure de fenêtre autour de l'enregistrement."
+		"frameBrowser": "Navigateur",
+		"frameLaptop": "Portable",
+		"framePhone": "Téléphone",
+		"frameMonitor": "Moniteur",
+		"frameNeedsPortrait": "Projets en portrait uniquement",
+		"windowHelp": "Dessine un chrome de fenêtre, ou un appareil modelé en 3D, autour de l'enregistrement."
 	},
 	"stylePresets": {
 		"button": "Préréglages",

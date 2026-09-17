@@ -122,7 +122,12 @@
 		"windowNone": "Нет",
 		"windowLight": "Светлое",
 		"windowDark": "Тёмное",
-		"windowHelp": "Рисует заголовок и рамку окна вокруг записи."
+		"frameBrowser": "Браузер",
+		"frameLaptop": "Ноутбук",
+		"framePhone": "Телефон",
+		"frameMonitor": "Монитор",
+		"frameNeedsPortrait": "Только вертикальные проекты",
+		"windowHelp": "Рисует рамку окна или устройство, смоделированное в 3D, вокруг записи."
 	},
 	"stylePresets": {
 		"button": "Пресеты",

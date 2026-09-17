@@ -18,6 +18,7 @@ import type {
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
 import { axcutSchemaVersion } from "@/lib/ai-edition/schema";
+import { DEVICE_FRAMES, recordingFrameBlockedReason } from "@/lib/projectDefaults";
 import { getFocusBoundsForScale } from "@/lib/zoomMath/focusUtils";
 import { buildSceneDescription, wallpaperAcceptsMotion } from "./sceneDescription";
 
@@ -236,6 +237,28 @@ describe("buildSceneDescription.effects.frame", () => {
 	it("carries the chosen window frame", () => {
 		const doc = makeDoc({ legacyEditor: { frame: "window-light" } });
 		expect(buildSceneDescription(doc).effects.frame).toBe("window-light");
+	});
+
+	// The four devices ride the same field as the window chrome: what changes is which shader
+	// mode the native side picks (17 instead of 14), not the contract.
+	it("carries each modelled device frame", () => {
+		for (const frame of DEVICE_FRAMES) {
+			const doc = makeDoc({ legacyEditor: { frame } });
+			expect(buildSceneDescription(doc).effects.frame).toBe(frame);
+		}
+	});
+});
+
+describe("recordingFrameBlockedReason", () => {
+	it("offers the phone only to a portrait project, and says why when it does not", () => {
+		expect(recordingFrameBlockedReason("phone", 9 / 16)).toBeNull();
+		expect(recordingFrameBlockedReason("phone", 1)).toBeNull();
+		expect(recordingFrameBlockedReason("phone", 16 / 9)).toBe("effects.frameNeedsPortrait");
+		// The landscape devices and the flat window chrome are never blocked.
+		for (const frame of ["none", "window-light", "browser", "laptop", "monitor"] as const) {
+			expect(recordingFrameBlockedReason(frame, 16 / 9)).toBeNull();
+			expect(recordingFrameBlockedReason(frame, 9 / 16)).toBeNull();
+		}
 	});
 });
 

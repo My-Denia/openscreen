@@ -122,7 +122,12 @@
 		"windowNone": "無",
 		"windowLight": "淺色",
 		"windowDark": "深色",
-		"windowHelp": "在錄製內容周圍繪製視窗標題列和邊框。"
+		"frameBrowser": "瀏覽器",
+		"frameLaptop": "筆記型電腦",
+		"framePhone": "手機",
+		"frameMonitor": "螢幕",
+		"frameNeedsPortrait": "僅限直向專案",
+		"windowHelp": "在錄製內容周圍繪製視窗邊框，或以 3D 建模的裝置。"
 	},
 	"stylePresets": {
 		"button": "預設",

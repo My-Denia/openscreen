@@ -122,7 +122,12 @@
 		"windowNone": "Nenhuma",
 		"windowLight": "Clara",
 		"windowDark": "Escura",
-		"windowHelp": "Desenha uma barra de título e uma borda de janela ao redor da gravação."
+		"frameBrowser": "Navegador",
+		"frameLaptop": "Notebook",
+		"framePhone": "Celular",
+		"frameMonitor": "Monitor",
+		"frameNeedsPortrait": "Apenas projetos verticais",
+		"windowHelp": "Desenha uma moldura de janela, ou um dispositivo modelado em 3D, ao redor da gravação."
 	},
 	"stylePresets": {
 		"button": "Predefinições",

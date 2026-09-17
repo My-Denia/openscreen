@@ -122,7 +122,12 @@
 		"windowNone": "无",
 		"windowLight": "浅色",
 		"windowDark": "深色",
-		"windowHelp": "在录制内容周围绘制窗口标题栏和边框。"
+		"frameBrowser": "浏览器",
+		"frameLaptop": "笔记本电脑",
+		"framePhone": "手机",
+		"frameMonitor": "显示器",
+		"frameNeedsPortrait": "仅限竖屏项目",
+		"windowHelp": "在录制内容周围绘制窗口边框，或以 3D 建模的设备。"
 	},
 	"stylePresets": {
 		"button": "预设",
