@@ -217,22 +217,38 @@ describe("fitting a clip is an action, and a choice only when there is one", () 
 	});
 });
 
-describe("the window frame menu persists the pick", () => {
-	it("writes each frame to the document", async () => {
+describe("the frame menu persists the pick", () => {
+	const stored = (key: string) =>
+		(useProjectStore.getState().document?.legacyEditor as Record<string, unknown>)?.[key];
+
+	it("writes each frame to the document, with no option withheld", async () => {
 		mount(documentWithShapes([[1920, 1080]]));
-		// Starts at "none", so each pick below moves the stored value.
+		// A 16:9 project: the phone is offered all the same. Nothing is gated — the frame adapts
+		// to the footage, and a phone around a landscape clip is a phone lying on its side.
 		for (const [label, frame] of [
-			["Light", "window-light"],
-			["Dark", "window-dark"],
+			["Window", "window"],
+			["Laptop", "laptop"],
+			["Phone", "phone"],
+			["Screen", "monitor"],
 			["None", "none"],
 		] as const) {
-			fireEvent.click(screen.getByRole("button", { name: "Window" }));
-			fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: label }));
-			await waitFor(() =>
-				expect(
-					(useProjectStore.getState().document?.legacyEditor as Record<string, unknown>)?.frame,
-				).toBe(frame),
-			);
+			fireEvent.click(screen.getByRole("button", { name: "Style" }));
+			const item = within(screen.getByRole("menu")).getByRole("menuitem", { name: label });
+			expect(item).not.toBeDisabled();
+			fireEvent.click(item);
+			await waitFor(() => expect(stored("frame")).toBe(frame));
 		}
+	});
+
+	it("offers the theme once a frame is on, and writes it", async () => {
+		mount(documentWithShapes([[1920, 1080]]));
+		// No frame, no theme row: it would recolour nothing.
+		expect(screen.queryByRole("button", { name: "Theme" })).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Style" }));
+		fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Laptop" }));
+		await waitFor(() => expect(stored("frame")).toBe("laptop"));
+		fireEvent.click(screen.getByRole("button", { name: "Theme" }));
+		fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Dark" }));
+		await waitFor(() => expect(stored("frameTheme")).toBe("dark"));
 	});
 });

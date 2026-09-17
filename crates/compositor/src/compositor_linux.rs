@@ -4814,9 +4814,19 @@ mod tests {
             let tone = centre(&none);
             let bare = footage(&none, tone);
             let mut shots = Vec::new();
-            for device in ["browser", "laptop", "phone", "monitor"] {
+            for device in ["window", "laptop", "phone", "monitor"] {
                 let rgba =
                     compose_framed(&comp, &gpu, &format!(r#","frame":"{device}""#), rotation);
+                let dark = compose_framed(
+                    &comp,
+                    &gpu,
+                    &format!(r#","frame":"{device}","frameTheme":"dark""#),
+                    rotation,
+                );
+                assert!(
+                    differing(&rgba, &dark) > 2_000,
+                    "{name} {device} : les deux themes se confondent"
+                );
                 if let Some(dir) = &out_dir {
                     let path = format!("{dir}/linux-{name}-{device}.png");
                     image::RgbaImage::from_raw(1280, 720, rgba.clone())

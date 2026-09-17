@@ -18,7 +18,7 @@ import type {
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
 import { axcutSchemaVersion } from "@/lib/ai-edition/schema";
-import { DEVICE_FRAMES, recordingFrameBlockedReason } from "@/lib/projectDefaults";
+import { DEVICE_FRAMES } from "@/lib/projectDefaults";
 import { getFocusBoundsForScale } from "@/lib/zoomMath/focusUtils";
 import { buildSceneDescription, wallpaperAcceptsMotion } from "./sceneDescription";
 
@@ -235,8 +235,24 @@ describe("buildSceneDescription.effects.frame", () => {
 	});
 
 	it("carries the chosen window frame", () => {
-		const doc = makeDoc({ legacyEditor: { frame: "window-light" } });
-		expect(buildSceneDescription(doc).effects.frame).toBe("window-light");
+		const doc = makeDoc({ legacyEditor: { frame: "window" } });
+		expect(buildSceneDescription(doc).effects.frame).toBe("window");
+	});
+
+	// The theme is its own field, omitted at "light" so a project that never touched it sends
+	// what it always sent. A document written before the split still opens as window + its theme.
+	it("carries the frame theme, and omits it at light", () => {
+		const light = makeDoc({ legacyEditor: { frame: "laptop", frameTheme: "light" } });
+		expect(buildSceneDescription(light).effects).not.toHaveProperty("frameTheme");
+		const dark = makeDoc({ legacyEditor: { frame: "laptop", frameTheme: "dark" } });
+		expect(buildSceneDescription(dark).effects.frameTheme).toBe("dark");
+		// No frame: no theme on the wire either.
+		const none = makeDoc({ legacyEditor: { frame: "none", frameTheme: "dark" } });
+		expect(buildSceneDescription(none).effects).not.toHaveProperty("frameTheme");
+		// The migrated pair.
+		const legacy = makeDoc({ legacyEditor: { frame: "window-dark" } });
+		expect(buildSceneDescription(legacy).effects.frame).toBe("window");
+		expect(buildSceneDescription(legacy).effects.frameTheme).toBe("dark");
 	});
 
 	// The four devices ride the same field as the window chrome: what changes is which shader
@@ -245,19 +261,6 @@ describe("buildSceneDescription.effects.frame", () => {
 		for (const frame of DEVICE_FRAMES) {
 			const doc = makeDoc({ legacyEditor: { frame } });
 			expect(buildSceneDescription(doc).effects.frame).toBe(frame);
-		}
-	});
-});
-
-describe("recordingFrameBlockedReason", () => {
-	it("offers the phone only to a portrait project, and says why when it does not", () => {
-		expect(recordingFrameBlockedReason("phone", 9 / 16)).toBeNull();
-		expect(recordingFrameBlockedReason("phone", 1)).toBeNull();
-		expect(recordingFrameBlockedReason("phone", 16 / 9)).toBe("effects.frameNeedsPortrait");
-		// The landscape devices and the flat window chrome are never blocked.
-		for (const frame of ["none", "window-light", "browser", "laptop", "monitor"] as const) {
-			expect(recordingFrameBlockedReason(frame, 16 / 9)).toBeNull();
-			expect(recordingFrameBlockedReason(frame, 9 / 16)).toBeNull();
 		}
 	});
 });

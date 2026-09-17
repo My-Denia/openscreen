@@ -166,6 +166,12 @@ pub struct SceneEffects {
     /// il n'y en a pas, et tout payload d'avant le cadre se lit « sans cadre ».
     #[serde(default)]
     pub frame: SceneFrame,
+    /// Thème du cadre, clair ou sombre, pour TOUS les cadres — chrome de fenêtre comme appareils
+    /// modelés. `#[serde(default)]` = clair. Les anciennes valeurs `window-light` /
+    /// `window-dark` portaient le thème dans le cadre lui-même et continuent de le faire :
+    /// `SceneFrame::theme_override` les résout, ce champ est ignoré pour elles.
+    #[serde(default)]
+    pub frame_theme: SceneFrameTheme,
     /// Réglage « Depth of field » : défocalise l'écran incliné selon sa profondeur (mode 8),
     /// net au focus du zoom. Sans effet hors tilt. Allumé par défaut, clé absente comprise : il
     /// ne s'applique qu'aux zooms inclinés, où il suit l'angle réel.
@@ -183,27 +189,60 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SceneFrame {
-    /// Chrome de fenêtre : barre de titre, trois pastilles, filet. Thème clair. Dessiné à plat
-    /// dans le plan de l'écran (mode 14).
-    WindowLight,
-    /// Le même chrome, thème sombre.
-    WindowDark,
-    /// Les quatre appareils, modelés en vraie 3D (mode 17) : un corps avec épaisseur, un
-    /// chanfrein et une lunette, la face écran exactement sur le plan du métrage.
-    Browser,
+    /// Chrome de fenêtre : barre de titre, trois pastilles, filet. Dessiné à plat dans le plan de
+    /// l'écran (mode 14). Son thème vient de `SceneEffects::frame_theme`, comme celui des
+    /// appareils.
+    Window,
+    /// Les trois appareils, modelés en vraie 3D (mode 17) : un corps avec épaisseur, un
+    /// micro-chanfrein et une lunette, la face écran exactement sur le plan du métrage.
     Laptop,
     Phone,
+    /// Le moniteur de bureau (« Screen » dans le panneau).
     Monitor,
+    /// Anciennes valeurs : le thème était dans le cadre. Un projet qui les porte encore doit
+    /// rendre exactement ce qu'il rendait, sans migration côté document — `theme_override` les
+    /// ramène au chrome de fenêtre plus le thème qu'elles nomment.
+    WindowLight,
+    WindowDark,
     /// Dernier : serde n'accepte `other` que sur la dernière variante.
     #[default]
     #[serde(other)]
     None,
 }
 
+/// Thème d'un cadre : la matière de la coque et du chrome. S'applique à TOUS les cadres.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SceneFrameTheme {
+    /// Argent / blanc, chrome clair.
+    #[default]
+    Light,
+    /// Graphite, chrome sombre. Dernier : `other` n'est accepté que sur la dernière variante.
+    #[serde(other)]
+    Dark,
+}
+
 impl SceneFrame {
     /// Le cadre est-il un appareil modelé (mode 17) plutôt que le chrome plat (mode 14) ?
     pub fn is_device(self) -> bool {
-        matches!(self, Self::Browser | Self::Laptop | Self::Phone | Self::Monitor)
+        matches!(self, Self::Laptop | Self::Phone | Self::Monitor)
+    }
+
+    /// Le cadre effectivement dessiné : les anciennes valeurs se ramènent au chrome de fenêtre.
+    pub fn resolved(self) -> SceneFrame {
+        match self {
+            Self::WindowLight | Self::WindowDark => Self::Window,
+            other => other,
+        }
+    }
+
+    /// Le thème que le cadre impose de lui-même, `None` s'il suit `SceneEffects::frame_theme`.
+    pub fn theme_override(self) -> Option<SceneFrameTheme> {
+        match self {
+            Self::WindowLight => Some(SceneFrameTheme::Light),
+            Self::WindowDark => Some(SceneFrameTheme::Dark),
+            _ => None,
+        }
     }
 }
 
@@ -750,15 +789,46 @@ mod tests {
         };
         assert_eq!(effects("").frame, SceneFrame::None);
         assert_eq!(effects(r#","frame":"none""#).frame, SceneFrame::None);
-        assert_eq!(effects(r#","frame":"window-light""#).frame, SceneFrame::WindowLight);
-        assert_eq!(effects(r#","frame":"window-dark""#).frame, SceneFrame::WindowDark);
-        // Les quatre appareils modelés (mode 17).
-        assert_eq!(effects(r#","frame":"browser""#).frame, SceneFrame::Browser);
+        assert_eq!(effects(r#","frame":"window""#).frame, SceneFrame::Window);
+        // Les trois appareils modelés (mode 17).
         assert_eq!(effects(r#","frame":"laptop""#).frame, SceneFrame::Laptop);
         assert_eq!(effects(r#","frame":"phone""#).frame, SceneFrame::Phone);
         assert_eq!(effects(r#","frame":"monitor""#).frame, SceneFrame::Monitor);
         // Un cadre d'une version plus récente de l'app : pas de cadre, mais la scène se lit.
         assert_eq!(effects(r#","frame":"holo-visor""#).frame, SceneFrame::None);
+    }
+
+    /// Le thème est un réglage à part, qui vaut pour TOUS les cadres. Les deux anciennes valeurs
+    /// le portaient dans le cadre : elles se ramènent au chrome de fenêtre et imposent leur
+    /// thème, donc un projet qui n'a pas été migré rend encore ce qu'il rendait.
+    #[test]
+    fn the_frame_theme_is_its_own_setting_and_the_old_values_still_carry_theirs() {
+        let effects = |extra: &str| -> SceneEffects {
+            serde_json::from_str(&format!(
+                r#"{{"padding":0,"blur":false,"shadow":0,"roundnessFrac":0,"motionBlur":0{extra}}}"#
+            ))
+            .expect("parse effects")
+        };
+        assert_eq!(effects("").frame_theme, SceneFrameTheme::Light);
+        assert_eq!(effects(r#","frameTheme":"light""#).frame_theme, SceneFrameTheme::Light);
+        assert_eq!(effects(r#","frameTheme":"dark""#).frame_theme, SceneFrameTheme::Dark);
+        // Valeur inconnue : le thème sombre est la dernière variante, donc `other` y tombe. Ce
+        // n'est pas gênant — un thème inconnu n'existe pas, et la scène se lit.
+        assert_eq!(effects(r#","frameTheme":"neon""#).frame_theme, SceneFrameTheme::Dark);
+
+        for (value, theme) in
+            [("window-light", SceneFrameTheme::Light), ("window-dark", SceneFrameTheme::Dark)]
+        {
+            let e = effects(&format!(r#","frame":"{value}""#));
+            assert_eq!(e.frame.resolved(), SceneFrame::Window, "{value}");
+            assert_eq!(e.frame.theme_override(), Some(theme), "{value}");
+            // Et le thème du projet ne les touche pas : elles disent déjà le leur.
+            let forced = effects(&format!(r#","frame":"{value}","frameTheme":"dark""#));
+            assert_eq!(forced.frame.theme_override(), Some(theme), "{value} sous un thème forcé");
+        }
+        // Un cadre normal, lui, suit le réglage.
+        assert_eq!(effects(r#","frame":"window""#).frame.theme_override(), None);
+        assert_eq!(effects(r#","frame":"laptop""#).frame.theme_override(), None);
     }
 
     #[test]

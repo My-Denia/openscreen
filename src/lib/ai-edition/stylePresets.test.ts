@@ -16,7 +16,8 @@ function appearance(overrides: Partial<StylePresetAppearance> = {}): StylePreset
 	return {
 		wallpaper: "/wallpapers/wallpaper3.jpg",
 		wallpaperMotion: "drift",
-		frame: "window-dark",
+		frame: "window",
+		frameTheme: "dark",
 		aspectRatio: "16:9",
 		shadowIntensity: 0.2,
 		showBlur: false,

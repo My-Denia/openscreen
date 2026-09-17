@@ -1,6 +1,6 @@
 //! Les cadres d'appareil modelés (`effects.frame`, mode 17) rendus par le vrai compositeur
-//! D3D11 : portable, téléphone, navigateur et moniteur, à plat, sous un angle fixe et sous la
-//! caméra en orbite.
+//! D3D11 : portable, téléphone et moniteur, à plat, sous un angle fixe et sous la caméra en
+//! orbite, dans les deux thèmes et sur quatre formats de clip.
 //!
 //! La source est une frame NV12 SYNTHÉTIQUE, comme `cursor_model_render.rs` : rien à décoder,
 //! donc le test tourne sur toute machine qui a un GPU, sans variable d'environnement. Sans
@@ -35,14 +35,20 @@ const SRC: (u32, u32) = (640, 360);
 /// Instant rendu : en plein palier de la région de zoom.
 const T: f32 = 2.0;
 
-/// Les quatre appareils. Le téléphone est le seul portrait : sa cellule se rend dans une sortie
-/// portrait, sans quoi l'écran d'un 16:9 le remplirait en travers (c'est ce que le sélecteur
-/// interdit côté app).
-const DEVICES: [&str; 4] = ["laptop", "phone", "browser", "monitor"];
+/// Les trois appareils modelés. Aucun n'est réservé à une forme de clip : c'est le cadre qui
+/// s'adapte au métrage (cf. `SHAPES`).
+const DEVICES: [&str; 3] = ["laptop", "phone", "monitor"];
 
-fn portrait(device: &str) -> bool {
-    device == "phone"
-}
+/// Les formats de sortie passes en revue : paysage, portrait, et deux ratios inhabituels. Le
+/// cadre s'adapte au METRAGE, donc chacun doit tenir dans chacun — un telephone autour d'un clip
+/// paysage est un telephone couche, pas un telephone etire, et rien n'est jamais recadre pour
+/// faire tenir un appareil.
+const SHAPES: [(&str, (u32, u32), (u32, u32)); 4] = [
+    ("16:9", (1280, 720), (640, 360)),
+    ("9:16", (720, 1280), (360, 640)),
+    ("4:3", (960, 720), (480, 360)),
+    ("21:9", (1260, 540), (630, 270)),
+];
 
 fn gpu() -> Option<Gpu> {
     match Gpu::create(false) {
@@ -123,7 +129,22 @@ impl FakeFrame {
 
 /// Une scène d'un seul écran : `frame` = la valeur du réglage (`""` = clé absente).
 fn scene_json(frame: &str, rotation: &str, shadow: f32, cursor: &str, out: (u32, u32)) -> String {
-    let frame = if frame.is_empty() { String::new() } else { format!(r#","frame":"{frame}""#) };
+    scene_json_themed(frame, "light", rotation, shadow, cursor, out)
+}
+
+/// `scene_json` avec le theme du cadre : clair (argent) ou sombre (graphite), pour TOUS les
+/// cadres. Omis a « light », comme l'app l'omet.
+fn scene_json_themed(
+    frame: &str,
+    theme: &str,
+    rotation: &str,
+    shadow: f32,
+    cursor: &str,
+    out: (u32, u32),
+) -> String {
+    let theme = if theme == "light" { String::new() } else { format!(r#","frameTheme":"{theme}""#) };
+    let frame =
+        if frame.is_empty() { String::new() } else { format!(r#","frame":"{frame}"{theme}"#) };
     let (ow, oh) = out;
     format!(
         r##"{{"clips":[{{"screenPath":"/s.mp4","webcamPath":"","sourceStartSec":0,"sourceEndSec":10,"webcamOffsetSec":0,"hasAudio":false}}],
@@ -273,68 +294,115 @@ fn save(dir: &str, name: &str, rgba: &[u8], out: (u32, u32)) {
         .unwrap_or_else(|e| panic!("écriture {name} : {e}"));
 }
 
-/// Chaque appareil se dessine AUTOUR du métrage sans jamais le recouvrir : dans l'ouverture, le
-/// pixel change avec la teinte de la source (c'est le métrage que le mode 8 y dessine) ; dans la
-/// lunette, il n'en dépend pas et il est neutre (c'est l'appareil, pas le fond d'écran coloré).
+/// Chaque appareil se dessine AUTOUR du metrage sans jamais le recouvrir, QUELLE QUE SOIT la
+/// forme du clip : dans l'ouverture, le pixel change avec la teinte de la source (c'est le
+/// metrage que le mode 8 y dessine) ; dans la lunette, il n'en depend pas et il est neutre
+/// (c'est l'appareil, pas le fond d'ecran colore).
+///
+/// Les quatre formats couvrent ce que le produit demande : un telephone autour d'un clip paysage
+/// est un telephone couche, un portable autour d'un clip portrait reste un portable, et deux
+/// ratios inhabituels (4:3, 21:9) disent que rien ne degenere.
 #[test]
 fn each_device_draws_around_untouched_footage() {
     let Some(gpu) = gpu() else { return };
-    for &device in &DEVICES {
-        let out = if portrait(device) { (720, 1280) } else { (W, H) };
+    for (shape, out, src) in SHAPES {
         let comp = Compositor::new_sized(&gpu, out.0, out.1).expect("compositor");
-        let blue = FakeFrame::new(&gpu, if portrait(device) { (360, 640) } else { SRC }, Tint::Blue);
-        let orange = FakeFrame::new(&gpu, if portrait(device) { (360, 640) } else { SRC }, Tint::Orange);
-        for rotation in ["null", r#""iso""#, r#""follow-cursor""#] {
-            let json = scene_json(device, rotation, 0.0, NO_CURSOR, out);
-            let a = render(&comp, &blue, &json, None, T);
-            let b = render(&comp, &orange, &json, None, T);
-            let (q, margins) = aperture(&json, out);
+        let blue = FakeFrame::new(&gpu, src, Tint::Blue);
+        let orange = FakeFrame::new(&gpu, src, Tint::Orange);
+        for &device in &DEVICES {
+            for rotation in ["null", r#""iso""#, r#""follow-cursor""#] {
+                let json = scene_json(device, rotation, 0.0, NO_CURSOR, out);
+                let a = render(&comp, &blue, &json, None, T);
+                let b = render(&comp, &orange, &json, None, T);
+                let (q, margins) = aperture(&json, out);
 
-            // Dans l'ouverture, bien à l'intérieur du bord : du métrage, partout.
-            let mut inside = 0;
+                // Dans l'ouverture, bien a l'interieur du bord : du metrage, partout.
+                for i in 1..=9 {
+                    for j in 1..=9 {
+                        let (x, y) = quad_at(&q, i as f32 / 10.0, j as f32 / 10.0);
+                        let (Some(pa), Some(pb)) = (px(&a, out, x, y), px(&b, out, x, y)) else {
+                            panic!("{shape} {device} {rotation} : l'ouverture sort de l'image");
+                        };
+                        assert_ne!(
+                            pa, pb,
+                            "{shape} {device} {rotation} : ({x:.0},{y:.0}) n'est pas du metrage"
+                        );
+                    }
+                }
+
+                // Juste DEHORS, au milieu de la lunette : l'appareil, et lui seul.
+                let [ml, mt, mr, mb] = margins.map(|v| v * 0.5);
+                let mut bezel = 0;
+                for k in 1..=9 {
+                    let s = k as f32 / 10.0;
+                    for ((fx, fy), (ex, ey)) in [(s, -mt), (s, 1.0 + mb), (-ml, s), (1.0 + mr, s)]
+                        .into_iter()
+                        .zip([(s, 0.0), (s, 1.0), (0.0, s), (1.0, s)])
+                    {
+                        let (x, y) = quad_at(&q, fx, fy);
+                        // Une lunette vue par la tranche peut mesurer moins d'un pixel.
+                        let (bx, by) = quad_at(&q, ex, ey);
+                        if (x - bx).hypot(y - by) < 2.5 {
+                            continue;
+                        }
+                        let (Some(pa), Some(pb)) = (px(&a, out, x, y), px(&b, out, x, y)) else {
+                            continue;
+                        };
+                        assert_eq!(
+                            pa, pb,
+                            "{shape} {device} {rotation} : du metrage deborde en ({x:.0},{y:.0})"
+                        );
+                        assert!(
+                            neutral(pa),
+                            "{shape} {device} {rotation} : ({x:.0},{y:.0}) = {pa:?}, pas l'appareil"
+                        );
+                        bezel += 1;
+                    }
+                }
+                assert!(bezel >= 18, "{shape} {device} {rotation} : {bezel} points de lunette");
+
+                // Et l'appareil se voit.
+                let bare =
+                    render(&comp, &blue, &scene_json("none", rotation, 0.0, NO_CURSOR, out), None, T);
+                let seen = differing(&a, &bare, 8);
+                println!("{shape:<5} {device:<8} {rotation:<16} {seen:>7} px changent");
+                assert!(
+                    seen > (out.0 * out.1) as usize / 20,
+                    "{shape} {device} {rotation} : cadre invisible"
+                );
+            }
+        }
+    }
+}
+
+/// Les deux themes donnent deux objets differents, et le metrage ne bouge pas d'un pixel entre
+/// les deux : le theme peint la coque, il ne touche pas a l'image.
+#[test]
+fn the_frame_theme_repaints_the_body_and_nothing_else() {
+    let Some(gpu) = gpu() else { return };
+    let comp = Compositor::new_sized(&gpu, W, H).expect("compositor");
+    let screen = FakeFrame::new(&gpu, SRC, Tint::Blue);
+    for &device in &["window", "laptop", "phone", "monitor"] {
+        for rotation in ["null", r#""iso""#] {
+            let light =
+                render(&comp, &screen, &scene_json_themed(device, "light", rotation, 0.0, NO_CURSOR, (W, H)), None, T);
+            let dark =
+                render(&comp, &screen, &scene_json_themed(device, "dark", rotation, 0.0, NO_CURSOR, (W, H)), None, T);
+            let seen = differing(&light, &dark, 8);
+            println!("{device:<8} {rotation:<8} clair/sombre {seen:>7} px");
+            assert!(seen > (W * H) as usize / 200, "{device} {rotation} : les deux themes se confondent");
+            // Le metrage : identique au bit pres dans l'ouverture.
+            let (q, _) = aperture(&scene_json(device, rotation, 0.0, NO_CURSOR, (W, H)), (W, H));
             for i in 1..=9 {
                 for j in 1..=9 {
                     let (x, y) = quad_at(&q, i as f32 / 10.0, j as f32 / 10.0);
-                    let (Some(pa), Some(pb)) = (px(&a, out, x, y), px(&b, out, x, y)) else {
-                        panic!("{device} {rotation} : l'ouverture sort de l'image");
-                    };
-                    assert_ne!(pa, pb, "{device} {rotation} : ({x:.0},{y:.0}) n'est pas du métrage");
-                    inside += 1;
-                }
-            }
-            assert_eq!(inside, 81);
-
-            // Juste DEHORS, au milieu de la lunette : l'appareil, et lui seul.
-            let [ml, mt, mr, mb] = margins.map(|v| v * 0.5);
-            let mut bezel = 0;
-            for k in 1..=9 {
-                let s = k as f32 / 10.0;
-                for ((fx, fy), (ex, ey)) in [(s, -mt), (s, 1.0 + mb), (-ml, s), (1.0 + mr, s)]
-                    .into_iter()
-                    .zip([(s, 0.0), (s, 1.0), (0.0, s), (1.0, s)])
-                {
-                    let (x, y) = quad_at(&q, fx, fy);
-                    // Une lunette vue par la tranche peut mesurer moins d'un pixel : là, rien à
-                    // mesurer (le navigateur n'a qu'un liseré de 0,6 % sur trois de ses bords).
-                    let (bx, by) = quad_at(&q, ex, ey);
-                    if (x - bx).hypot(y - by) < 2.5 {
-                        continue;
-                    }
-                    let (Some(pa), Some(pb)) = (px(&a, out, x, y), px(&b, out, x, y)) else {
+                    let (Some(pa), Some(pb)) = (px(&light, (W, H), x, y), px(&dark, (W, H), x, y))
+                    else {
                         continue;
                     };
-                    assert_eq!(pa, pb, "{device} {rotation} : du métrage déborde en ({x:.0},{y:.0})");
-                    assert!(neutral(pa), "{device} {rotation} : ({x:.0},{y:.0}) = {pa:?}, pas l'appareil");
-                    bezel += 1;
+                    assert_eq!(pa, pb, "{device} {rotation} : le theme a touche le metrage");
                 }
             }
-            assert!(bezel >= 18, "{device} {rotation} : {bezel} points de lunette seulement");
-
-            // Et l'appareil se voit : sans cadre, la même scène est très différente.
-            let bare = render(&comp, &blue, &scene_json("none", rotation, 0.0, NO_CURSOR, out), None, T);
-            let seen = differing(&a, &bare, 8);
-            println!("{device:<8} {rotation:<16} {seen:>7} px changent");
-            assert!(seen > (out.0 * out.1) as usize / 20, "{device} {rotation} : cadre invisible");
         }
     }
 }
@@ -347,7 +415,7 @@ fn the_device_follows_the_tilt_and_the_orbit_camera() {
     let Some(gpu) = gpu() else { return };
     let comp = Compositor::new_sized(&gpu, W, H).expect("compositor");
     let screen = FakeFrame::new(&gpu, SRC, Tint::Blue);
-    for &device in &["laptop", "browser"] {
+    for &device in &["laptop", "window"] {
         let flat = render(&comp, &screen, &scene_json(device, "null", 0.0, NO_CURSOR, (W, H)), None, T);
         assert!(
             flat == render(&comp, &screen, &scene_json(device, "null", 0.0, NO_CURSOR, (W, H)), None, T),
@@ -377,9 +445,6 @@ fn the_frame_casts_the_contact_shadow() {
     let comp = Compositor::new_sized(&gpu, W, H).expect("compositor");
     let screen = FakeFrame::new(&gpu, SRC, Tint::Blue);
     for &device in &DEVICES {
-        if portrait(device) {
-            continue;
-        }
         let on = render(&comp, &screen, &scene_json(device, "null", 0.7, NO_CURSOR, (W, H)), None, T);
         let off = render(&comp, &screen, &scene_json(device, "null", 0.0, NO_CURSOR, (W, H)), None, T);
         let mut darker = 0usize;
@@ -404,36 +469,71 @@ fn the_frame_casts_the_contact_shadow() {
     }
 }
 
-/// Planche à regarder (opt-in, `OPENSCREEN_DEVICE_OUT`) : chaque appareil à plat et sous `iso`.
+/// Planches a regarder (opt-in, `OPENSCREEN_DEVICE_OUT`) : chaque appareil a plat et sous `iso`,
+/// dans les deux themes, plus un gros plan de la charniere du portable pour juger le chanfrein.
 #[test]
 fn contact_sheets() {
     let Some(dir) = out_dir("OPENSCREEN_DEVICE_OUT") else {
-        eprintln!("OPENSCREEN_DEVICE_OUT absent — saute");
+        eprintln!("OPENSCREEN_DEVICE_OUT absent - saute");
         return;
     };
     let Some(gpu) = gpu() else { return };
-    let mut sheet = image::RgbaImage::new(W * 2, H * 4);
-    for (row, &device) in DEVICES.iter().enumerate() {
-        let out = if portrait(device) { (720, 1280) } else { (W, H) };
+    let comp = Compositor::new_sized(&gpu, W, H).expect("compositor");
+    let screen = FakeFrame::new(&gpu, SRC, Tint::Blue);
+    let all: [&str; 4] = ["window", "laptop", "phone", "monitor"];
+    // Une planche par theme : quatre cadres x (plat, iso).
+    for theme in ["light", "dark"] {
+        let mut sheet = image::RgbaImage::new(W * 2, H * 4);
+        for (row, &device) in all.iter().enumerate() {
+            for (col, (name, rotation)) in [("flat", "null"), ("iso", r#""iso""#)].iter().enumerate()
+            {
+                let json = scene_json_themed(device, theme, rotation, 0.6, NO_CURSOR, (W, H));
+                let rgba = render(&comp, &screen, &json, None, T);
+                save(&dir, &format!("{device}-{name}-{theme}"), &rgba, (W, H));
+                let img = image::RgbaImage::from_raw(W, H, rgba).expect("readback");
+                image::imageops::overlay(&mut sheet, &img, (col as u32 * W) as i64, (row as u32 * H) as i64);
+            }
+        }
+        sheet.save(format!("{dir}/devices-{theme}.png")).expect("planche");
+    }
+    // Le telephone dans les deux orientations de clip : debout et couche.
+    for (name, out, src) in [("portrait", (720u32, 1280u32), (360u32, 640u32)), ("landscape", (W, H), SRC)] {
         let comp = Compositor::new_sized(&gpu, out.0, out.1).expect("compositor");
-        let screen = FakeFrame::new(&gpu, if portrait(device) { (360, 640) } else { SRC }, Tint::Blue);
-        for (col, (name, rotation)) in [("flat", "null"), ("iso", r#""iso""#)].iter().enumerate() {
-            let json = scene_json(device, rotation, 0.6, NO_CURSOR, out);
-            let rgba = render(&comp, &screen, &json, None, T);
-            save(&dir, &format!("{device}-{name}"), &rgba, out);
-            let img = image::RgbaImage::from_raw(out.0, out.1, rgba).expect("readback");
-            // Le portrait est réduit À SON RATIO pour tenir dans la cellule : l'étirer donnerait
-            // un téléphone large, c'est-à-dire exactement ce que la planche doit permettre de juger.
-            let k = (W as f32 / out.0 as f32).min(H as f32 / out.1 as f32);
-            let (cw, ch) = ((out.0 as f32 * k) as u32, (out.1 as f32 * k) as u32);
-            let cell = image::imageops::resize(&img, cw, ch, image::imageops::FilterType::Triangle);
-            let x = col as u32 * W + (W - cw) / 2;
-            let y = row as u32 * H + (H - ch) / 2;
-            image::imageops::overlay(&mut sheet, &cell, x as i64, y as i64);
+        let f = FakeFrame::new(&gpu, src, Tint::Blue);
+        for (label, rotation) in [("flat", "null"), ("iso", r#""iso""#)] {
+            let rgba = render(&comp, &f, &scene_json("phone", rotation, 0.6, NO_CURSOR, out), None, T);
+            save(&dir, &format!("phone-{name}-{label}"), &rgba, out);
         }
     }
-    sheet.save(format!("{dir}/devices-flat-and-iso.png")).expect("planche");
-    println!("planche écrite dans {dir}");
+    // Ratios inhabituels : rien ne degenere.
+    for (shape, out, src) in SHAPES {
+        let comp = Compositor::new_sized(&gpu, out.0, out.1).expect("compositor");
+        let f = FakeFrame::new(&gpu, src, Tint::Blue);
+        for &device in &["laptop", "monitor"] {
+            let rgba = render(&comp, &f, &scene_json(device, "null", 0.6, NO_CURSOR, out), None, T);
+            save(&dir, &format!("shape-{}-{device}", shape.replace(':', "x")), &rgba, out);
+        }
+    }
+    // Gros plan : les coins HAUTS du chrome de fenetre, au rayon maximal. C'est la qu'ils etaient
+    // faux (cadre arrondi, metrage carre) et que l'arrondi mordait la premiere pastille.
+    for roundness in ["0.02", "0.09"] {
+        let json = scene_json("window", "null", 0.6, NO_CURSOR, (W, H))
+            .replace(r#""roundnessFrac":0.02"#, &format!(r#""roundnessFrac":{roundness}"#));
+        let rgba = render(&comp, &screen, &json, None, T);
+        let img = image::RgbaImage::from_raw(W, H, rgba).expect("readback");
+        let crop = image::imageops::crop_imm(&img, 120, 30, 420, 150).to_image();
+        let zoom = image::imageops::resize(&crop, 420 * 3, 150 * 3, image::imageops::FilterType::Nearest);
+        zoom.save(format!("{dir}/window-top-corner-r{}.png", roundness.replace('.', "")))
+            .expect("gros plan");
+    }
+    // Gros plan : la charniere et l'arete du portable, agrandies cinq fois au plus proche pour
+    // que le micro-chanfrein et son filet de lumiere se jugent au pixel.
+    let rgba = render(&comp, &screen, &scene_json("laptop", r#""iso""#, 0.6, NO_CURSOR, (W, H)), None, T);
+    let img = image::RgbaImage::from_raw(W, H, rgba).expect("readback");
+    let crop = image::imageops::crop_imm(&img, W / 2 - 120, H / 2 - 20, 240, 150).to_image();
+    let zoom = image::imageops::resize(&crop, 240 * 5, 150 * 5, image::imageops::FilterType::Nearest);
+    zoom.save(format!("{dir}/laptop-hinge-closeup.png")).expect("gros plan");
+    println!("planches ecrites dans {dir}");
 }
 
 /// 6 s de portable sous la caméra en orbite, curseur modélisé allumé (opt-in,

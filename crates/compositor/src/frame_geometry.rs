@@ -440,92 +440,182 @@ pub struct WindowFrame {
 // ============ Appareils modelés (mode 17) : proportions ============
 //
 // Toutes les longueurs sont en UNITÉS DU MODÈLE, c'est-à-dire en largeurs de la boîte écran (le
-// métrage), et sont le miroir exact des constantes `DEV_*` des trois shaders. Les proportions
-// viennent des maquettes de référence de la spec (`design-pr0/Frame*.dc.html`), mesurées sur
-// leur contenu : lunette du portable 7,5 px pour 249 px de contenu (3,0 %), chrome du navigateur
-// 14,9 px pour 294 px (5,1 %), lunette du téléphone 4,3 px pour 106,5 px (4,0 %).
+// métrage), et sont le miroir exact des constantes `DEV_*` des trois shaders. Les maquettes de
+// référence (`design-pr0/Frame*.dc.html`) donnent le style ; les proportions, elles, viennent des
+// appareils réels, rapportées à la largeur de l'écran — les maquettes sont des vignettes de
+// 250 px dont les lunettes sont volontairement épaissies pour rester visibles à cette taille.
 
 /// Marges du CORPS de chaque appareil : gauche, haut, droite, bas, en largeurs de la boîte écran.
+///
+/// Fines : un appareil moderne n'a plus de cadre épais, et une lunette grasse est ce qui fait
+/// lire une maquette comme un jouet. Le portable garde une barre de caméra en haut et un menton,
+/// le moniteur un menton seul.
 pub(crate) fn device_body_margins(kind: crate::scene::SceneFrame) -> [f32; 4] {
     use crate::scene::SceneFrame as F;
     match kind {
-        // Onglets + barre d'adresse en haut, un liseré de coque ailleurs.
-        F::Browser => [0.006, 0.050, 0.006, 0.008],
         // Lunette de l'écran du portable seule : le socle vit dans `device_outer_margins`.
-        F::Laptop => [0.030, 0.028, 0.030, 0.029],
-        F::Phone => [0.040, 0.043, 0.040, 0.043],
-        // Menton un peu plus haut que les trois autres bords, comme un moniteur de bureau.
-        F::Monitor => [0.018, 0.018, 0.018, 0.042],
+        F::Laptop => [0.014, 0.018, 0.014, 0.028],
+        F::Phone => [0.030, 0.030, 0.030, 0.030],
+        F::Monitor => [0.010, 0.010, 0.010, 0.030],
         _ => [0.0; 4],
     }
 }
 
+/// Largeur de la COQUE, en largeurs de la boîte écran : l'écran plus ses deux lunettes. C'est
+/// elle, et non l'écran, qui donne l'échelle de tout ce qui dépasse — un socle et un pied sont
+/// proportionnels à la coque qu'ils portent.
+pub(crate) fn device_shell_width(kind: crate::scene::SceneFrame) -> f32 {
+    let m = device_body_margins(kind);
+    1.0 + m[0] + m[2]
+}
+
+/// Descente du socle du portable SOUS le bord bas de l'écran, projection comprise, en largeurs de
+/// la boîte écran.
+///
+/// Exacte, et non majorée d'un facteur : à la perspective courte des présets
+/// (`PERSPECTIVE_FACTOR` = 1,6, l'œil à 0,9 largeur du plan) le socle vient vers la caméra et
+/// grandit vite — l'ancien forfait de 1,45 sous-estimait la descente de 6 % de la largeur de
+/// l'écran, que le socle débordait de sa boîte. `aspect` = hauteur / largeur de la boîte, qui
+/// fixe à la fois la hauteur de la charnière et la distance de fuite en unités du modèle.
+///
+/// C'est aussi cette fonction qui dit pourquoi le socle ne peut pas être aussi profond qu'en
+/// vrai (0,71 largeur de coque) : à 0,71, le bord avant arrive à 75 % de la distance de l'œil et
+/// sa projection sort de l'image quel que soit l'angle (mesuré par
+/// `the_deck_is_as_deep_as_the_short_lens_allows`).
+pub(crate) fn device_deck_drop(len: f32, aspect: f32, chin: f32, shell_w: f32) -> f32 {
+    let p = aspect.min(1.0) * crate::regions::PERSPECTIVE_FACTOR;
+    let hinge_y = aspect * 0.5 + chin;
+    let (ca, sa) = (DEV_DECK_ANGLE_RAD.cos(), DEV_DECK_ANGLE_RAD.sin());
+    let thick = DEV_DECK_THICK * shell_w;
+    // Les deux coins du bord avant : le plus bas en y, et le plus près de l'œil en z. Lequel
+    // domine dépend de l'angle, donc on projette les deux.
+    let mut drop = chin;
+    for q in [(len, 0.0f32), (len, -thick)] {
+        let y = hinge_y + q.0 * ca - q.1 * sa;
+        let z = q.0 * sa + q.1 * ca;
+        let d = (p - z).max(p * 0.2);
+        drop = drop.max(y * p / d - aspect * 0.5);
+    }
+    drop
+}
+
+/// Longueur du socle qui TIENT dans la boîte, en unités du modèle.
+///
+/// `DEV_DECK_LEN × largeur de coque` quand la boîte est assez haute, raccourcie sinon. Un métrage
+/// très large (21:9) laisse si peu de hauteur sous l'écran qu'un socle de pleine longueur y
+/// réduirait l'image à un trait — et **rien ne recadre ni ne boîte-aux-lettres le métrage pour
+/// faire tenir un appareil** : c'est le socle qui cède. Le seuil laisse à l'écran au moins 45 %
+/// de la hauteur de sa boîte.
+///
+/// Par dichotomie : la descente projetée croît avec la longueur, mais la perspective la rend
+/// désagréable à inverser. Vingt-quatre pas la donnent au millionième, une fois par frame.
+pub(crate) fn device_deck_len(aspect: f32, chin: f32, shell_w: f32) -> f32 {
+    let full = DEV_DECK_LEN * shell_w;
+    let room = (aspect * 0.55 - chin).max(0.0);
+    if device_deck_drop(full, aspect, chin, shell_w) <= room {
+        return full;
+    }
+    let (mut lo, mut hi) = (0.0f32, full);
+    for _ in 0..24 {
+        let mid = 0.5 * (lo + hi);
+        if device_deck_drop(mid, aspect, chin, shell_w) <= room {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
 /// Marges de l'EMPREINTE : le corps, plus la projection dans le plan de ce qui en sort (le socle
-/// du portable, le pied du moniteur). Elles majorent volontairement la projection réelle — la
-/// perspective courte des présets (`PERSPECTIVE_FACTOR` = 1,6) agrandit ce qui vient vers la
-/// caméra — pour que l'ombre couvre l'appareil et qu'il tienne dans sa boîte.
-pub(crate) fn device_outer_margins(kind: crate::scene::SceneFrame) -> [f32; 4] {
+/// du portable, le pied du moniteur). C'est elle qui porte l'ombre et qui fait tenir le tout dans
+/// la boîte. `aspect` = hauteur / largeur de la boîte écran (cf. `device_deck_drop`).
+pub(crate) fn device_outer_margins(kind: crate::scene::SceneFrame, aspect: f32) -> [f32; 4] {
     use crate::scene::SceneFrame as F;
     let m = device_body_margins(kind);
+    let w = device_shell_width(kind);
     match kind {
-        F::Laptop => [
-            m[0] + DEV_DECK_OVERHANG,
-            m[1],
-            m[2] + DEV_DECK_OVERHANG,
-            m[3] + DEV_DECK_LEN * DEV_DECK_ANGLE_RAD.cos() * DEV_DECK_SHADOW_MARGIN,
-        ],
-        F::Monitor => [m[0], m[1], m[2], m[3] + DEV_NECK_LEN + DEV_FOOT_H],
+        // Le socle a EXACTEMENT la largeur de la coque : un socle plus large que l'écran est la
+        // faute qui saute aux yeux sur une maquette d'appareil.
+        F::Laptop => {
+            let len = device_deck_len(aspect, m[3], w);
+            [m[0], m[1], m[2], device_deck_drop(len, aspect, m[3], w)]
+        }
+        // Le pied part en ARRIÈRE du plan, donc il rétrécit : sa longueur à plat le majore.
+        F::Monitor => [m[0], m[1], m[2], m[3] + (DEV_NECK_LEN + DEV_FOOT_H) * w],
         _ => m,
     }
 }
 
-/// Épaisseur du corps, en unités du modèle. Un portable est mince, un téléphone épais pour sa
-/// largeur : c'est ce rapport, plus que la taille, qui fait reconnaître l'objet.
-pub(crate) fn device_thickness(kind: crate::scene::SceneFrame) -> f32 {
+/// Épaisseur du corps, en fractions du PETIT CÔTÉ de l'ouverture — donc en unités du modèle une
+/// fois `aspect` connu (hauteur / largeur de la boîte écran).
+///
+/// Le petit côté et non la largeur : c'est lui qui donne l'échelle d'un objet, et c'est lui qui
+/// bascule quand le métrage est couché. Un téléphone qui encadre une vidéo paysage est un
+/// téléphone tenu de travers — son épaisseur se mesure toujours à son petit côté, qui est
+/// maintenant la hauteur. Sans ça, il grossissait d'un facteur 1,8 en tournant.
+///
+/// Des corps MINCES : le rapport épaisseur/petit côté est ce qui sépare un produit d'un coussin.
+/// Un portable et un moniteur sont des dalles ; un téléphone est épais pour sa largeur, et c'est
+/// ce qui le fait reconnaître.
+pub(crate) fn device_thickness(kind: crate::scene::SceneFrame, aspect: f32) -> f32 {
+    use crate::scene::SceneFrame as F;
+    let short = aspect.min(1.0);
+    short
+        * match kind {
+            F::Laptop => 0.0284,
+            F::Phone => 0.0900,
+            F::Monitor => 0.0284,
+            _ => 0.0,
+        }
+}
+
+/// Rayon INDUSTRIEL du corps, en fraction de son petit côté : celui que le châssis a d'usine et
+/// que le slider Roundness ne touche pas. Serré — un rayon large rend la silhouette molle.
+///
+/// 0 pour la fenêtre et le téléphone : ce sont les deux cadres dont le corps SUIT le slider, à
+/// zéro comme ailleurs (cf. `plan_frame`, section « Le rayon des coins »).
+pub(crate) fn device_fixed_radius_frac(kind: crate::scene::SceneFrame) -> f32 {
     use crate::scene::SceneFrame as F;
     match kind {
-        F::Browser => 0.022,
-        F::Laptop => 0.018,
-        F::Phone => 0.095,
-        F::Monitor => 0.028,
+        F::Laptop => 0.012,
+        F::Monitor => 0.008,
         _ => 0.0,
     }
 }
 
-/// Rayon MINIMAL du corps, en fraction de son petit côté : un téléphone sans coins ronds n'est
-/// pas un téléphone, alors que Roundness à 0 doit laisser un navigateur carré.
-pub(crate) fn device_min_radius_frac(kind: crate::scene::SceneFrame) -> f32 {
-    use crate::scene::SceneFrame as F;
-    match kind {
-        F::Browser => 0.012,
-        F::Laptop => 0.018,
-        // 17,8 px de rayon pour 115 px de large sur la maquette du téléphone.
-        F::Phone => 0.155,
-        F::Monitor => 0.016,
-        _ => 0.0,
-    }
-}
+// Le micro-chanfrein des arêtes vit dans les shaders seuls (`DEV_CHAMFER`) : il ne change que la
+// matière et le filet de lumière, jamais l'encombrement, donc la boîte calculée ici le majore
+// sans avoir à le connaître.
 
-// Le chanfrein des arêtes du corps vit dans les shaders seuls (`DEV_BEVEL`, `dev_bevel`) : il ne
-// change que la matière et la silhouette, jamais l'encombrement, donc la boîte de dessin calculée
-// ici le majore sans avoir à le connaître.
+// Tout ce qui suit est en fractions de la LARGEUR DE COQUE (`device_shell_width`), pas de l'écran :
+// un socle et un pied sont proportionnels à la coque qu'ils portent, quelle que soit la forme du
+// métrage encadré.
 
-/// Socle du portable : angle depuis le plan de l'écran (52° — au-delà il part vers la caméra et
-/// la perspective courte le gonfle), longueur, épaisseur et débord latéral, en unités du modèle.
-pub(crate) const DEV_DECK_ANGLE_RAD: f32 = 0.907_571_2;
-pub(crate) const DEV_DECK_LEN: f32 = 0.26;
-pub(crate) const DEV_DECK_THICK: f32 = 0.022;
-/// Le socle déborde de l'écran des deux côtés : 14,9 px pour 249 px de contenu sur la maquette.
-pub(crate) const DEV_DECK_OVERHANG: f32 = 0.055;
-/// De combien l'empreinte majore la descente du socle dans le plan, pour absorber la
-/// magnification de la perspective (le socle vient vers la caméra).
-const DEV_DECK_SHADOW_MARGIN: f32 = 1.45;
-/// Pied du moniteur : colonne puis semelle, derrière le dos du corps.
-pub(crate) const DEV_NECK_W: f32 = 0.075;
-pub(crate) const DEV_NECK_LEN: f32 = 0.085;
-pub(crate) const DEV_FOOT_W: f32 = 0.21;
-pub(crate) const DEV_FOOT_H: f32 = 0.035;
-pub(crate) const DEV_STAND_Z: f32 = 0.060;
+/// Angle du socle du portable depuis le plan de l'écran.
+///
+/// 70° depuis le plan = **110° entre l'écran et le socle**, l'ouverture d'un portable posé. Plus
+/// ouvert (l'ancien 52°, soit 128°) couchait le socle vers l'arrière et donnait un jouet ; plus
+/// fermé, le socle se présente de plus en plus par la tranche et le clavier disparaît — c'est
+/// exactement ce qu'un vrai portable fait vu à hauteur d'écran, mais ici on veut le voir.
+pub(crate) const DEV_DECK_ANGLE_RAD: f32 = 1.221_730;
+/// Profondeur d'un socle RÉEL, en largeurs de coque : MacBook Pro 14, 221 mm de profondeur pour
+/// 312 mm de large. C'est un PLAFOND, pas la valeur dessinée : à cette profondeur le bord avant
+/// arrive aux trois quarts de la distance de l'œil et sa projection fait trois fois la hauteur de
+/// l'image. `device_deck_len` rend ce que l'objectif et la boîte laissent passer.
+pub(crate) const DEV_DECK_LEN: f32 = 0.71;
+/// Épaisseur à la charnière puis au bord avant : le socle est un COIN, pas une planche.
+pub(crate) const DEV_DECK_THICK: f32 = 0.029;
+pub(crate) const DEV_DECK_THICK_FRONT: f32 = 0.013;
+/// Jeu entre le bas de l'écran et le socle : le trait sombre qui sépare les deux pièces.
+pub(crate) const DEV_DECK_GAP: f32 = 0.005;
+/// Pied du moniteur : colonne mince puis semelle basse et plate, derrière le dos du corps.
+pub(crate) const DEV_NECK_W: f32 = 0.039;
+pub(crate) const DEV_NECK_LEN: f32 = 0.097;
+pub(crate) const DEV_FOOT_W: f32 = 0.214;
+pub(crate) const DEV_FOOT_H: f32 = 0.014;
+pub(crate) const DEV_STAND_Z: f32 = 0.021;
+pub(crate) const DEV_FOOT_Z: f32 = 0.107;
 /// De combien la lunette mord sur le métrage, en unités du modèle. Sous un angle fixe, l'écran
 /// est dessiné par un warp BILINÉAIRE de ses coins projetés, alors que l'appareil est lancé de
 /// rayons dans la perspective EXACTE : les deux coïncident aux quatre coins et s'écartent de
@@ -538,10 +628,9 @@ pub(crate) const DEV_BEZEL_OVERLAP: f32 = 0.004;
 pub(crate) fn device_kind_id(kind: crate::scene::SceneFrame) -> f32 {
     use crate::scene::SceneFrame as F;
     match kind {
-        F::Browser => 1.0,
-        F::Laptop => 2.0,
-        F::Phone => 3.0,
-        F::Monitor => 4.0,
+        F::Laptop => 1.0,
+        F::Phone => 2.0,
+        F::Monitor => 3.0,
         _ => 0.0,
     }
 }
@@ -618,23 +707,33 @@ impl DeviceView {
     /// socle du portable (dans SON repère, charnière comprise) ou le pied du moniteur. Miroir
     /// exact de `sd_device` dans les trois shaders — ce qui n'est pas ici sort de la boîte de
     /// dessin et se fait couper.
+    ///
+    /// `deck_len` est la longueur RÉELLE du socle du portable (`device_deck_len`), qui se
+    /// raccourcit sur un métrage trop plat ; ignorée par les deux autres appareils.
     pub(crate) fn model_points(
         &self,
         kind: crate::scene::SceneFrame,
         c: [f32; 2],
         h: [f32; 2],
         t: f32,
+        deck_len: f32,
     ) -> Vec<[f32; 3]> {
         use crate::scene::SceneFrame as F;
         let mut pts =
             box_corners([c[0] - h[0], c[1] - h[1], -t], [c[0] + h[0], c[1] + h[1], 0.0]).to_vec();
         match kind {
             F::Laptop => {
+                // Le socle a exactement la largeur de la coque, et commence après le jeu de
+                // charnière. Le coin le plus épais est celui de la charnière ; la boîte le prend.
+                let w = 2.0 * h[0];
                 let hinge = [0.0, c[1] + h[1], -t * 0.5];
                 let (ca, sa) = (DEV_DECK_ANGLE_RAD.cos(), DEV_DECK_ANGLE_RAD.sin());
-                let hw = h[0] + DEV_DECK_OVERHANG;
                 pts.extend(
-                    box_corners([-hw, 0.0, -DEV_DECK_THICK], [hw, DEV_DECK_LEN, 0.0]).map(|q| {
+                    box_corners(
+                        [-h[0], DEV_DECK_GAP * w, -DEV_DECK_THICK * w],
+                        [h[0], DEV_DECK_GAP * w + deck_len, 0.0],
+                    )
+                    .map(|q| {
                         [
                             hinge[0] + q[0],
                             hinge[1] + q[1] * ca - q[2] * sa,
@@ -644,15 +743,16 @@ impl DeviceView {
                 );
             }
             F::Monitor => {
+                let w = 2.0 * h[0];
                 let y0 = c[1] + h[1];
-                let z0 = -t * 0.3;
+                let z0 = -t * 0.5;
                 pts.extend(box_corners(
-                    [-DEV_NECK_W, y0 - 0.01, z0 - DEV_STAND_Z],
-                    [DEV_NECK_W, y0 + DEV_NECK_LEN, z0],
+                    [-DEV_NECK_W * w, y0 - 0.01, z0 - DEV_STAND_Z * w],
+                    [DEV_NECK_W * w, y0 + DEV_NECK_LEN * w, z0],
                 ));
                 pts.extend(box_corners(
-                    [-DEV_FOOT_W, y0 + DEV_NECK_LEN - 0.01, z0 - DEV_STAND_Z],
-                    [DEV_FOOT_W, y0 + DEV_NECK_LEN + DEV_FOOT_H, z0],
+                    [-DEV_FOOT_W * w, y0 + (DEV_NECK_LEN - 0.01) * w, z0 - DEV_FOOT_Z * w],
+                    [DEV_FOOT_W * w, y0 + (DEV_NECK_LEN + DEV_FOOT_H) * w, z0],
                 ));
             }
             _ => {}
@@ -668,9 +768,10 @@ impl DeviceView {
         c: [f32; 2],
         h: [f32; 2],
         t: f32,
+        deck_len: f32,
     ) -> Option<[f32; 4]> {
         let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
-        for p in self.model_points(kind, c, h, t) {
+        for p in self.model_points(kind, c, h, t, deck_len) {
             let q = self.project(p)?;
             b = [b[0].min(q[0]), b[1].min(q[1]), b[2].max(q[0]), b[3].max(q[1])];
         }
@@ -722,8 +823,9 @@ pub(crate) fn fit_in_device_frame(
     let (aw, ah) = (a[2] * rw, a[3] * rh);
     // Les marges sont des largeurs de la boîte ÉCRAN, qu'on cherche encore : la boîte extérieure
     // en tient lieu, ce qui rend la lunette de quelques pour cent trop fine — invisible, et ça
-    // évite un point fixe pour un cadre décoratif.
-    let [ml, mt, mr, mb] = device_outer_margins(kind).map(|f| f * aw);
+    // évite un point fixe pour un cadre décoratif. Son ratio tient lieu aussi de celui de l'écran
+    // pour projeter le socle du portable (`device_deck_drop`).
+    let [ml, mt, mr, mb] = device_outer_margins(kind, ah / aw.max(1e-4)).map(|f| f * aw);
     let (iw, ih) = ((aw - ml - mr).max(1.0), (ah - mt - mb).max(1.0));
     let (sw, sh) = if cover {
         (iw, ih)
@@ -1537,18 +1639,17 @@ impl FrameGeometry {
         self.s_ann[3] * rh
     }
 
-    /// 1 quand l'écran doit garder ses coins HAUTS carrés (il est sous la barre de titre d'un
-    /// cadre), 0 sinon. Le mode 0 le lit dans `mb.w`, le mode 8 dans `dst_prev.z` — deux
-    /// emplacements que ces modes laissaient à zéro, d'où un rendu inchangé sans cadre.
+    /// Le MÉTRAGE est arrondi de Roundness à ses quatre coins, cadre ou pas : ce drapeau, qui
+    /// carrait ses coins hauts sous une barre de titre, est resté à 0 partout. Les emplacements
+    /// qu'il occupait (`mb.w` au mode 0, `dst_prev.z` au mode 8) restent réservés — les trois
+    /// shaders les lisent encore, et ils y liront toujours 0.
     ///
-    /// Le navigateur a la même barre de titre, donc la même règle. Un portable, un téléphone ou
-    /// un moniteur n'en ont pas : leurs quatre coins suivent la lunette.
+    /// Pourquoi il est parti : sous une barre de titre, le CADRE était arrondi et le métrage
+    /// carré, donc les deux contours ne se suivaient pas et le haut de la fenêtre se lisait
+    /// comme un défaut de tracé. Un seul modèle vaut mieux qu'un cas particulier (cf.
+    /// `plan_frame`, section « Le rayon des coins »).
     pub fn screen_square_top(&self) -> f32 {
-        use crate::scene::SceneFrame as F;
-        match self.window_frame.as_ref().map(|f| f.kind) {
-            Some(F::WindowLight | F::WindowDark | F::Browser) => 1.0,
-            _ => 0.0,
-        }
+        0.0
     }
 
     /// Le plan incliné de l'écran, `None` quand il est droit. Même appel que les backends : un
@@ -1743,22 +1844,30 @@ impl FrameGeometry {
     /// | `src.z` | distance de fuite `P` (px) |
     /// | `src.w` | l'unité du modèle en px (largeur de la boîte écran × échelle de containment) |
     /// | `radius_px` | rayon extérieur du corps (unités) ; l'ouverture prend ce rayon moins `src_prev.x` |
-    /// | `color.r` | l'appareil : 1 navigateur, 2 portable, 3 téléphone, 4 moniteur (`device_kind_id`) |
+    /// | `color.r` | l'appareil : 1 portable, 2 téléphone, 3 moniteur (`device_kind_id`) |
+    /// | `color.g` | 1 = thème sombre (graphite), 0 = clair (argent) |
     /// | `color.a` | opacité du calque |
     /// | `fx.xyz` | rotation dessinée du plan (X, Y, Z), en RADIANS |
     /// | `fx.w` | épaisseur du corps (unités) : il occupe z de −`fx.w` à 0 |
     /// | `src_prev` | marges du corps autour de l'écran : gauche, haut, droite, bas (unités) |
     /// | `mb.xy` | demi-taille de l'écran (unités) : `[0,5, 0,5·h/w]` |
     /// | `mb.zw` | translation du plan dans le repère caméra (px, nulle sous un angle fixe) |
-    /// | `dst_prev` | libre |
+    /// | `dst_prev.x` | longueur reelle du socle du portable (`device_deck_len`), unites ; le reste libre |
     pub fn device_frame_cb(&self, render_px: [f32; 2]) -> Option<LayerCB> {
         let frame = self.window_frame.as_ref().filter(|f| f.kind.is_device())?;
         let [rw, rh] = render_px;
         let view = self.device_view(render_px)?;
         let (body_c, body_h) = view.body_rect(frame.margins);
-        let thick = device_thickness(frame.kind);
+        // L'ouverture décide de tout : c'est SON petit côté qui donne l'épaisseur du corps, donc
+        // un téléphone qui encadre un métrage paysage est un téléphone couché, pas un téléphone
+        // étiré. `view.half` porte la demi-taille réelle de l'écran, crop compris.
+        let aspect = view.half[1] / view.half[0];
+        let thick = device_thickness(frame.kind, aspect);
+        // Le socle se raccourcit quand la boite est trop plate pour l'accueillir : le shader lit
+        // la longueur reelle dans `dst_prev.x`, jamais la constante.
+        let deck_len = device_deck_len(aspect, frame.margins[3] * 2.0 * view.half[1], 2.0 * body_h[0]);
         let radius = frame.radius / (self.s_dst[2] * rw);
-        let [x0, y0, x1, y1] = view.footprint(frame.kind, body_c, body_h, thick)?;
+        let [x0, y0, x1, y1] = view.footprint(frame.kind, body_c, body_h, thick, deck_len)?;
         // Bords entiers : `local` vaut alors k + 0,5 au centre des pixels, comme le rastériseur.
         let (x0, y0, x1, y1) = (x0.floor(), y0.floor(), x1.ceil(), y1.ceil());
         let (bw, bh) = ((x1 - x0).max(1.0), (y1 - y0).max(1.0));
@@ -1770,10 +1879,11 @@ impl FrameGeometry {
             quad_px: [bw, bh],
             radius_px: radius,
             mode: 17.0,
-            color: [device_kind_id(frame.kind), 0.0, 0.0, 1.0],
+            color: [device_kind_id(frame.kind), frame.dark as u8 as f32, 0.0, 1.0],
             fx: [r[0], r[1], r[2], thick],
             src_prev: [bl, bt, br_, bb],
             mb: [view.half[0], view.half[1], view.offset[0], view.offset[1]],
+            dst_prev: [deck_len, 0.0, 0.0, 0.0],
             ..Default::default()
         })
     }
@@ -2212,7 +2322,16 @@ pub fn plan_frame(input: &FrameGeometryInput) -> FrameGeometry {
         // Cadre de fenêtre : l'écran rétrécit pour que lui ET son cadre tiennent dans la boîte
         // où il tenait seul — le padding garde donc son sens, et rien ne sort du canvas. Le reste
         // du calcul (cover, zoom, rayon) part de cette boîte rétrécie.
-        let frame_kind = scene.map(|s| s.effects.frame).unwrap_or_default();
+        // Le cadre et son thème. `resolved` ramène les anciennes valeurs `window-light` /
+        // `window-dark` au chrome de fenêtre, et `theme_override` leur rend le thème qu'elles
+        // nommaient : un projet qui les porte encore rend exactement ce qu'il rendait, sans que
+        // le document ait à être migré.
+        let scene_frame = scene.map(|s| s.effects.frame).unwrap_or_default();
+        let frame_kind = scene_frame.resolved();
+        let frame_dark = scene_frame
+            .theme_override()
+            .or_else(|| scene.map(|s| s.effects.frame_theme))
+            .is_some_and(|t| t == crate::scene::SceneFrameTheme::Dark);
         let screen_cover = scene.map(|s| s.layout.screen_cover).unwrap_or(false);
         // `frame_margins` = l'empreinte (ce qui doit tenir dans la boîte et porter l'ombre),
         // `frame_body` = le corps seul (la lunette, dont l'écran hérite son rayon). Les deux
@@ -2395,29 +2514,36 @@ pub fn plan_frame(input: &FrameGeometryInput) -> FrameGeometry {
             // Fixture/bench (pas de scène) : chemin inspector historique, inchangé.
             (true, None, None) => p.screen.radius * lp.radius_scale,
         };
-        // Un appareil a ses propres coins : Roundness peut les arrondir davantage, jamais les
-        // carrer. Un téléphone à coins vifs ne se lit plus comme un téléphone.
-        let outer_radius = if frame_kind.is_device() {
+        // ---- Le rayon des coins, en UN seul endroit ----
+        //
+        // Deux rayons, une règle :
+        //   * le MÉTRAGE est toujours arrondi de Roundness, quel que soit le cadre, à ses QUATRE
+        //     coins. (Il avait ses coins hauts carrés sous une barre de titre : c'est ce qui
+        //     faisait le contour faux en haut d'une fenêtre, l'arrondi du cadre ne trouvant rien
+        //     de concentrique en face.)
+        //   * le CORPS du cadre suit Roundness pour la fenêtre et le téléphone, qui sont des
+        //     objets à coins réglables — y compris à 0, où ils deviennent carrés. Le portable et
+        //     le moniteur gardent leur rayon industriel, que le slider ne touche pas : le châssis
+        //     d'un portable n'a pas de « roundness ».
+        // Quand le corps suit Roundness, il est CONCENTRIQUE au métrage : son rayon est celui du
+        // métrage plus la marge, si bien que les deux contours restent parallèles.
+        let s_radius = outer_radius;
+        let fixed = device_fixed_radius_frac(frame_kind);
+        let body_radius = if fixed > 0.0 {
             let [bl, bt, br, bb] = frame_body;
             let body_min_px =
                 ((s_dst[2] * rw) * (1.0 + bl + br)).min((s_dst[3] * rh) * (1.0 + bt + bb));
-            outer_radius.max(device_min_radius_frac(frame_kind) * body_min_px)
+            fixed * body_min_px
         } else {
-            outer_radius
+            s_radius + frame_body[0] * s_dst[2] * rw
         };
-        // Sous un cadre, l'écran est rentré du filet : ses coins bas restent concentriques à
-        // ceux du cadre en perdant l'épaisseur du filet ; ses coins hauts sont carrés (shader).
         let window_frame = frame_margins.map(|outer| WindowFrame {
             kind: frame_kind,
-            dark: frame_kind == crate::scene::SceneFrame::WindowDark,
+            dark: frame_dark,
             margins: frame_body,
             outer,
-            radius: outer_radius,
+            radius: body_radius,
         });
-        let s_radius = match frame_margins.map(|_| frame_body) {
-            None => outer_radius,
-            Some([ml, ..]) => (outer_radius - ml * s_dst[2] * rw).max(0.0),
-        };
         let w_px = [w_dst[2] * rw, w_dst[3] * rh];
         // Rayon caméra. Le slider Roundness ne s'y applique jamais (il ne vaut que pour l'ÉCRAN).
         // Quand l'app le résout (`computeCompositeLayout`, source unique), on le prend : c'est la
@@ -3561,7 +3687,7 @@ mod tests {
                 let g = framed_plan(&framed_scene(frame, "null", 1.0, cover));
                 let wf = g.window_frame.expect("un cadre");
                 assert_eq!(wf.dark, dark);
-                assert_eq!(g.screen_square_top(), 1.0);
+                assert_eq!(g.screen_square_top(), 0.0);
                 let ShadowCaster::Upright { dst: outer, size_px, radius } = g.shadow_caster(RENDER) else {
                     panic!("un cadre droit porte une ombre droite");
                 };
@@ -3577,9 +3703,8 @@ mod tests {
                     assert!((ar(g.s_dst) - ar(old.s_dst)).abs() < 1e-3, "l'écran a changé de ratio");
                 }
                 // Roundness arrondit le cadre ; l'écran perd l'épaisseur du filet.
-                assert!((radius - old.s_radius).abs() < old.s_radius * 0.05, "rayon {radius} vs {}", old.s_radius);
                 let line_px = wf.margins[0] * g.s_dst[2] * RENDER[0];
-                assert!((g.s_radius - (radius - line_px)).abs() < 1e-3);
+                assert!((radius - (g.s_radius + line_px)).abs() < 1e-3, "rayon {radius} vs {}", g.s_radius + line_px);
                 // Le calque du cadre : un rect exact, bbox comprise.
                 let cb = g.window_frame_cb(RENDER).expect("calque");
                 assert_eq!(cb.mode, 14.0);
@@ -3643,7 +3768,7 @@ mod tests {
 
             let cb = g.window_frame_cb(RENDER).expect("calque");
             assert!((cb.dst_prev[2] - mt * g.s_dst[3] * RENDER[1] * quad.scale).abs() < 1e-3);
-            assert_eq!(g.screen_square_top(), 1.0);
+            assert_eq!(g.screen_square_top(), 0.0);
         }
     }
 
@@ -3663,9 +3788,8 @@ mod tests {
 
     // ============ Appareils modelés (mode 17) ============
 
-    /// Les quatre appareils et leur valeur dans le JSON de scène.
-    const DEVICES: [(&str, crate::scene::SceneFrame); 4] = [
-        ("browser", crate::scene::SceneFrame::Browser),
+    /// Les trois appareils et leur valeur dans le JSON de scène.
+    const DEVICES: [(&str, crate::scene::SceneFrame); 3] = [
         ("laptop", crate::scene::SceneFrame::Laptop),
         ("phone", crate::scene::SceneFrame::Phone),
         ("monitor", crate::scene::SceneFrame::Monitor),
@@ -3673,6 +3797,25 @@ mod tests {
 
     fn device_plan(kind: &str, rotation: &str, zoom: f32) -> FrameGeometry {
         framed_plan(&framed_scene(&format!(r#","frame":"{kind}""#), rotation, zoom, false))
+    }
+
+    /// `framed_scene` avec un Roundness choisi : la même scène, un seul nombre changé.
+    fn framed_plan_round(frame: &str, roundness: f32) -> FrameGeometry {
+        let scene = Scene::from_json(&format!(
+            r##"{{
+            "clips":[{{"screenPath":"/s.mp4","webcamPath":"","sourceStartSec":0,"sourceEndSec":10,"webcamOffsetSec":0,"hasAudio":false}}],
+            "layout":{{"preset":"no-webcam","webcamSize":1,"webcamShape":"rounded","webcamMirror":false,"webcamPosition":null,
+                      "webcamReactiveZoom":false,"screenRect":{{"x":0.1,"y":0.1,"width":0.8,"height":0.8}},"screenCover":false}},
+            "effects":{{"padding":0.2,"blur":false,"shadow":0.5,"roundnessFrac":{roundness},"motionBlur":0{frame}}},
+            "background":{{"kind":"color","color":"#1e1e2e"}},
+            "zoomRegions":[{{"clipIndex":0,"startSec":0.0,"endSec":5.0,"scale":1.0,"focusX":0.5,"focusY":0.5,"rotation":null}}],
+            "cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":1,"clipToBounds":false,"theme":"default"}},
+            "cropByClip":[null],
+            "output":{{"width":1920,"height":1080,"fps":60}}
+        }}"##
+        ))
+        .expect("scène");
+        framed_plan(&scene)
     }
 
     /// Chaque valeur du réglage se relit en son appareil, et une valeur inconnue retombe sur
@@ -3833,7 +3976,10 @@ mod tests {
                     (cb.dst[0] + cb.dst[2]) * RENDER[0],
                     (cb.dst[1] + cb.dst[3]) * RENDER[1],
                 ];
-                for p in view.model_points(kind, c, h, device_thickness(kind)) {
+                let aspect = view.half[1] / view.half[0];
+                let thick = device_thickness(kind, aspect);
+                let deck_len = device_deck_len(aspect, frame.margins[3] * 2.0 * view.half[1], 2.0 * h[0]);
+                for p in view.model_points(kind, c, h, thick, deck_len) {
                     let q = view.project(p).expect("point projeté");
                     assert!(
                         q[0] >= bx[0] - 0.01 && q[0] <= bx[2] + 0.01 && q[1] >= bx[1] - 0.01 && q[1] <= bx[3] + 0.01,
@@ -3848,11 +3994,11 @@ mod tests {
         }
     }
 
-    /// L'appareil ENTIER tient là où l'écran seul tenait, l'écran garde le ratio de sa source, et
-    /// un téléphone arrondit toujours ses coins même à Roundness 0.
+    /// L'appareil ENTIER tient là où l'écran seul tenait et l'écran garde le ratio de sa source :
+    /// le cadre s'adapte au métrage, jamais l'inverse — rien ne le recadre ni ne le boîte-aux-lettres.
     #[test]
     fn the_device_shrinks_the_screen_into_the_old_box() {
-        for (name, kind) in DEVICES {
+        for (name, _) in DEVICES {
             let old = framed_plan(&framed_scene("", "null", 1.0, false));
             let g = device_plan(name, "null", 1.0);
             let frame = g.window_frame.expect("un cadre");
@@ -3867,13 +4013,232 @@ mod tests {
             assert!(g.s_dst[2] < old.s_dst[2] && g.s_dst[3] < old.s_dst[3], "{name}: l'écran n'a pas rétréci");
             let ar = |r: [f32; 4]| (r[2] * RENDER[0]) / (r[3] * RENDER[1]);
             assert!((ar(g.s_dst) - ar(old.s_dst)).abs() < 1e-3, "{name}: l'écran a changé de ratio");
-            // Les coins : jamais plus vifs que ce que l'appareil demande.
-            let body_min = (g.s_dst[2] * RENDER[0] * (1.0 + frame.margins[0] + frame.margins[2]))
-                .min(g.s_dst[3] * RENDER[1] * (1.0 + frame.margins[1] + frame.margins[3]));
-            assert!(frame.radius >= device_min_radius_frac(kind) * body_min - 1e-3, "{name}: coins trop vifs");
-            // Seul le navigateur porte une barre de titre, donc seul lui carre les coins hauts.
-            assert_eq!(g.screen_square_top(), (kind == crate::scene::SceneFrame::Browser) as u8 as f32, "{name}");
+            // Le métrage est coupé exactement comme sans cadre : le cadre n'en cache rien de plus.
+            assert_eq!(g.cut, old.cut, "{name}: le cadre a recadré la source");
+            assert_eq!(g.screen_square_top(), 0.0, "{name}");
         }
+    }
+
+    /// Le corps de l'appareil se déduit de l'OUVERTURE, pas d'un ratio supposé : un téléphone qui
+    /// encadre un métrage paysage est un téléphone COUCHÉ, à l'épaisseur mesurée sur son petit
+    /// côté, et non un téléphone étiré. Sans ça il grossissait d'un facteur 1,8 en tournant.
+    #[test]
+    fn the_device_body_follows_the_aperture_not_the_project() {
+        // Boîte paysage (16:9), boîte carrée, boîte portrait : la scène change de ratio de sortie.
+        for (label, w, h) in [("paysage", 1920.0, 1080.0), ("carré", 1080.0, 1080.0), ("portrait", 1080.0, 1920.0)] {
+            for (name, kind) in DEVICES {
+                let scene = framed_scene(&format!(r#","frame":"{name}""#), "null", 1.0, false);
+                let cfg = crate::config::all().pop().expect("au moins une config");
+                let mut input = golden_input(&scene, &cfg);
+                input.render_px = [w, h];
+                let g = plan_frame(&input);
+                let view = g.device_view([w, h]).expect("caméra");
+                let aspect = view.half[1] / view.half[0];
+                let thick = device_thickness(kind, aspect);
+                // L'épaisseur suit le PETIT côté : même rapport épaisseur/petit côté partout.
+                let ratio = thick / aspect.min(1.0);
+                let want = device_thickness(kind, 1.0);
+                assert!((ratio - want).abs() < 1e-6, "{label} {name}: {ratio} au lieu de {want}");
+                assert!(thick > 0.0 && thick < 0.2, "{label} {name}: épaisseur absurde {thick}");
+                // Et le cadre n'a toujours rien recadré.
+                let bare = {
+                    let mut i = golden_input(&framed_scene("", "null", 1.0, false), &cfg);
+                    i.render_px = [w, h];
+                    plan_frame(&i)
+                };
+                assert_eq!(g.cut, bare.cut, "{label} {name}: le cadre a recadré la source");
+            }
+        }
+    }
+
+    /// LE modèle du rayon des coins, en un test.
+    ///
+    /// * le métrage suit le slider, aux quatre coins, cadre ou pas ;
+    /// * la fenêtre et le téléphone suivent le slider aussi, CONCENTRIQUES au métrage, et
+    ///   deviennent carrés à 0 ;
+    /// * le portable et le moniteur gardent leur rayon industriel, que le slider ne touche pas.
+    #[test]
+    fn roundness_drives_the_footage_the_window_and_the_phone_only() {
+        for frame in ["", r#","frame":"window""#, r#","frame":"phone""#, r#","frame":"laptop""#, r#","frame":"monitor""#] {
+            let flat = framed_plan_round(frame, 0.0);
+            let round = framed_plan_round(frame, 0.05);
+            // Le métrage : toujours le slider, donc nul à 0 et non nul au-delà.
+            assert_eq!(flat.s_radius, 0.0, "{frame}: le métrage est arrondi à Roundness 0");
+            assert!(round.s_radius > 1.0, "{frame}: le métrage n'a pas suivi le slider");
+            let Some(a) = flat.window_frame else { continue };
+            let b = round.window_frame.expect("un cadre");
+            let follows = matches!(
+                a.kind,
+                crate::scene::SceneFrame::Window | crate::scene::SceneFrame::Phone
+            );
+            if follows {
+                // Concentrique : le rayon du corps est celui du métrage plus la marge.
+                let inset = a.margins[0] * flat.s_dst[2] * RENDER[0];
+                assert!((a.radius - inset).abs() < 1e-3, "{frame}: corps pas carré à 0 ({})", a.radius);
+                let inset_b = b.margins[0] * round.s_dst[2] * RENDER[0];
+                assert!(
+                    (b.radius - (round.s_radius + inset_b)).abs() < 1e-2,
+                    "{frame}: corps pas concentrique ({} vs {})",
+                    b.radius,
+                    round.s_radius + inset_b
+                );
+                assert!(b.radius > a.radius + 1.0, "{frame}: le corps n'a pas suivi le slider");
+            } else {
+                // Rayon industriel : le slider ne le touche pas.
+                assert!(a.radius > 1.0, "{frame}: pas de rayon industriel");
+                let scale = round.s_dst[2] / flat.s_dst[2];
+                assert!(
+                    (b.radius - a.radius * scale).abs() < 1e-2,
+                    "{frame}: le slider a touché le rayon industriel ({} vs {})",
+                    b.radius,
+                    a.radius * scale
+                );
+            }
+        }
+    }
+
+    /// Les trois pastilles de la barre de titre restent ENTIÈRES au rayon maximal : leur bloc est
+    /// repoussé du coin, elles gardent leur taille et leur pas, et le milieu de la barre.
+    ///
+    /// Le calcul est celui du shader (`x0 = max(dx, rad + dr + bar·0,18)`) : la borne est large,
+    /// donc il suffit de vérifier que la première pastille tient à l'intérieur du rect arrondi.
+    #[test]
+    fn the_title_bar_dots_survive_the_maximum_roundness() {
+        for roundness in [0.0f32, 0.25] {
+            let g = framed_plan_round(r#","frame":"window""#, roundness);
+            let cb = g.window_frame_cb(RENDER).expect("calque");
+            let (plane, bar, rad) = ([cb.dst_prev[0], cb.dst_prev[1]], cb.dst_prev[2], cb.radius_px);
+            let (dr, dx) = (bar * 0.214, bar * 0.714);
+            let x0 = dx.max(rad + dr + bar * 0.18);
+            for (i, cx) in [x0, x0 + dx, x0 + 2.0 * dx].into_iter().enumerate() {
+                let c = [cx, bar * 0.5];
+                // Distance du centre au contour du rect arrondi : elle doit dépasser le rayon
+                // de la pastille, sinon l'arc la mord.
+                let p = [c[0] - plane[0] * 0.5, c[1] - plane[1] * 0.5];
+                let d = sd_round_rect_test(p, [plane[0] * 0.5, plane[1] * 0.5], rad);
+                assert!(
+                    d < -dr,
+                    "roundness {roundness} : la pastille {i} est mordue (d = {d}, rayon {dr})"
+                );
+                assert!(c[0] + dr < plane[0], "roundness {roundness} : pastille {i} hors de la barre");
+            }
+            println!("roundness {roundness}: bar {bar:.1}, rayon {rad:.1}, pas {dx:.1}, Ø {:.1}", 2.0 * dr);
+        }
+    }
+
+    /// Masques de confidentialité et annotations restent sur le CONTENU ENCADRÉ, dans toutes les
+    /// combinaisons : cadre présent ou non, chacun des cadres, coins arrondis ou vifs, angles
+    /// fixes, caméra en orbite, avec et sans zoom.
+    ///
+    /// Ce qu'on vérifie, et pourquoi : l'ancre des annotations (`s_ann`) et le masque
+    /// (`privacy_mask`) se mesurent tous deux sur la boîte écran RÉTRÉCIE par le cadre. S'ils
+    /// retombaient sur la boîte d'avant, le masque découvrirait ce qu'il cache dès qu'un cadre
+    /// est allumé — et c'est exactement ce qu'on voit quand du contenu a l'air coupé au coin.
+    #[test]
+    fn masks_and_annotations_stay_on_the_framed_content() {
+        let plan = |frame: &str, roundness: f32, rotation: &str, zoom: f32| {
+            let scene = Scene::from_json(&format!(
+                r##"{{
+                "clips":[{{"screenPath":"/s.mp4","webcamPath":"","sourceStartSec":0,"sourceEndSec":10,"webcamOffsetSec":0,"hasAudio":false}}],
+                "layout":{{"preset":"no-webcam","webcamSize":1,"webcamShape":"rounded","webcamMirror":false,"webcamPosition":null,
+                          "webcamReactiveZoom":false,"screenRect":{{"x":0.1,"y":0.1,"width":0.8,"height":0.8}},"screenCover":false}},
+                "effects":{{"padding":0.2,"blur":false,"shadow":0.5,"roundnessFrac":{roundness},"motionBlur":0{frame}}},
+                "background":{{"kind":"color","color":"#1e1e2e"}},
+                "zoomRegions":[{{"clipIndex":0,"startSec":0.0,"endSec":5.0,"scale":{zoom},"focusX":0.5,"focusY":0.5,"rotation":{rotation}}}],
+                "cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":1,"clipToBounds":false,"theme":"default"}},
+                "cropByClip":[null],
+                "output":{{"width":1920,"height":1080,"fps":60}}
+            }}"##
+            ))
+            .expect("scène");
+            framed_plan(&scene)
+        };
+        // Un rect exprimé DANS la boîte écran : c'est cette position relative qui doit être la
+        // même avec et sans cadre — sinon le masque a suivi une boîte qui n'est plus dessinée.
+        let rel = |r: [f32; 4], b: [f32; 4]| {
+            [(r[0] - b[0]) / b[2], (r[1] - b[1]) / b[3], r[2] / b[2], r[3] / b[3]]
+        };
+        for roundness in [0.0f32, 0.05] {
+            for rotation in ["null", r#""iso""#, r#""right""#, r#""follow-cursor""#] {
+                for zoom in [1.0f32, 2.0] {
+                    let bare = plan("", roundness, rotation, zoom);
+                    for frame in
+                        [r#","frame":"window""#, r#","frame":"laptop""#, r#","frame":"phone""#, r#","frame":"monitor""#]
+                    {
+                        let g = plan(frame, roundness, rotation, zoom);
+                        let case = format!("{frame}|r{roundness}|{rotation}|z{zoom}");
+                        // L'ancre des annotations est la boîte écran ENCADRÉE, au repos.
+                        if zoom == 1.0 {
+                            assert_eq!(g.s_ann, g.s_dst, "{case}: l'ancre n'est pas la boîte encadrée");
+                        }
+                        for (x, y) in [(0.0, 0.0), (0.62, 0.18), (0.8, 0.9), (0.97, 0.97)] {
+                            let mut a = blur_annotation("");
+                            (a.x, a.y) = (x, y);
+                            // Droit et au repos, le masque couvre ce que l'overlay dessine, dans
+                            // la boîte encadrée. (Sous un zoom ou une inclinaison il suit le
+                            // CONTENU, qui a bougé : `a_privacy_mask_follows_the_zoomed_content`
+                            // et `..._the_tilted_content` en répondent.)
+                            if zoom == 1.0 && rotation == "null" {
+                                let drawn = annotation_dst_in(g.s_ann, a.x, a.y, a.w, a.h);
+                                let m = g.privacy_mask(&a, RENDER).expect("masque");
+                                assert!(
+                                    contains(m.dst, drawn, 1e-5),
+                                    "{case} @({x},{y}) : masque {:?} ne couvre pas {drawn:?}",
+                                    m.dst
+                                );
+                            }
+                            // Et il est au même endroit DU CONTENU que sans cadre : le cadre a
+                            // rétréci la boîte, le masque a rétréci avec elle.
+                            let b = g.privacy_mask(&a, RENDER).expect("masque");
+                            let n = bare.privacy_mask(&a, RENDER).expect("masque");
+                            if rotation == "null" {
+                                let (p, q) = (rel(b.dst, g.s_dst), rel(n.dst, bare.s_dst));
+                                // Tolérance en PIXELS de l'écran encadré : le masque s'élargit
+                                // d'un pixel fixe (la marge d'antialiasing), qui pèse plus lourd
+                                // en fraction sur une boîte rétrécie par un cadre.
+                                let tol =
+                                    [4.0 / (g.s_dst[2] * RENDER[0]), 4.0 / (g.s_dst[3] * RENDER[1])];
+                                for k in 0..4 {
+                                    assert!(
+                                        (p[k] - q[k]).abs() < tol[k % 2],
+                                        "{case} @({x},{y}) : masque à {p:?} du contenu au lieu de {q:?}"
+                                    );
+                                }
+                            } else {
+                                // Incliné : le masque est posé sur le PLAN, dont la projection
+                                // n'a plus le même rapport à la boîte droite. Ce qu'on exige
+                                // alors, c'est qu'il tienne dans le plan réellement dessiné —
+                                // s'il avait suivi la boîte d'avant le cadre, il en sortirait.
+                                let quad = g.screen_tilt_in(RENDER).expect("plan incliné");
+                                let c = g.screen_center_px(RENDER);
+                                let pts: Vec<(f32, f32)> =
+                                    quad.corners.iter().map(|&(x, y)| (c[0] + x, c[1] + y)).collect();
+                                let (x0, x1) = pts.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
+                                let (y0, y1) = pts.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+                                // Marge : l'annotation peut dépasser le bord du plan, mais jamais
+                                // de plus que sa propre taille.
+                                let (mw, mh) = (b.dst[2] * RENDER[0], b.dst[3] * RENDER[1]);
+                                let (cx, cy) = (
+                                    (b.dst[0] + b.dst[2] * 0.5) * RENDER[0],
+                                    (b.dst[1] + b.dst[3] * 0.5) * RENDER[1],
+                                );
+                                assert!(
+                                    cx > x0 - mw && cx < x1 + mw && cy > y0 - mh && cy < y1 + mh,
+                                    "{case} @({x},{y}) : masque centré en ({cx:.0},{cy:.0}), plan [{x0:.0},{y0:.0}]-[{x1:.0},{y1:.0}]"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// `sd_round_rect` du shader, côté CPU : <0 dedans.
+    fn sd_round_rect_test(p: [f32; 2], half: [f32; 2], r: f32) -> f32 {
+        let q = [p[0].abs() - half[0] + r, p[1].abs() - half[1] + r];
+        let m = [q[0].max(0.0), q[1].max(0.0)];
+        (m[0] * m[0] + m[1] * m[1]).sqrt() + q[0].max(q[1]).min(0.0) - r
     }
 
     /// La même scène, zoomée ET inclinée par un préset de rotation 3D.

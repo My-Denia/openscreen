@@ -54,7 +54,7 @@ import {
 	webcamSizeToFraction,
 } from "@/lib/compositeLayout";
 import { parseCssGradient, resolveLinearGradientAngle } from "@/lib/exporter/gradientParser";
-import type { RecordingFrame } from "@/lib/projectDefaults";
+import type { FrameTheme, RecordingFrame } from "@/lib/projectDefaults";
 import type { CompositorClipInput } from "./contracts";
 
 /** Background behind the screen. Parsed from `settings.wallpaper`. */
@@ -379,6 +379,11 @@ export interface SceneEffects {
 	 * serializes exactly as it did before the field existed.
 	 */
 	frame?: Exclude<RecordingFrame, "none">;
+	/**
+	 * Light or dark, for whichever frame is on — the window chrome and the three modelled
+	 * devices alike. Omitted at "light", the Rust default.
+	 */
+	frameTheme?: Exclude<FrameTheme, "light">;
 	/**
 	 * Defocus a 3D-tilted screen by its depth, sharp at the zoom focus. Inert on flat zooms:
 	 * the native side only reads it where it draws a tilted plane.
@@ -1072,7 +1077,12 @@ export function buildSceneDescription(
 			roundnessFrac:
 				settings.borderRadius / Math.max(1, Math.min(outputDims.width, outputDims.height)),
 			motionBlur: settings.motionBlurAmount,
+			// Omitted at their defaults, like `webcamEffect`: the Rust side defaults both fields,
+			// so a project with no frame serializes exactly as it did before they existed.
 			...(settings.frame !== "none" ? { frame: settings.frame } : {}),
+			...(settings.frame !== "none" && settings.frameTheme !== "light"
+				? { frameTheme: settings.frameTheme }
+				: {}),
 			depthOfField: settings.depthOfField,
 		},
 		cursor: {

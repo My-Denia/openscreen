@@ -308,12 +308,37 @@ describe("patchEditorSettings", () => {
 
 	it("round-trips the recording frame and reads an unknown one as no frame", () => {
 		expect(getEditorSettings(baseDoc).frame).toBe("none");
-		for (const frame of ["window-dark", "browser", "laptop", "phone", "monitor"] as const) {
+		for (const frame of ["window", "laptop", "phone", "monitor"] as const) {
 			const patched = patchEditorSettings(baseDoc, { frame });
 			expect(getEditorSettings(patched).frame).toBe(frame);
 		}
 		const unknown = { ...baseDoc, legacyEditor: { frame: "holo-visor" } } as typeof baseDoc;
 		expect(getEditorSettings(unknown).frame).toBe("none");
+	});
+
+	// The migration: the theme used to be baked into the frame, and a project written then must
+	// open with BOTH the frame and the theme it had — without the document being rewritten.
+	it("splits the old window-light / window-dark into a frame and a theme", () => {
+		expect(getEditorSettings(baseDoc).frameTheme).toBe("light");
+		for (const [stored, theme] of [
+			["window-light", "light"],
+			["window-dark", "dark"],
+		] as const) {
+			const doc = { ...baseDoc, legacyEditor: { frame: stored } } as typeof baseDoc;
+			expect(getEditorSettings(doc).frame).toBe("window");
+			expect(getEditorSettings(doc).frameTheme).toBe(theme);
+		}
+		// And the theme is its own setting from here on, for every frame.
+		for (const frameTheme of ["light", "dark"] as const) {
+			const patched = patchEditorSettings(baseDoc, { frame: "laptop", frameTheme });
+			expect(getEditorSettings(patched).frameTheme).toBe(frameTheme);
+		}
+		// An explicit theme wins over the one an old value implies.
+		const both = {
+			...baseDoc,
+			legacyEditor: { frame: "window-light", frameTheme: "dark" },
+		} as typeof baseDoc;
+		expect(getEditorSettings(both).frameTheme).toBe("dark");
 	});
 
 	it("clamps a stored webcam blur intensity into 0..1", () => {

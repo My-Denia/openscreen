@@ -3,24 +3,18 @@
  * nothing and renders exactly as before the setting existed.
  *
  * Two families, and the difference is not cosmetic: the window chrome is drawn FLAT in the
- * screen's own plane (shader mode 14), while the four devices are modelled in real 3D around it
- * (mode 17) — a body with thickness, a bevel and a bezel, ray-marched in the same camera as the
- * footage. Which is why the camera can move around them.
+ * screen's own plane (shader mode 14), while the three devices are modelled in real 3D around it
+ * (mode 17) — a body with thickness, a micro-chamfer and a bezel, ray-marched in the same camera
+ * as the footage. Which is why the camera can move around them.
+ *
+ * `monitor` is labelled "Screen" in the pane: the wire value names the object, the label names
+ * what a user calls it.
  */
-export type RecordingFrame =
-	| "none"
-	| "window-light"
-	| "window-dark"
-	| "browser"
-	| "laptop"
-	| "phone"
-	| "monitor";
+export type RecordingFrame = "none" | "window" | "laptop" | "phone" | "monitor";
 
 export const RECORDING_FRAMES = [
 	"none",
-	"window-light",
-	"window-dark",
-	"browser",
+	"window",
 	"laptop",
 	"phone",
 	"monitor",
@@ -28,10 +22,9 @@ export const RECORDING_FRAMES = [
 
 /**
  * The devices modelled in 3D, in menu order. They are the values that shader mode 17 draws;
- * everything else is flat.
+ * `window` is flat.
  */
 export const DEVICE_FRAMES = [
-	"browser",
 	"laptop",
 	"phone",
 	"monitor",
@@ -42,23 +35,41 @@ export function isRecordingFrame(value: unknown): value is RecordingFrame {
 }
 
 /**
- * The phone is the only PORTRAIT device: wrapped around a landscape recording it would read as a
- * phone held sideways with its screen stretched across, which is not a thing. The picker offers
- * it only when the output is at least as tall as it is wide, and says so when it does not.
- *
- * `null` = the frame is offered. A string = the reason it is not, as an i18n key.
+ * Light or dark, for EVERY frame: the window chrome and the three modelled devices alike. Light
+ * is a silver body with light chrome, dark a graphite body with dark chrome.
  */
-export function recordingFrameBlockedReason(
-	frame: RecordingFrame,
-	outputAspect: number,
-): string | null {
-	return frame === "phone" && outputAspect > 1 ? "effects.frameNeedsPortrait" : null;
+export type FrameTheme = "light" | "dark";
+
+export const FRAME_THEMES = ["light", "dark"] as const satisfies readonly FrameTheme[];
+
+export function isFrameTheme(value: unknown): value is FrameTheme {
+	return value === "light" || value === "dark";
+}
+
+/**
+ * Reads a stored `frame` value, including the two the theme used to be baked into.
+ *
+ * `window-light` / `window-dark` were one setting doing two jobs. They are split here rather
+ * than by a document migration pass, so a project written by an older build opens with the same
+ * frame AND the same theme without being rewritten — and a project that a newer build wrote
+ * still opens, frameless, instead of failing.
+ *
+ * Returns `null` for a value this build does not know, which the caller reads as "no frame".
+ */
+export function readRecordingFrame(
+	value: unknown,
+): { frame: RecordingFrame; theme?: FrameTheme } | null {
+	if (value === "window-light") return { frame: "window", theme: "light" };
+	if (value === "window-dark") return { frame: "window", theme: "dark" };
+	return isRecordingFrame(value) ? { frame: value } : null;
 }
 
 export interface ProjectAppearanceDefaults {
 	wallpaper: string;
 	wallpaperMotion: "none" | "drift" | "aurora" | "waves";
 	frame: RecordingFrame;
+	/** Light or dark, for whichever frame is on. Inert with `frame: "none"`. */
+	frameTheme: FrameTheme;
 	aspectRatio: `${number}:${number}` | "native";
 	shadowIntensity: number;
 	showBlur: boolean;
@@ -96,6 +107,7 @@ export const DEFAULT_PROJECT_APPEARANCE: ProjectAppearanceDefaults = {
 	wallpaper: "/wallpapers/wallpaper1.jpg",
 	wallpaperMotion: "none",
 	frame: "none",
+	frameTheme: "light",
 	aspectRatio: "16:9",
 	shadowIntensity: 0.2,
 	showBlur: false,

@@ -47,10 +47,7 @@ import { WALLPAPER_MOTIONS, type WallpaperMotion } from "@/components/video-edit
 import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import { resolveCaptionLane } from "@/lib/ai-edition/captions/settings";
 import { collapseTracksToPills, trackGroupId } from "@/lib/ai-edition/document/audioTracks";
-import {
-	collectNativeFormats,
-	resolveAspectRatioValue,
-} from "@/lib/ai-edition/document/outputFormat";
+import { collectNativeFormats } from "@/lib/ai-edition/document/outputFormat";
 import type { InsertSide } from "@/lib/ai-edition/document/transcript";
 import type {
 	AxcutAsset,
@@ -98,9 +95,10 @@ import {
 } from "@/lib/cursor/cursorThemes";
 import { buildGradientFromEditor } from "@/lib/gradientBuilder";
 import {
+	FRAME_THEMES,
+	type FrameTheme,
 	RECORDING_FRAMES,
 	type RecordingFrame,
-	recordingFrameBlockedReason,
 } from "@/lib/projectDefaults";
 import {
 	classifyWallpaper,
@@ -2385,12 +2383,16 @@ function pluralKey(locale: string, count: number): string {
 
 const RECORDING_FRAME_LABEL_KEYS: Record<RecordingFrame, string> = {
 	none: "effects.windowNone",
-	"window-light": "effects.windowLight",
-	"window-dark": "effects.windowDark",
-	browser: "effects.frameBrowser",
+	window: "effects.frameWindow",
 	laptop: "effects.frameLaptop",
 	phone: "effects.framePhone",
-	monitor: "effects.frameMonitor",
+	// "Screen" is what a user calls a desktop monitor; `monitor` is what the object is.
+	monitor: "effects.frameScreen",
+};
+
+const FRAME_THEME_LABEL_KEYS: Record<FrameTheme, string> = {
+	light: "effects.frameThemeLight",
+	dark: "effects.frameThemeDark",
 };
 
 /**
@@ -2415,16 +2417,11 @@ export function VideoEffectsPane() {
 	// can never disagree about what shape the footage is. Already sorted by clip count then by
 	// pixel area, so [0] is "the shape most of this timeline is in" with no heuristic of ours.
 	const nativeFormats = useMemo(() => (document ? collectNativeFormats(document) : []), [document]);
-	// The shape the export will actually have, `"native"` resolved — what decides whether a
-	// portrait device frame can wrap this recording at all.
-	const outputAspect = useMemo(
-		() => resolveAspectRatioValue(document, settings.aspectRatio),
-		[document, settings.aspectRatio],
-	);
 	const hasTiltedZoom = (document?.zoomRanges ?? []).some((z) => z.rotationPreset != null);
 	const [fitMenuOpen, setFitMenuOpen] = useState(false);
 	const [ratioMenuOpen, setRatioMenuOpen] = useState(false);
 	const [frameMenuOpen, setFrameMenuOpen] = useState(false);
+	const [themeMenuOpen, setThemeMenuOpen] = useState(false);
 	const { locale } = useI18n();
 	const clipCountLabel = (count: number) => ts(pluralKey(locale, count), { count });
 
@@ -2609,13 +2606,13 @@ export function VideoEffectsPane() {
 					</PopoverContent>
 				</Popover>
 			</div>
-			{/* The window chrome drawn around the recording. A menu like Format above it, and
-			    for the same reason: it picks one project-wide look among a few. With a frame
-			    on, Roundness rounds the frame and Shadow falls under it — both still move what
-			    they name. */}
+			{/* The frame drawn around the recording, and its theme. Two menus like Format above
+			    them, and for the same reason: each picks one project-wide look among a few. With a
+			    frame on, Roundness rounds the footage AND the window/phone body, and Shadow falls
+			    under the frame — both still move what they name. */}
 			<div className={styles.paneRow}>
 				<span className={styles.label} title={ts("effects.windowHelp")}>
-					{ts("effects.window")}
+					{ts("effects.frameStyle")}
 				</span>
 				<Popover open={frameMenuOpen} onOpenChange={setFrameMenuOpen}>
 					<PopoverTrigger asChild>
@@ -2623,7 +2620,7 @@ export function VideoEffectsPane() {
 							type="button"
 							className={styles.rowAction}
 							disabled={!hasDocument}
-							aria-label={ts("effects.window")}
+							aria-label={ts("effects.frameStyle")}
 							title={ts("effects.windowHelp")}
 						>
 							{ts(RECORDING_FRAME_LABEL_KEYS[settings.frame])}
@@ -2637,38 +2634,80 @@ export function VideoEffectsPane() {
 						animated={false}
 						className="w-auto border-0 bg-transparent p-0 shadow-none"
 					>
-						<div className={styles.actionMenu} role="menu" aria-label={ts("effects.window")}>
-							{RECORDING_FRAMES.map((frame) => {
-								// A device this project's shape cannot carry STAYS in the list, greyed,
-								// with the reason on the row. A control that silently disappears leaves
-								// the user hunting for a frame that was there yesterday.
-								const blocked = recordingFrameBlockedReason(frame, outputAspect);
-								return (
-									<button
-										type="button"
-										role="menuitem"
-										key={frame}
-										disabled={blocked != null}
-										title={blocked ? ts(blocked) : undefined}
-										className={`${styles.actionMenuRow}${
-											frame === settings.frame ? ` ${styles.isActive}` : ""
-										}`}
-										onClick={() => {
-											setFrameMenuOpen(false);
-											void set({ frame });
-										}}
-									>
-										<span className={styles.actionMenuMain}>
-											{ts(RECORDING_FRAME_LABEL_KEYS[frame])}
-										</span>
-										{blocked ? <span className={styles.actionMenuCount}>{ts(blocked)}</span> : null}
-									</button>
-								);
-							})}
+						<div className={styles.actionMenu} role="menu" aria-label={ts("effects.frameStyle")}>
+							{RECORDING_FRAMES.map((frame) => (
+								<button
+									type="button"
+									role="menuitem"
+									key={frame}
+									className={`${styles.actionMenuRow}${
+										frame === settings.frame ? ` ${styles.isActive}` : ""
+									}`}
+									onClick={() => {
+										setFrameMenuOpen(false);
+										void set({ frame });
+									}}
+								>
+									<span className={styles.actionMenuMain}>
+										{ts(RECORDING_FRAME_LABEL_KEYS[frame])}
+									</span>
+								</button>
+							))}
 						</div>
 					</PopoverContent>
 				</Popover>
 			</div>
+			{/* The theme rides WITH the frame: it only exists once there is a body to colour, so it
+			    appears next to the frame it recolours rather than sitting there inert. */}
+			{settings.frame !== "none" ? (
+				<div className={styles.paneRow}>
+					<span className={styles.label} title={ts("effects.frameThemeHelp")}>
+						{ts("effects.frameTheme")}
+					</span>
+					<Popover open={themeMenuOpen} onOpenChange={setThemeMenuOpen}>
+						<PopoverTrigger asChild>
+							<button
+								type="button"
+								className={styles.rowAction}
+								disabled={!hasDocument}
+								aria-label={ts("effects.frameTheme")}
+								title={ts("effects.frameThemeHelp")}
+							>
+								{ts(FRAME_THEME_LABEL_KEYS[settings.frameTheme])}
+								<ChevronDown size={11} />
+							</button>
+						</PopoverTrigger>
+						<PopoverContent
+							align="end"
+							sideOffset={6}
+							collisionPadding={12}
+							animated={false}
+							className="w-auto border-0 bg-transparent p-0 shadow-none"
+						>
+							<div className={styles.actionMenu} role="menu" aria-label={ts("effects.frameTheme")}>
+								{FRAME_THEMES.map((frameTheme) => (
+									<button
+										type="button"
+										role="menuitem"
+										key={frameTheme}
+										className={`${styles.actionMenuRow}${
+											frameTheme === settings.frameTheme ? ` ${styles.isActive}` : ""
+										}`}
+										onClick={() => {
+											setThemeMenuOpen(false);
+											void set({ frameTheme });
+										}}
+									>
+										<span className={styles.actionMenuMain}>
+											{ts(FRAME_THEME_LABEL_KEYS[frameTheme])}
+										</span>
+									</button>
+								))}
+							</div>
+						</PopoverContent>
+					</Popover>
+				</div>
+			) : null}
 			<div className={styles.sliderGrid}>
 				<SliderCell
 					label={ts("effects.shadow")}

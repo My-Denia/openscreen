@@ -24,8 +24,10 @@ import {
 } from "@/components/video-editor/types";
 import {
 	DEFAULT_PROJECT_APPEARANCE,
-	isRecordingFrame,
+	type FrameTheme,
+	isFrameTheme,
 	type RecordingFrame,
+	readRecordingFrame,
 } from "@/lib/projectDefaults";
 import type { AspectRatio } from "@/utils/aspectRatioUtils";
 import { clamp01 } from "@/utils/math";
@@ -80,8 +82,10 @@ export interface EditorSettingsSnapshot {
 	wallpaper: string;
 	/** Only a gradient wallpaper moves; kept as chosen when the wallpaper changes kind. */
 	wallpaperMotion: WallpaperMotion;
-	/** The frame drawn around the recording (window chrome), or "none". */
+	/** The frame drawn around the recording (window chrome or a modelled device), or "none". */
 	frame: RecordingFrame;
+	/** Light or dark, for whichever frame is on. Inert with `frame: "none"`. */
+	frameTheme: FrameTheme;
 	aspectRatio: AspectRatio;
 	shadowIntensity: number;
 	showBlur: boolean;
@@ -127,7 +131,9 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettingsSnapshot = {
 interface LegacyShape {
 	wallpaper?: string;
 	wallpaperMotion?: WallpaperMotion;
-	frame?: RecordingFrame;
+	/** `unknown`: it may still hold `window-light` / `window-dark` (`readRecordingFrame`). */
+	frame?: unknown;
+	frameTheme?: FrameTheme;
 	aspectRatio?: AspectRatio;
 	shadowIntensity?: number;
 	showBlur?: boolean;
@@ -178,6 +184,8 @@ export function getEditorSettings(doc: AxcutDocument | null | undefined): Editor
 	const num = (v: unknown, fallback: number) => (isNumber(v) ? v : fallback);
 	const bool = (v: unknown, fallback: boolean) => (isBoolean(v) ? v : fallback);
 	const str = (v: unknown, fallback: string) => (isString(v) ? v : fallback);
+	// `window-light` / `window-dark` were the frame AND its theme; they split here.
+	const stored = readRecordingFrame(legacy?.frame);
 
 	const cursor: CursorVisualSettings = {
 		size: num(legacy?.cursorSize, DEFAULT_EDITOR_SETTINGS.cursor.size),
@@ -208,7 +216,12 @@ export function getEditorSettings(doc: AxcutDocument | null | undefined): Editor
 			? legacy.wallpaperMotion
 			: DEFAULT_EDITOR_SETTINGS.wallpaperMotion,
 		// An unknown value (a frame a newer build added) reads as no frame, like the compositor.
-		frame: isRecordingFrame(legacy?.frame) ? legacy.frame : DEFAULT_EDITOR_SETTINGS.frame,
+		// `window-light` / `window-dark` split into a frame PLUS a theme, so a project written
+		// before the theme existed opens with the look it had (`readRecordingFrame`).
+		frame: stored?.frame ?? DEFAULT_EDITOR_SETTINGS.frame,
+		frameTheme: isFrameTheme(legacy?.frameTheme)
+			? legacy.frameTheme
+			: (stored?.theme ?? DEFAULT_EDITOR_SETTINGS.frameTheme),
 		aspectRatio: legacy?.aspectRatio ?? DEFAULT_EDITOR_SETTINGS.aspectRatio,
 		shadowIntensity: num(legacy?.shadowIntensity, DEFAULT_EDITOR_SETTINGS.shadowIntensity),
 		showBlur: bool(legacy?.showBlur, DEFAULT_EDITOR_SETTINGS.showBlur),
@@ -255,6 +268,7 @@ export interface EditorSettingsPatch {
 	wallpaper?: string;
 	wallpaperMotion?: WallpaperMotion;
 	frame?: RecordingFrame;
+	frameTheme?: FrameTheme;
 	aspectRatio?: AspectRatio;
 	shadowIntensity?: number;
 	showBlur?: boolean;

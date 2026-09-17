@@ -20,7 +20,12 @@ import type {
 } from "../../components/video-editor/types";
 import { type AspectRatio, isAspectRatio } from "../../utils/aspectRatioUtils";
 import { CURSOR_THEME_IDS, DEFAULT_CURSOR_THEME_ID } from "../cursor/cursorThemes";
-import { isRecordingFrame, type RecordingFrame } from "../projectDefaults";
+import {
+	type FrameTheme,
+	isFrameTheme,
+	type RecordingFrame,
+	readRecordingFrame,
+} from "../projectDefaults";
 
 export const STYLE_PRESET_FILE_EXTENSION = ".openscreenpreset";
 export const STYLE_PRESET_FORMAT = "openscreen-style-preset";
@@ -38,6 +43,7 @@ export interface StylePresetAppearance {
 	wallpaper: string;
 	wallpaperMotion: WallpaperMotion;
 	frame: RecordingFrame;
+	frameTheme: FrameTheme;
 	aspectRatio: AspectRatio;
 	shadowIntensity: number;
 	showBlur: boolean;
@@ -158,17 +164,24 @@ function readEnum<T extends string>(source: Fields, key: string, allowed: readon
 }
 
 /**
- * The one field a version-1 preset may omit: every preset written before the frame existed
- * lacks it, and "no frame" is exactly what those presets looked like. A value that IS there
- * must be one this build knows.
+ * The frame and its theme. A version-1 preset may omit both: every preset written before the
+ * frame existed lacks them, and "no frame, light" is exactly what those presets looked like.
+ *
+ * `window-light` / `window-dark` are still read: they were the frame AND its theme, and
+ * `readRecordingFrame` splits them, so a preset saved before the theme existed still applies
+ * the look it captured. A value neither this build nor that pair knows is refused.
  */
-function readFrame(source: Fields): RecordingFrame {
-	const value = source.frame;
-	if (value === undefined) return "none";
-	if (!isRecordingFrame(value)) {
-		throw new TypeError("Style preset frame must be one of: none, window-light, window-dark.");
+function readFrame(source: Fields): { frame: RecordingFrame; frameTheme: FrameTheme } {
+	const stored =
+		source.frame === undefined ? { frame: "none" as const } : readRecordingFrame(source.frame);
+	if (stored === null) {
+		throw new TypeError("Style preset frame must be one of: none, window, laptop, phone, monitor.");
 	}
-	return value;
+	const theme = source.frameTheme;
+	if (theme !== undefined && !isFrameTheme(theme)) {
+		throw new TypeError('Style preset frameTheme must be "light" or "dark".');
+	}
+	return { frame: stored.frame, frameTheme: theme ?? stored.theme ?? "light" };
 }
 
 const HEX_COLOR_RE = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
@@ -255,7 +268,7 @@ export function parseStylePresetAppearance(value: unknown): StylePresetAppearanc
 			value.wallpaperMotion === undefined
 				? "none"
 				: readEnum(value, "wallpaperMotion", WALLPAPER_MOTIONS),
-		frame: readFrame(value),
+		...readFrame(value),
 		aspectRatio: value.aspectRatio,
 		shadowIntensity: readNumber(value, "shadowIntensity", NUMBER_RANGES.shadowIntensity),
 		showBlur: readBoolean(value, "showBlur"),

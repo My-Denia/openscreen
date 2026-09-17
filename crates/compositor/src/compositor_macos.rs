@@ -3621,8 +3621,18 @@ mod tests {
             let tone = centre(&none);
             let bare = footage(&none, tone);
             let mut shots = Vec::new();
-            for device in ["browser", "laptop", "phone", "monitor"] {
+            for device in ["window", "laptop", "phone", "monitor"] {
                 let rgba = compose_device(&comp, &screen, &format!(r#","frame":"{device}""#), rotation);
+                let dark = compose_device(
+                    &comp,
+                    &screen,
+                    &format!(r#","frame":"{device}","frameTheme":"dark""#),
+                    rotation,
+                );
+                assert!(
+                    differing(&rgba, &dark) > 2_000,
+                    "{name} {device} : les deux thèmes se confondent"
+                );
                 let seen = differing(&none, &rgba);
                 let kept = footage(&rgba, tone);
                 println!("{name:<5} {device:<8} {seen:>7} px de cadre, {kept:>7} px de métrage");

@@ -599,28 +599,49 @@ fn cursor_impact(local: vec2<f32>) -> vec4<f32> {
 
 // ---- Cadre d'APPAREIL modelise (mode 17) ----
 // Port ligne pour ligne de `device_frame` (HLSL), dont les commentaires font foi : un portable,
-// un telephone, une fenetre de navigateur ou un moniteur modeles en vraie 3D autour du metrage,
-// lances de rayons dans la MEME camera que le plan, la face ecran exactement sur le plan du
-// metrage (mode 8), qui continue de le dessiner dans l'ouverture. Formes neutres dessinees ici :
-// aucune marque. Constantes : miroir de `frame_geometry.rs` (DEV_*) ; emplacements du cbuffer :
+// un telephone ou un moniteur modeles en vraie 3D autour du metrage, lances de rayons dans la
+// MEME camera que le plan, la face ecran exactement sur le plan du metrage (mode 8), qui continue
+// de le dessiner dans l'ouverture. Aluminium mat et verre noir, micro-chanfrein et filet de
+// lumiere peint : un produit, pas un jouet gonfle. Formes neutres dessinees ici, aucune marque.
+// Constantes : miroir de `frame_geometry.rs` (DEV_*) ; emplacements du cbuffer :
 // `frame_geometry::device_frame_cb`, resume au-dessus de `device_frame` dans le HLSL.
-const DEV_BEVEL: f32 = 0.010;
+const DEV_CHAMFER: f32 = 0.0012;
 const DEV_BEZEL_OVERLAP: f32 = 0.004;
-const DEV_DECK_ANGLE: f32 = 0.9075712;
-const DEV_DECK_LEN: f32 = 0.26;
-const DEV_DECK_THICK: f32 = 0.022;
-const DEV_DECK_OVERHANG: f32 = 0.055;
-const DEV_NECK_W: f32 = 0.075;
-const DEV_NECK_LEN: f32 = 0.085;
-const DEV_FOOT_W: f32 = 0.21;
-const DEV_FOOT_H: f32 = 0.035;
-const DEV_STAND_Z: f32 = 0.060;
-const DEV_SHELL = vec3<f32>(0.784, 0.804, 0.831);
-const DEV_SHELL_DARK = vec3<f32>(0.635, 0.659, 0.694);
-const DEV_BEZEL_RGB = vec3<f32>(0.047, 0.051, 0.063);
-const DEV_TABBAR = vec3<f32>(0.886, 0.906, 0.933);
-const DEV_TOOLBAR = vec3<f32>(0.933, 0.945, 0.961);
-const DEV_INK = vec3<f32>(0.580, 0.639, 0.722);
+const DEV_DECK_ANGLE: f32 = 1.221730;
+// Socle et pied : en fractions de la LARGEUR DE COQUE, jamais de l'ecran.
+const DEV_DECK_LEN: f32 = 0.71;
+const DEV_DECK_THICK: f32 = 0.029;
+const DEV_DECK_THICK_FRONT: f32 = 0.013;
+const DEV_DECK_GAP: f32 = 0.005;
+const DEV_NECK_W: f32 = 0.039;
+const DEV_NECK_LEN: f32 = 0.097;
+const DEV_FOOT_W: f32 = 0.214;
+const DEV_FOOT_H: f32 = 0.014;
+const DEV_STAND_Z: f32 = 0.021;
+const DEV_FOOT_Z: f32 = 0.107;
+const DEV_SHELL_LIGHT = vec3<f32>(0.800, 0.806, 0.812);
+const DEV_SHELL_LIGHT_BACK = vec3<f32>(0.600, 0.610, 0.622);
+const DEV_GLASS_LIGHT = vec3<f32>(0.031, 0.034, 0.040);
+const DEV_SHELL_GRAPHITE = vec3<f32>(0.255, 0.263, 0.278);
+const DEV_SHELL_GRAPHITE_BACK = vec3<f32>(0.153, 0.161, 0.176);
+const DEV_GLASS_GRAPHITE = vec3<f32>(0.043, 0.047, 0.055);
+const DEV_SHEEN: f32 = 0.11;
+
+fn dev_dark() -> bool {
+    return layer.color.g > 0.5;
+}
+
+fn dev_shell() -> vec3<f32> {
+    return select(DEV_SHELL_LIGHT, DEV_SHELL_GRAPHITE, dev_dark());
+}
+
+fn dev_shell_back() -> vec3<f32> {
+    return select(DEV_SHELL_LIGHT_BACK, DEV_SHELL_GRAPHITE_BACK, dev_dark());
+}
+
+fn dev_glass() -> vec3<f32> {
+    return select(DEV_GLASS_LIGHT, DEV_GLASS_GRAPHITE, dev_dark());
+}
 
 fn dev_body_c() -> vec2<f32> {
     return vec2<f32>((layer.src_prev.z - layer.src_prev.x) * 0.5, (layer.src_prev.w - layer.src_prev.y) * 0.5);
@@ -631,12 +652,21 @@ fn dev_body_h() -> vec2<f32> {
                                    (layer.src_prev.y + layer.src_prev.w) * 0.5);
 }
 
-// Chanfrein borne par la demi-epaisseur ET par la plus fine des marges (cf. HLSL).
-fn dev_bevel() -> f32 {
-    let thin = min(min(layer.src_prev.x, layer.src_prev.y), min(layer.src_prev.z, layer.src_prev.w));
-    return min(DEV_BEVEL, min(layer.fx.w * 0.4, thin * 0.5));
+fn dev_chamfer() -> f32 {
+    return min(DEV_CHAMFER, layer.fx.w * 0.3);
 }
 
+// La largeur de COQUE : l'unite de tout ce qui depasse du corps.
+fn dev_shell_w() -> f32 {
+    return 2.0 * dev_body_h().x;
+}
+
+// La longueur REELLE du socle : `device_deck_len` la raccourcit sur un metrage trop plat.
+fn dev_deck_len() -> f32 {
+    return layer.dst_prev.x;
+}
+
+// L'appareil : 1 = portable, 2 = telephone, 3 = moniteur (`device_kind_id`).
 fn dev_is(k: f32) -> bool {
     return abs(layer.color.r - k) < 0.5;
 }
@@ -646,46 +676,64 @@ fn sd_dev_box(p: vec3<f32>, h: vec3<f32>, r: f32) -> f32 {
     return length(max(q, vec3<f32>(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0) - r;
 }
 
+fn sd_dev_outline(p: vec2<f32>) -> f32 {
+    return sd_round_rect(p - dev_body_c(), dev_body_h(), layer.radius_px);
+}
+
 fn sd_dev_body(p: vec3<f32>) -> f32 {
     let t = layer.fx.w;
-    let bev = dev_bevel();
-    let w = vec2<f32>(sd_round_rect(p.xy - dev_body_c(), dev_body_h(), layer.radius_px) + bev,
-                      abs(p.z + t * 0.5) - (t * 0.5 - bev));
-    let body = min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0))) - bev;
+    let ch = dev_chamfer();
+    let w = vec2<f32>(sd_dev_outline(p.xy) + ch, abs(p.z + t * 0.5) - (t * 0.5 - ch));
+    let body = min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0))) - ch;
+    // L'ouverture a le rayon du METRAGE : le corps moins sa marge, aux quatre coins.
     let ah = layer.mb.xy - vec2<f32>(DEV_BEZEL_OVERLAP);
-    var ar = max(layer.radius_px - layer.src_prev.x, 0.0);
-    ar = select(min(ar, min(ah.x, ah.y)), 0.0, dev_is(1.0) && p.y < 0.0);
+    let ar = min(max(layer.radius_px - layer.src_prev.x, 0.0), min(ah.x, ah.y));
     let hole = max(sd_round_rect(p.xy, ah, ar), -p.z - t * 0.55);
     return max(body, -hole);
 }
 
-fn sd_dev_deck(p: vec3<f32>) -> f32 {
+fn dev_deck_local(p: vec3<f32>) -> vec3<f32> {
     let c = dev_body_c();
     let h = dev_body_h();
     let d = p - vec3<f32>(0.0, c.y + h.y, -layer.fx.w * 0.5);
     let ca = cos(DEV_DECK_ANGLE);
     let sa = sin(DEV_DECK_ANGLE);
-    let q = vec3<f32>(d.x, d.y * ca + d.z * sa, -d.y * sa + d.z * ca);
-    return sd_dev_box(q - vec3<f32>(0.0, DEV_DECK_LEN * 0.5, -DEV_DECK_THICK * 0.5),
-                      vec3<f32>(h.x + DEV_DECK_OVERHANG, DEV_DECK_LEN * 0.5, DEV_DECK_THICK * 0.5),
-                      DEV_DECK_THICK * 0.45);
+    return vec3<f32>(d.x, d.y * ca + d.z * sa, -d.y * sa + d.z * ca);
+}
+
+fn sd_dev_deck(p: vec3<f32>) -> f32 {
+    let q = dev_deck_local(p);
+    let w = dev_shell_w();
+    let y0 = DEV_DECK_GAP * w;
+    let y1 = y0 + dev_deck_len();
+    let tb = DEV_DECK_THICK * w;
+    let slab = sd_dev_box(q - vec3<f32>(0.0, (y0 + y1) * 0.5, -tb * 0.5),
+                          vec3<f32>(dev_body_h().x, (y1 - y0) * 0.5, tb * 0.5),
+                          DEV_CHAMFER * 2.0);
+    // Le dessous remonte vers l'avant : le profil en coin.
+    let k = (DEV_DECK_THICK - DEV_DECK_THICK_FRONT) * w / max(dev_deck_len(), 1e-5);
+    let under = (-tb + k * (q.y - y0) - q.z) * inverseSqrt(1.0 + k * k);
+    return max(slab, under);
 }
 
 fn sd_dev_stand(p: vec3<f32>) -> f32 {
     let y0 = dev_body_c().y + dev_body_h().y;
-    let z0 = -layer.fx.w * 0.3 - DEV_STAND_Z * 0.5;
-    let neck = sd_dev_box(p - vec3<f32>(0.0, y0 + DEV_NECK_LEN * 0.5 - 0.01, z0),
-                          vec3<f32>(DEV_NECK_W, DEV_NECK_LEN * 0.5 + 0.01, DEV_STAND_Z * 0.5), 0.010);
-    let foot = sd_dev_box(p - vec3<f32>(0.0, y0 + DEV_NECK_LEN + DEV_FOOT_H * 0.5, z0),
-                          vec3<f32>(DEV_FOOT_W, DEV_FOOT_H * 0.5, DEV_STAND_Z * 0.5), 0.012);
+    let zc = -layer.fx.w * 0.5;
+    let w = dev_shell_w();
+    let neck = sd_dev_box(p - vec3<f32>(0.0, y0 + DEV_NECK_LEN * w * 0.5 - 0.01, zc - DEV_STAND_Z * w * 0.5),
+                          vec3<f32>(DEV_NECK_W * w, DEV_NECK_LEN * w * 0.5 + 0.01, DEV_STAND_Z * w * 0.5),
+                          DEV_CHAMFER * 2.0);
+    let foot = sd_dev_box(p - vec3<f32>(0.0, y0 + (DEV_NECK_LEN + DEV_FOOT_H * 0.5) * w, zc - DEV_FOOT_Z * w * 0.5),
+                          vec3<f32>(DEV_FOOT_W * w, DEV_FOOT_H * w * 0.5, DEV_FOOT_Z * w * 0.5),
+                          DEV_CHAMFER * 2.0);
     return min(neck, foot);
 }
 
 fn sd_dev_extra(p: vec3<f32>) -> f32 {
-    if dev_is(2.0) {
+    if dev_is(1.0) {
         return sd_dev_deck(p);
     }
-    if dev_is(4.0) {
+    if dev_is(3.0) {
         return sd_dev_stand(p);
     }
     return 1e9;
@@ -696,7 +744,7 @@ fn sd_device(p: vec3<f32>) -> f32 {
 }
 
 fn device_normal(p: vec3<f32>) -> vec3<f32> {
-    let e = 0.0015;
+    let e = 0.0006;
     let ka = vec3<f32>(1.0, -1.0, -1.0);
     let kb = vec3<f32>(-1.0, -1.0, 1.0);
     let kc = vec3<f32>(-1.0, 1.0, -1.0);
@@ -709,76 +757,62 @@ fn dev_cov(d: f32, aa: f32) -> f32 {
     return clamp(0.5 - d / max(aa, 1e-6), 0.0, 1.0);
 }
 
-fn dev_browser_chrome(q: vec2<f32>, bar: f32, aa: f32) -> vec3<f32> {
-    let tabs = bar * 0.463;
-    var c = select(DEV_TOOLBAR, DEV_TABBAR, q.y < tabs);
-    c = mix(c, DEV_INK * 0.9, 0.35 * dev_cov(abs(q.y - bar) - aa * 0.5, aa));
-    if q.y < tabs {
-        let r = bar * 0.070;
-        var d = vec2<f32>(bar * 0.188 + r, bar * 0.161 + r);
-        c = mix(c, vec3<f32>(1.000, 0.373, 0.341), dev_cov(length(q - d) - r, aa));
-        d.x = d.x + bar * 0.242;
-        c = mix(c, vec3<f32>(0.996, 0.737, 0.180), dev_cov(length(q - d) - r, aa));
-        d.x = d.x + bar * 0.242;
-        c = mix(c, vec3<f32>(0.157, 0.784, 0.251), dev_cov(length(q - d) - r, aa));
-        let th = vec2<f32>(bar * 1.974, bar * 0.181);
-        let tc = vec2<f32>(bar * 1.974 + bar * 1.974, tabs - th.y);
-        c = mix(c, DEV_TOOLBAR, dev_cov(sd_round_rect(q - tc, th, bar * 0.10), aa));
-    } else {
-        let ph = vec2<f32>(max(dev_body_h().x - bar * 0.60, bar), bar * 0.165);
-        let pc = vec2<f32>(dev_body_h().x, (tabs + bar) * 0.5);
-        c = mix(c, vec3<f32>(0.910, 0.925, 0.945), dev_cov(sd_round_rect(q - pc, ph, ph.y), aa));
-        c = mix(c, DEV_INK, 0.8 * dev_cov(sd_round_rect(q - pc + vec2<f32>(ph.x * 0.70, 0.0),
-                                                        vec2<f32>(ph.x * 0.10, bar * 0.045), bar * 0.03), aa));
-    }
-    return c;
+// Filet de lumiere d'un pixel, peint juste a l'interieur d'un contour `d2` (<0 dedans).
+fn dev_hairline(d2: f32, aa: f32) -> f32 {
+    return dev_cov(abs(d2 + aa) - aa * 0.55, aa);
 }
 
-fn device_albedo(p: vec3<f32>, n: vec3<f32>, aa: f32) -> vec3<f32> {
+fn device_albedo(p: vec3<f32>, n: vec3<f32>, aa: f32) -> vec4<f32> {
+    let metal = dev_shell();
+    let back = dev_shell_back();
     if sd_dev_body(p) > sd_dev_extra(p) {
-        if !dev_is(2.0) {
-            return DEV_SHELL_DARK;
+        if !dev_is(1.0) {
+            return vec4<f32>(back, 1.0);
         }
-        let c = dev_body_c();
-        let h = dev_body_h();
-        let d = p - vec3<f32>(0.0, c.y + h.y, -layer.fx.w * 0.5);
-        let ca = cos(DEV_DECK_ANGLE);
-        let sa = sin(DEV_DECK_ANGLE);
-        let q = vec3<f32>(d.x, d.y * ca + d.z * sa, -d.y * sa + d.z * ca);
-        if q.z < -DEV_DECK_THICK * 0.4 {
-            return DEV_SHELL_DARK;
+        let q = dev_deck_local(p);
+        let w = dev_shell_w();
+        if q.z < -DEV_DECK_THICK * w * 0.25 {
+            return vec4<f32>(back, 1.0);
         }
-        var top = mix(DEV_SHELL * 0.82, DEV_SHELL * 1.04, clamp(q.y / DEV_DECK_LEN, 0.0, 1.0));
-        let hw = h.x + DEV_DECK_OVERHANG;
-        let key = sd_round_rect(q.xy - vec2<f32>(0.0, DEV_DECK_LEN * 0.40),
-                                vec2<f32>(hw * 0.80, DEV_DECK_LEN * 0.22), DEV_DECK_LEN * 0.03);
-        top = mix(top, DEV_SHELL * 0.58, 0.9 * dev_cov(key, aa));
-        let pad = sd_round_rect(q.xy - vec2<f32>(0.0, DEV_DECK_LEN * 0.79),
-                                vec2<f32>(hw * 0.26, DEV_DECK_LEN * 0.13), DEV_DECK_LEN * 0.02);
-        return mix(top, DEV_SHELL * 0.90, dev_cov(pad, aa));
+        let hw = dev_body_h().x;
+        let y0 = DEV_DECK_GAP * w;
+        let len = dev_deck_len();
+        var top = metal;
+        let key = sd_round_rect(q.xy - vec2<f32>(0.0, y0 + len * 0.33),
+                                vec2<f32>(hw * 0.75, len * 0.23), len * 0.02);
+        top = mix(top, metal * 0.52, dev_cov(key, aa));
+        top = mix(top, metal * 1.06, dev_hairline(key, aa));
+        let pad = sd_round_rect(q.xy - vec2<f32>(0.0, y0 + len * 0.76),
+                                vec2<f32>(hw * 0.26, len * 0.14), len * 0.015);
+        top = mix(top, metal * 0.88, dev_cov(pad, aa));
+        top = mix(top, metal * 1.04, dev_hairline(pad, aa));
+        return vec4<f32>(top, 1.0);
     }
-    let shell = mix(DEV_SHELL_DARK, DEV_SHELL, clamp(n.z + 0.5, 0.0, 1.0));
-    let front = select(smoothstep(0.25, 0.70, n.z), 0.0, p.z < -layer.fx.w * 0.5);
+    let shell = mix(back, metal, clamp(n.z * 0.8 + 0.5, 0.0, 1.0));
+    let front = select(smoothstep(0.30, 0.80, n.z), 0.0, p.z < -layer.fx.w * 0.5);
     if front <= 0.0 {
-        return shell;
+        return vec4<f32>(shell, 1.0);
     }
-    if dev_is(1.0) {
-        let bar = layer.src_prev.y;
-        let q = vec2<f32>(p.x - (dev_body_c().x - dev_body_h().x), p.y + layer.mb.y + bar);
-        let face = select(DEV_SHELL, dev_browser_chrome(q, bar, aa), q.y >= 0.0 && q.y <= bar);
-        return mix(shell, face, front);
+    let rim = dev_hairline(sd_dev_outline(p.xy), aa);
+    var c = dev_glass();
+    if dev_is(2.0) {
+        // Telephone : le detail reste sur le HAUT DU TELEPHONE. Une ouverture paysage est un
+        // telephone COUCHE : on le redresse d'un quart de tour et on dessine dedans.
+        let upright = layer.mb.y >= layer.mb.x;
+        let e = select(vec2<f32>(-p.y, p.x), p.xy, upright);
+        let hh = select(vec2<f32>(layer.mb.y, layer.mb.x), layer.mb.xy, upright);
+        let bez = select(layer.src_prev.x, layer.src_prev.y, upright);
+        let s = 2.0 * min(hh.x, hh.y);
+        let y = -hh.y - bez * 0.5;
+        c = mix(c, vec3<f32>(0.180, 0.196, 0.220),
+                dev_cov(sd_round_rect(e - vec2<f32>(-0.010 * s, y), vec2<f32>(0.060 * s, 0.0040 * s), 0.0040 * s), aa));
+        c = mix(c, vec3<f32>(0.086, 0.102, 0.133), dev_cov(length(e - vec2<f32>(0.082 * s, y)) - 0.0075 * s, aa));
+    } else if dev_is(1.0) {
+        c = mix(c, vec3<f32>(0.120, 0.133, 0.161),
+                dev_cov(length(p.xy - vec2<f32>(0.0, -layer.mb.y - layer.src_prev.y * 0.5)) - 0.0035 * dev_shell_w(), aa));
     }
-    var c = DEV_BEZEL_RGB;
-    if dev_is(3.0) {
-        let y = -layer.mb.y - layer.src_prev.y * 0.5;
-        c = mix(c, vec3<f32>(0.227, 0.247, 0.278),
-                dev_cov(sd_round_rect(p.xy - vec2<f32>(-0.012, y), vec2<f32>(0.075, 0.0055), 0.0055), aa));
-        c = mix(c, vec3<f32>(0.086, 0.106, 0.145), dev_cov(length(p.xy - vec2<f32>(0.105, y)) - 0.009, aa));
-    } else if dev_is(2.0) {
-        c = mix(c, vec3<f32>(0.149, 0.165, 0.200),
-                dev_cov(length(p.xy - vec2<f32>(0.0, -layer.mb.y - layer.src_prev.y * 0.5)) - 0.004, aa));
-    }
-    return mix(shell, c, front);
+    c = mix(c, metal, rim);
+    return vec4<f32>(mix(shell, c, front), rim);
 }
 
 fn device_frame(local: vec2<f32>) -> vec4<f32> {
@@ -813,15 +847,14 @@ fn device_frame(local: vec2<f32>) -> vec4<f32> {
     let bh = dev_body_h();
     var lo = vec3<f32>(bc - bh, -layer.fx.w);
     var hi = vec3<f32>(bc + bh, 0.0);
-    if dev_is(2.0) {
-        let reach = DEV_DECK_LEN + DEV_DECK_THICK;
-        lo = vec3<f32>(min(lo.x, -bh.x - DEV_DECK_OVERHANG), lo.y, min(lo.z, -layer.fx.w));
-        hi = vec3<f32>(max(hi.x, bh.x + DEV_DECK_OVERHANG),
-                       hi.y + reach * cos(DEV_DECK_ANGLE) + DEV_DECK_THICK,
+    let sw = dev_shell_w();
+    if dev_is(1.0) {
+        let reach = DEV_DECK_GAP * sw + dev_deck_len();
+        hi = vec3<f32>(hi.x, hi.y + reach * cos(DEV_DECK_ANGLE) + DEV_DECK_THICK * sw,
                        hi.z + reach * sin(DEV_DECK_ANGLE));
-    } else if dev_is(4.0) {
-        lo = vec3<f32>(min(lo.x, -DEV_FOOT_W), lo.y, lo.z - DEV_STAND_Z);
-        hi = vec3<f32>(max(hi.x, DEV_FOOT_W), hi.y + DEV_NECK_LEN + DEV_FOOT_H, hi.z);
+    } else if dev_is(3.0) {
+        lo = vec3<f32>(min(lo.x, -DEV_FOOT_W * sw), lo.y, lo.z - DEV_FOOT_Z * sw);
+        hi = vec3<f32>(max(hi.x, DEV_FOOT_W * sw), hi.y + (DEV_NECK_LEN + DEV_FOOT_H) * sw, hi.z);
     }
 
     let tb = ray_box(ro, rd, lo - vec3<f32>(0.01), hi + vec3<f32>(0.01));
@@ -834,7 +867,7 @@ fn device_frame(local: vec2<f32>) -> vec4<f32> {
     var best = 1e9;
     var t_best = t;
     var hit = false;
-    for (var k = 0; k < 72; k = k + 1) {
+    for (var k = 0; k < 80; k = k + 1) {
         let d = sd_device(ro + rd * t);
         let fp = t / dlen;
         if d < 0.08 * fp {
@@ -857,11 +890,11 @@ fn device_frame(local: vec2<f32>) -> vec4<f32> {
     }
     let q = ro + rd * t_best;
     let n = device_normal(q);
-    let albedo = device_albedo(q, n, t_best / dlen);
+    let mat = device_albedo(q, n, t_best / dlen);
     let diffuse = clamp(dot(n, l), 0.0, 1.0);
-    let gloss = 1.0 - smoothstep(0.97, 0.995, abs(n.z));
-    let spec = gloss * pow(clamp(dot(n, normalize(l - rd)), 0.0, 1.0), 60.0);
-    let rgb = albedo * (MODEL_AMBIENT + MODEL_DIFFUSE * diffuse) + vec3<f32>(0.25 * spec);
+    // Aucun lobe speculaire large : rien qu'un voile directionnel etroit sur le metal.
+    let sheen = DEV_SHEEN * mat.a * pow(diffuse, 4.0);
+    let rgb = mat.rgb * (MODEL_AMBIENT + MODEL_DIFFUSE * diffuse) + vec3<f32>(sheen);
     let a = cov * layer.color.a;
     return vec4<f32>(rgb * a, a); // premultiplie
 }
@@ -1184,10 +1217,10 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
         let line_w = layer.dst_prev.w;
         let q = vec2<f32>(r.x, r.y) * plane_px; // px du plan depuis le coin haut-gauche
         let p = q - plane_px * 0.5;
-        // Coins hauts plafonnes a la barre : au-dela, l'arrondi descendrait sous la barre et
-        // les coins carres de l'ecran en depasseraient.
+        // Le MEME rayon aux quatre coins : le metrage est arrondi partout, donc le cadre aussi
+        // (cf. le commentaire du HLSL, et `plan_frame` section « Le rayon des coins »).
         let rad = max(layer.radius_px, 0.0);
-        let d = sd_round_rect(p, plane_px * 0.5, select(rad, min(rad, bar), p.y < 0.0));
+        let d = sd_round_rect(p, plane_px * 0.5, rad);
         let cov = 1.0 - smoothstep(0.0, 1.5, d);
         // Filet interieur le long du contour, et separation entre la barre et le contenu.
         let stroke = max(band_cov(-d - line_w * 0.5, line_w * 0.5),
@@ -1195,11 +1228,14 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
         var frame_rgb = mix(layer.color.rgb, layer.mb.rgb, stroke * layer.mb.a);
         // Pastilles : proportions d'une barre de 28 px (rayon 6, pas de 20). Deroulees a la
         // main, comme `sd_convex_quad` : pas de tableau local indexe.
+        // Leur bloc est repousse du coin d'au moins le rayon PLUS leur propre rayon et une marge :
+        // sans ca, l'arrondi mordait la premiere des que Roundness montait.
         let dr = bar * 0.214;
         let dx = bar * 0.714;
-        frame_rgb = mix(frame_rgb, vec3<f32>(1.000, 0.373, 0.341), disc_cov(q, vec2<f32>(dx, bar * 0.5), dr));
-        frame_rgb = mix(frame_rgb, vec3<f32>(0.996, 0.737, 0.180), disc_cov(q, vec2<f32>(2.0 * dx, bar * 0.5), dr));
-        frame_rgb = mix(frame_rgb, vec3<f32>(0.157, 0.784, 0.251), disc_cov(q, vec2<f32>(3.0 * dx, bar * 0.5), dr));
+        let x0 = max(dx, rad + dr + bar * 0.18);
+        frame_rgb = mix(frame_rgb, vec3<f32>(1.000, 0.373, 0.341), disc_cov(q, vec2<f32>(x0, bar * 0.5), dr));
+        frame_rgb = mix(frame_rgb, vec3<f32>(0.996, 0.737, 0.180), disc_cov(q, vec2<f32>(x0 + dx, bar * 0.5), dr));
+        frame_rgb = mix(frame_rgb, vec3<f32>(0.157, 0.784, 0.251), disc_cov(q, vec2<f32>(x0 + 2.0 * dx, bar * 0.5), dr));
         let fa = cov * layer.color.a;
         return vec4<f32>(frame_rgb * fa, fa); // premultiplie
     } else if layer.mode > 14.5 && layer.mode < 15.5 {
