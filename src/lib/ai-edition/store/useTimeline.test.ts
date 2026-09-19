@@ -1197,6 +1197,304 @@ describe("useTimeline undo history", () => {
 		expect(useProjectStore.getState().document?.timeline.clips).toHaveLength(2);
 	});
 
+	// Holds the first document save until the test releases it; every later one lands at once.
+	const gateFirstSave = () => {
+		const gate: { release?: () => void } = {};
+		let calls = 0;
+		bridgeMocks.save.mockImplementation(async (doc: AxcutDocument) => {
+			calls += 1;
+			if (calls === 1) {
+				await new Promise<void>((resolve) => {
+					gate.release = resolve;
+				});
+			}
+			return { success: true, document: doc };
+		});
+		return gate;
+	};
+
+	it("lands rapid zoom-level steps in order, one undo step each", async () => {
+		seed(docWithZoom);
+		const gate = gateFirstSave();
+		const { result } = renderTimeline();
+
+		const p4 = result.current.updateZoomDepth("zoom_a", 4);
+		const p5 = result.current.updateZoomDepth("zoom_a", 5);
+		await waitFor(() => expect(gate.release).toEqual(expect.any(Function)));
+		await act(async () => {
+			gate.release?.();
+			await Promise.all([p4, p5]);
+		});
+
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(5);
+		act(() => {
+			expect(undo()).toBe(true);
+		});
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(4);
+	});
+
+	it("keeps a pending zoom level when the 3D tilt is changed before it lands", async () => {
+		seed(docWithZoom);
+		const gate = gateFirstSave();
+		const { result } = renderTimeline();
+
+		const pDepth = result.current.updateZoomDepth("zoom_a", 4);
+		const pRotation = result.current.updateZoomRotation("zoom_a", "iso");
+		await waitFor(() => expect(gate.release).toEqual(expect.any(Function)));
+		await act(async () => {
+			gate.release?.();
+			await Promise.all([pDepth, pRotation]);
+		});
+
+		expect(useProjectStore.getState().document?.zoomRanges[0]).toMatchObject({
+			depth: 4,
+			rotationPreset: "iso",
+		});
+	});
+
+	// Rebase compatibility (#694 × current main): `updateZoomClickImpact` joined the zoom pane
+	// after this PR was authored, as one more one-field whole-document writer. While a level
+	// write is still pending, a click-impact toggle built from the render's document would
+	// rebuild the pill from the stale pre-level document — and whichever save landed last won,
+	// so the pending level could come back off. Click impact must share the zoom chain so both
+	// values survive.
+	it("keeps a pending zoom level when click impact toggles before it lands", async () => {
+		seed(docWithZoom);
+		const gate = gateFirstSave();
+		const { result } = renderTimeline();
+
+		const pDepth = result.current.updateZoomDepth("zoom_a", 4);
+		const pImpact = result.current.updateZoomClickImpact("zoom_a", true);
+		await waitFor(() => expect(gate.release).toEqual(expect.any(Function)));
+		await act(async () => {
+			gate.release?.();
+			await Promise.all([pDepth, pImpact]);
+		});
+
+		expect(useProjectStore.getState().document?.zoomRanges[0]).toMatchObject({
+			depth: 4,
+			clickImpact: true,
+		});
+	});
+
+	// Rebase-review finding (queued zoom writes vs. document replacement): a zoom write
+	// queued behind a still-pending one starts AFTER an undo has restored the document,
+	// and must not apply its stale patch to the replacement. The in-flight write itself
+	// is dropped by `saveDocument`'s epoch check; the queued one is the hole.
+	it("drops a queued zoom write that starts after an undo replaces the document", async () => {
+		seed(docWithZoom);
+		const { result } = renderTimeline();
+		// One settled write so the undo has a recorded state to restore.
+		await act(async () => {
+			await result.current.updateZoomDepth("zoom_a", 4);
+		});
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(4);
+
+		const gate = gateFirstSave();
+		const pRotation = result.current.updateZoomRotation("zoom_a", "iso");
+		const pCursor = result.current.updateZoomHideCursor("zoom_a", true);
+		await waitFor(() => expect(gate.release).toEqual(expect.any(Function)));
+		let undid = false;
+		act(() => {
+			undid = undo();
+		});
+		expect(undid).toBe(true);
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(3);
+
+		await act(async () => {
+			gate.release?.();
+			await Promise.allSettled([pRotation, pCursor]);
+		});
+
+		// The undo's result stands; neither queued write landed on the restored document.
+		expect(useProjectStore.getState().document?.zoomRanges[0]).toMatchObject({ depth: 3 });
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.rotationPreset).toBeUndefined();
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.hideCursor).toBeUndefined();
+	});
+
+	// Same finding through the project-switch path: `loadProject` replaces projectId and
+	// document without superseding the queue, and project B deliberately contains the same
+	// region id, so a stale patch must not escape detection by id coincidence.
+	it("drops queued zoom writes when a project switch replaces the document", async () => {
+		seed(docWithZoom);
+		const { result } = renderTimeline();
+		const projectB: AxcutDocument = {
+			...docWithZoom,
+			project: { ...docWithZoom.project, id: "proj_b", title: "Project B" },
+			zoomRanges: [{ ...docWithZoom.zoomRanges[0]!, depth: 2 }],
+		};
+
+		const gate = gateFirstSave();
+		const pRotation = result.current.updateZoomRotation("zoom_a", "iso");
+		const pCursor = result.current.updateZoomHideCursor("zoom_a", true);
+		await waitFor(() => expect(gate.release).toEqual(expect.any(Function)));
+		bridgeMocks.get.mockResolvedValue({ success: true, document: projectB });
+		await act(async () => {
+			await useProjectStore.getState().loadProject("proj_b");
+		});
+		expect(useProjectStore.getState().projectId).toBe("proj_b");
+
+		await act(async () => {
+			gate.release?.();
+			await Promise.allSettled([pRotation, pCursor]);
+		});
+
+		// Project B's own zoom_a is untouched by the stale project-A queue.
+		expect(useProjectStore.getState().document?.zoomRanges[0]).toMatchObject({
+			id: "zoom_a",
+			depth: 2,
+		});
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.rotationPreset).toBeUndefined();
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.hideCursor).toBeUndefined();
+	});
+
+	// Rebase-review finding (stalled save blocks the zoom queue): while one zoom save's
+	// answer is unknown (bridge never settles), later zoom-pane writes must not queue
+	// behind it forever — they are refused until the unknown save settles, then work
+	// again. The refusal is the safe half: the unknown save may still land, so racing
+	// it would recreate the stale-document overwrite this chain exists to prevent.
+	it("refuses zoom writes while a save is unknown and recovers when it settles", async () => {
+		seed(docWithZoom);
+		vi.useFakeTimers();
+		try {
+			let hungDoc: AxcutDocument | undefined;
+			let releaseHungSave: (result: { success: boolean; document: AxcutDocument }) => void;
+			bridgeMocks.save.mockImplementation((doc: AxcutDocument) => {
+				hungDoc = doc;
+				return new Promise((resolve) => {
+					releaseHungSave = (result) => {
+						// Settle this one call only; later saves answer immediately.
+						bridgeMocks.save.mockImplementation(async (next: AxcutDocument) => ({
+							success: true,
+							document: next,
+						}));
+						resolve(result);
+					};
+				});
+			});
+			const { result } = renderTimeline();
+
+			let depthOk: boolean | undefined;
+			act(() => {
+				void result.current.updateZoomDepth("zoom_a", 4).then((ok) => {
+					depthOk = ok;
+				});
+			});
+			// Deadline passes with the bridge still silent: the write's result is unknown,
+			// reported to the caller as not-taken, and the document is left alone.
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(10_000);
+			});
+			expect(depthOk).toBe(false);
+			expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(3);
+
+			// A later zoom write is refused while that save is still unknown.
+			let rotationOk: boolean | undefined;
+			await act(async () => {
+				rotationOk = await result.current.updateZoomRotation("zoom_a", "iso");
+			});
+			expect(rotationOk).toBe(false);
+			expect(useProjectStore.getState().document?.zoomRanges[0]?.rotationPreset).toBeUndefined();
+
+			// The unknown save settles late — it may land — and the refusal clears.
+			await act(async () => {
+				releaseHungSave({ success: true, document: hungDoc! });
+				for (let i = 0; i < 20; i++) await Promise.resolve();
+			});
+			await act(async () => {
+				await result.current.updateZoomDepth("zoom_a", 5);
+			});
+			expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(5);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	// Rebase-review follow-up (unknown save × replacement): the refusal must not outlive
+	// its reason. Once an undo bumps the epoch, the stuck save can no longer install
+	// anything (`saveDocument` drops it), so it must stop blocking zoom writes — even if
+	// the bridge never answers. A project switch does NOT bump the epoch, so there the
+	// stuck save can still land and the refusal correctly stays.
+	it("stops refusing zoom writes once a replacement makes the unknown save unable to land", async () => {
+		seed(docWithZoom);
+		vi.useFakeTimers();
+		try {
+			let hungDoc: AxcutDocument | undefined;
+			let releaseHungSave: (result: { success: boolean; document: AxcutDocument }) => void = () => {
+				// replaced once the hung save registers
+			};
+			let saveCalls = 0;
+			bridgeMocks.save.mockImplementation((doc: AxcutDocument) => {
+				saveCalls += 1;
+				if (saveCalls === 2) {
+					// The write whose answer never comes; the test never releases it until
+					// the very end, and then only to prove the epoch guard drops it.
+					hungDoc = doc;
+					return new Promise((resolve) => {
+						releaseHungSave = resolve;
+					});
+				}
+				return Promise.resolve({ success: true, document: doc });
+			});
+			const { result } = renderTimeline();
+
+			// One settled write so the undo has a recorded state to restore.
+			await act(async () => {
+				await result.current.updateZoomDepth("zoom_a", 4);
+			});
+			expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(4);
+
+			let depthOk: boolean | undefined;
+			act(() => {
+				void result.current.updateZoomDepth("zoom_a", 5).then((ok) => {
+					depthOk = ok;
+				});
+			});
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(10_000);
+			});
+			expect(depthOk).toBe(false);
+
+			// The undo replaces the document; the stuck save can no longer install it.
+			let undid = false;
+			act(() => {
+				undid = undo();
+			});
+			expect(undid).toBe(true);
+
+			// Zoom writes must work again on the restored document.
+			await act(async () => {
+				const ok = await result.current.updateZoomDepth("zoom_a", 5);
+				expect(ok).toBe(true);
+			});
+			expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(5);
+
+			// When the stuck save finally settles, the epoch guard drops it — the restored
+			// (and since re-edited) document stands.
+			await act(async () => {
+				releaseHungSave({ success: true, document: hungDoc! });
+				for (let i = 0; i < 20; i++) await Promise.resolve();
+			});
+			expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(5);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("resolves a zoom-level write with whether the save took effect", async () => {
+		seed(docWithZoom);
+		const { result } = renderTimeline();
+		bridgeMocks.save.mockResolvedValueOnce({ success: false, error: "read-only" });
+
+		let ok: boolean | undefined;
+		await act(async () => {
+			ok = await result.current.updateZoomDepth("zoom_a", 4);
+		});
+
+		expect(ok).toBe(false);
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.depth).toBe(3);
+	});
+
 	it("leaves no undo step behind a focus drag whose commit failed", async () => {
 		// The drag used to push its pre-drag document from the FIRST `setDocument`. When
 		// the commit then failed, `commitZoomFocus` restored that same document through

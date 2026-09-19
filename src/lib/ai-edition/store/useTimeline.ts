@@ -43,7 +43,9 @@ import {
 } from "../timeline/timelineMap";
 import { dropTrimPillsByIds, resolveTimelineSpanToTrim } from "../timeline/trim-mapping";
 import type { AutoZoomSuggestion } from "../timeline/zoom-suggestions";
-import { useProjectStore, waitForDocumentSaves } from "./projectStore";
+import { saveWithDeadline, useProjectStore, waitForDocumentSaves } from "./projectStore";
+import { currentWriteEpoch } from "./undoStack";
+import { useSequentialTimelineOps } from "./useSequentialTimelineOps";
 
 // How long a region lasts when the caller doesn't say. The timeline's toolbar
 // passes its own duration instead, derived from the current zoom so the new pill
@@ -705,21 +707,80 @@ export function useTimeline() {
 		}
 	}, [saveDocument]);
 
+	// The zoom pane's own write chain -- see `saveZoomPatch`. Only `enqueue` is used, so
+	// there is no fallback document to hand it.
+	const { enqueue: enqueueZoomWrite } = useSequentialTimelineOps({
+		fallbackDocument: null,
+		saveDocument,
+	});
+
+	// The zoom pane's one-field writes: level, 3D tilt, focus mode, cursor, click impact. Each
+	// is a whole-document save, so they share one chain and read the document INSIDE it. The
+	// level buttons step while the previous save is still out, and 3 -> 4 -> 5 built both saves
+	// from the render's depth-3 document: the main process does not order them, so the 4 could
+	// land last, and even in order one Ctrl+Z skipped a level. A neighbouring select changed
+	// while a level was pending rebuilt from that same document and put 3 back. Resolves
+	// `saveDocument`'s answer, so the level buttons can retry a failed write.
+	//
+	// Each request is bound to the project and write epoch it was asked against — the same
+	// pair `addAsset` samples: an undo bumps the epoch, a project switch swaps both, and a
+	// queued patch that only STARTS after such a replacement must not apply to the document
+	// that replaced its target. A save whose answer is unknown (`saveWithDeadline` timed out
+	// with the bridge still silent) may still land, so later zoom writes are refused until it
+	// settles instead of racing it — the same "a queued write racing a stuck one" the
+	// `waitForDocumentSaves` header calls out. The block is keyed to the save's own epoch:
+	// once a replacement moves the epoch, that save can no longer install anything
+	// (`saveDocument` drops it) and must stop blocking; a project switch does not move the
+	// epoch, so there the stuck save can still land and the block correctly stays.
+	const unknownZoomSavesRef = useRef<Array<number>>([]);
+	const saveZoomPatch = useCallback(
+		(id: string, patch: Partial<AxcutDocument["zoomRanges"][number]>) => {
+			const epoch = currentWriteEpoch();
+			const projectId = useProjectStore.getState().projectId;
+			return enqueueZoomWrite(async () => {
+				if (useProjectStore.getState().projectId !== projectId || currentWriteEpoch() !== epoch) {
+					return false;
+				}
+				if (unknownZoomSavesRef.current.filter((stuck) => stuck === epoch).length > 0) {
+					return false;
+				}
+				const doc = useProjectStore.getState().document;
+				if (!doc) return false;
+				const save = saveDocument(
+					{
+						...doc,
+						zoomRanges: patchPillById(doc.zoomRanges, id, patch) as AxcutDocument["zoomRanges"],
+					},
+					{ history: true },
+				);
+				const outcome = await saveWithDeadline(save);
+				if (outcome !== "timeout") return outcome === true;
+				// Unknown, not failed: the write may still land. Report not-taken (the
+				// buttons retry) and refuse later writes into this same document generation
+				// until the save settles or the epoch moves past it.
+				unknownZoomSavesRef.current.push(epoch);
+				void save
+					.then(
+						() => undefined,
+						() => undefined,
+					)
+					.finally(() => {
+						unknownZoomSavesRef.current = unknownZoomSavesRef.current.filter(
+							(stuck) => stuck !== epoch,
+						);
+					});
+				return false;
+			});
+		},
+		[enqueueZoomWrite, saveDocument],
+	);
+
 	// Zoom-level control for the region-settings panel (1-6, matches
 	// zoomRegionSchema's depth literal union — 1.0x..3.5x in 0.5x steps per
 	// the `depth/2 + 0.5` label formula used throughout the timeline UI).
 	const updateZoomDepth = useCallback(
-		async (id: string, depth: 1 | 2 | 3 | 4 | 5 | 6) => {
-			if (!document) return;
-			const next: AxcutDocument = {
-				...document,
-				zoomRanges: patchPillById(document.zoomRanges, id, {
-					depth,
-				}) as AxcutDocument["zoomRanges"],
-			};
-			await saveDocument(next, { history: true });
-		},
-		[document, saveDocument],
+		(id: string, depth: 1 | 2 | 3 | 4 | 5 | 6) => saveZoomPatch(id, { depth }),
+		[saveZoomPatch],
 	);
 
 	// Same story as `focusMode` below: the 3D tilt was implemented end to end — schema
@@ -728,17 +789,9 @@ export function useTimeline() {
 	// `undefined` clears the preset back to a flat frame; `migrate.ts` already drops the field
 	// when it is falsy, so absent and "no rotation" are the same state.
 	const updateZoomRotation = useCallback(
-		async (id: string, rotationPreset: Rotation3DPreset | undefined) => {
-			if (!document) return;
-			const next: AxcutDocument = {
-				...document,
-				zoomRanges: patchPillById(document.zoomRanges, id, {
-					rotationPreset,
-				}) as AxcutDocument["zoomRanges"],
-			};
-			await saveDocument(next, { history: true });
-		},
-		[document, saveDocument],
+		(id: string, rotationPreset: Rotation3DPreset | undefined) =>
+			saveZoomPatch(id, { rotationPreset }),
+		[saveZoomPatch],
 	);
 
 	// Nothing could set `focusMode`: "auto" only ever arrived from the automatic suggestion pass
@@ -750,47 +803,24 @@ export function useTimeline() {
 	// Writing "manual" explicitly is safe even though `migrate.ts` only persists "auto": an absent
 	// field MEANS manual, so both forms resolve identically.
 	const updateZoomFocusMode = useCallback(
-		async (id: string, focusMode: "manual" | "auto") => {
-			if (!document) return;
-			const next: AxcutDocument = {
-				...document,
-				zoomRanges: patchPillById(document.zoomRanges, id, {
-					focusMode,
-				}) as AxcutDocument["zoomRanges"],
-			};
-			await saveDocument(next, { history: true });
-		},
-		[document, saveDocument],
+		(id: string, focusMode: "manual" | "auto") => saveZoomPatch(id, { focusMode }),
+		[saveZoomPatch],
 	);
 
 	const updateZoomHideCursor = useCallback(
-		async (id: string, hideCursor: boolean | undefined) => {
-			if (!document) return;
-			const next: AxcutDocument = {
-				...document,
-				zoomRanges: patchPillById(document.zoomRanges, id, {
-					hideCursor: hideCursor ? true : undefined,
-				}) as AxcutDocument["zoomRanges"],
-			};
-			await saveDocument(next, { history: true });
-		},
-		[document, saveDocument],
+		(id: string, hideCursor: boolean | undefined) =>
+			saveZoomPatch(id, { hideCursor: hideCursor ? true : undefined }),
+		[saveZoomPatch],
 	);
 
 	// Per-region, like the preset it animates. `undefined` rather than `false` so the document
-	// keeps omitting the key when the option is off.
+	// keeps omitting the key when the option is off. Shares `saveZoomPatch` with the pane's
+	// other one-field writes: a toggle arriving while a level write is still pending must not
+	// rebuild the pill from the stale pre-level document and drop the level on the floor.
 	const updateZoomClickImpact = useCallback(
-		async (id: string, clickImpact: boolean) => {
-			if (!document) return;
-			const next: AxcutDocument = {
-				...document,
-				zoomRanges: patchPillById(document.zoomRanges, id, {
-					clickImpact: clickImpact ? true : undefined,
-				}) as AxcutDocument["zoomRanges"],
-			};
-			await saveDocument(next, { history: true });
-		},
-		[document, saveDocument],
+		(id: string, clickImpact: boolean) =>
+			saveZoomPatch(id, { clickImpact: clickImpact ? true : undefined }),
+		[saveZoomPatch],
 	);
 
 	const updateAnnotationSpan = useCallback(
