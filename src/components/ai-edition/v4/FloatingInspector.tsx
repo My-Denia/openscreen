@@ -23,8 +23,8 @@ import {
 	MOVING_ROTATION_3D_PRESETS,
 	type Rotation3DPreset,
 	SPEED_OPTIONS,
-	type ZoomDepth,
 	ZOOM_DEPTH_SCALES,
+	type ZoomDepth,
 } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import {
