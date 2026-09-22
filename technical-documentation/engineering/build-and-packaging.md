@@ -257,7 +257,7 @@ On Windows, `scripts/fetch-ffmpeg.mjs` stages two artifacts: the shared `av*.dll
 
 ### Locale pruning
 
-Chromium packages ~55 locale `.pak` files and macOS `.lproj` directories, totaling over 20 MB of unneeded translations. `electronLanguages` restricts the packaged locales to OpenScreen's 13 supported languages.
+Chromium packages ~55 locale `.pak` files and macOS `.lproj` directories, totaling over 20 MB of unneeded translations. `electronLanguages` restricts the packaged locales to OpenScreen's supported languages.
 
 Because macOS `ElectronFramework` directory matching uses underscores (`pt_BR.lproj`, `zh_CN.lproj`, `zh_TW.lproj`) while Windows and Linux `.pak` files use hyphens (`pt-BR.pak`, `zh-CN.pak`, `zh-TW.pak`), both forms are declared in `electronLanguages` to prevent `removeUnusedLanguagesIfNeeded` from deleting supported locales on macOS.
 
