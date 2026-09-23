@@ -19,6 +19,7 @@ import {
 	sameRect,
 } from "./hudWindowBounds";
 import { followAcrossSpaces } from "./macSpaces";
+import { markSheetless } from "./messageBox";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -447,6 +448,7 @@ export function createHudOverlayWindow(): BrowserWindow {
 		});
 	}
 
+	markSheetless(win);
 	return win;
 }
 
@@ -600,6 +602,7 @@ export function createSourceSelectorWindow(): BrowserWindow {
 		});
 	}
 
+	markSheetless(win);
 	return win;
 }
 
@@ -651,6 +654,7 @@ export function createCountdownOverlayWindow(): BrowserWindow {
 		});
 	}
 
+	markSheetless(win);
 	return win;
 }
 

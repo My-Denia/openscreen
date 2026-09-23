@@ -5,7 +5,6 @@ import {
 	app,
 	BrowserWindow,
 	clipboard,
-	dialog,
 	ipcMain,
 	Menu,
 	nativeImage,
@@ -59,6 +58,7 @@ import {
 	registerIpcHandlers,
 } from "./ipc/handlers";
 import { installMainProcessErrorGuards } from "./main-process-errors";
+import { showMessageBoxOver } from "./messageBox";
 import {
 	registerPermissionsIpc,
 	showPermissionsWindow,
@@ -465,14 +465,15 @@ function channelAllowsUpdateCheck(): boolean {
 /** Message boxes must be owned by a window. The HUD is `alwaysOnTop` and `skipTaskbar`
  *  (electron/windows.ts), so an unowned dialog opens *behind* it on Windows and most Linux
  *  WMs, with no taskbar entry to recover it — the user sees a button flash and nothing else.
- *  Mirrors what ipc/handlers.ts already does for its own dialogs. */
+ *  Mirrors what ipc/handlers.ts already does for its own dialogs. On macOS the HUD is
+ *  skipped as an owner (see messageBox.ts). */
 function showMessageBox(options: Electron.MessageBoxOptions) {
 	const visible = (win: BrowserWindow | null) =>
 		win && !win.isDestroyed() && win.isVisible() ? win : null;
 	// A modal owned by a hidden window may never be drawn, so an unowned dialog is the safer
 	// fallback when the HUD has been closed to the tray.
 	const parent = visible(BrowserWindow.getFocusedWindow()) ?? visible(mainWindow);
-	return parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options);
+	return showMessageBoxOver(parent, options);
 }
 
 function aboutFacts(): AboutFacts {
