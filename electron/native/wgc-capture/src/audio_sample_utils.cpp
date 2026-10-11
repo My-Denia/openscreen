@@ -105,6 +105,100 @@ UINT32 aacCompatibleSampleRate(UINT32 sampleRate) {
     return 48000;
 }
 
+// --- Checked arithmetic for the interpolation stream's cumulative counters ---
+// (issue #920, item 24). The API accepts arbitrary DWORD-sized packets and
+// UINT32 rates, so the products below can in principle exceed 64 bits; a
+// wrapped counter would silently corrupt the stream geometry, so overflow
+// parks the state in a mode that emits nothing until reset() instead.
+
+bool addChecked(uint64_t& out, uint64_t a, uint64_t b) {
+    if (a > UINT64_MAX - b) {
+        return false;
+    }
+    out = a + b;
+    return true;
+}
+
+bool mulChecked(uint64_t& out, uint64_t a, uint64_t b) {
+    if (a != 0 && b > UINT64_MAX / a) {
+        return false;
+    }
+    out = a * b;
+    return true;
+}
+
+// K(N) = max(1, round_half_up(N*T/S)), computed by decomposing N over S so the
+// only products ever formed are (N mod S)*T and 2*(N mod S)*T — both checked,
+// never an unchecked N*T.
+bool interpolationQuota(uint64_t& out, uint64_t inputFrames, UINT32 sourceRate, UINT32 targetRate) {
+    const uint64_t whole = inputFrames / sourceRate;
+    const uint64_t rem = inputFrames % sourceRate;
+    uint64_t wholeTargets = 0;
+    if (!mulChecked(wholeTargets, whole, targetRate)) {
+        return false;
+    }
+    uint64_t remTargets = 0;
+    if (rem != 0) {
+        uint64_t remTimesTarget = 0;
+        if (!mulChecked(remTimesTarget, rem, targetRate)) {
+            return false;
+        }
+        // round_half_up(p/S) = (2p + S) / (2S)
+        uint64_t twiceP = 0;
+        uint64_t numer = 0;
+        if (!addChecked(twiceP, remTimesTarget, remTimesTarget) ||
+            !addChecked(numer, twiceP, sourceRate)) {
+            return false;
+        }
+        remTargets = numer / (2 * static_cast<uint64_t>(sourceRate));
+    }
+    uint64_t quota = 0;
+    if (!addChecked(quota, wholeTargets, remTargets)) {
+        return false;
+    }
+    out = quota < 1 ? 1 : quota;
+    return true;
+}
+
+// C(N) = min(K(N), ceil((N-1)*T/S)) for T != S: the largest output count whose
+// every interpolation window is complete. When the rates are equal every
+// frame emits immediately (frac == 0 makes the clamped window exact), so C is
+// the full quota and per-packet counts match the pre-fix converter.
+bool interpolationEmittableCount(
+    uint64_t& out,
+    uint64_t inputFrames,
+    uint64_t quota,
+    UINT32 sourceRate,
+    UINT32 targetRate) {
+    if (sourceRate == targetRate) {
+        out = quota;
+        return true;
+    }
+    const uint64_t prior = inputFrames - 1;
+    const uint64_t whole = prior / sourceRate;
+    const uint64_t rem = prior % sourceRate;
+    uint64_t wholeTargets = 0;
+    if (!mulChecked(wholeTargets, whole, targetRate)) {
+        return false;
+    }
+    uint64_t remCeil = 0;
+    if (rem != 0) {
+        uint64_t remTimesTarget = 0;
+        uint64_t numer = 0;
+        if (!mulChecked(remTimesTarget, rem, targetRate) ||
+            !addChecked(numer, remTimesTarget, sourceRate - 1)) {
+            return false;
+        }
+        remCeil = numer / sourceRate;
+    }
+    uint64_t emittable = 0;
+    if (!addChecked(emittable, wholeTargets, remCeil)) {
+        return false;
+    }
+    out = emittable < quota ? emittable : quota;
+    return true;
+}
+
 } // namespace
 
 constexpr int64_t HnsPerSecond = 10'000'000;
@@ -184,6 +278,56 @@ void AudioDecimatorState::reset() {
     std::fill(history_.begin(), history_.end(), 0.0);
     position_ = 0;
     phase_ = 0;
+    // The interpolation component resets cold with the integer one. A reset
+    // drops any unfinalized resampling tail — at most ceil(T/S + 1/2) output
+    // frames, nothing at all on the same-rate path (see the class comment).
+    mode_ = Mode::kNone;
+    interpolationFinalized_ = false;
+    interpolationOverflow_ = false;
+    interpolationSourceSubtype_ = {};
+    interpolationTargetSubtype_ = {};
+    interpolationSourceRate_ = 0;
+    interpolationTargetRate_ = 0;
+    interpolationSourceChannels_ = 0;
+    interpolationTargetChannels_ = 0;
+    interpolationSourceBits_ = 0;
+    interpolationTargetBits_ = 0;
+    interpolationInputFrames_ = 0;
+    interpolationEmittedFrames_ = 0;
+    interpolationTotalFrames_ = 0;
+    interpolationEmittableFrames_ = 0;
+    interpolationHistoryBase_ = 0;
+    interpolationRetained_.clear();
+    interpolationRetained_.shrink_to_fit();
+}
+
+void AudioDecimatorState::abandonInterpolation() {
+    // A starvation resume is a real-time discontinuity: drop exactly the
+    // interpolation component reset() drops (see its comment for the bounded
+    // tail this discards) and nothing else — the integer decimation fields
+    // (taps_/history_/position_/phase_/factor_/channels_) keep their
+    // pre-existing cross-gap behavior, matching the pre-fix mixer.
+    if (mode_ != Mode::kInterpolation) {
+        return;
+    }
+    mode_ = Mode::kNone;
+    interpolationFinalized_ = false;
+    interpolationOverflow_ = false;
+    interpolationSourceSubtype_ = {};
+    interpolationTargetSubtype_ = {};
+    interpolationSourceRate_ = 0;
+    interpolationTargetRate_ = 0;
+    interpolationSourceChannels_ = 0;
+    interpolationTargetChannels_ = 0;
+    interpolationSourceBits_ = 0;
+    interpolationTargetBits_ = 0;
+    interpolationInputFrames_ = 0;
+    interpolationEmittedFrames_ = 0;
+    interpolationTotalFrames_ = 0;
+    interpolationEmittableFrames_ = 0;
+    interpolationHistoryBase_ = 0;
+    interpolationRetained_.clear();
+    interpolationRetained_.shrink_to_fit();
 }
 
 void AudioDecimatorState::prepare(UINT32 factor, UINT32 channels) {
@@ -249,6 +393,164 @@ bool AudioDecimatorState::consume(const double* frame, double* out) {
     return produced;
 }
 
+bool AudioDecimatorState::prepareInterpolation(
+    const AudioInputFormat& source,
+    const AudioInputFormat& target) {
+    if (interpolationFinalized_ || interpolationOverflow_) {
+        // Contract: a finalized (or overflow-parked) stream accepts no more
+        // input until reset() or a fresh state object.
+        return false;
+    }
+    if (mode_ == Mode::kInterpolation &&
+        source.sampleRate == interpolationSourceRate_ &&
+        target.sampleRate == interpolationTargetRate_ &&
+        source.channels == interpolationSourceChannels_ &&
+        target.channels == interpolationTargetChannels_ &&
+        source.bitsPerSample == interpolationSourceBits_ &&
+        target.bitsPerSample == interpolationTargetBits_ &&
+        IsEqualGUID(source.subtype, interpolationSourceSubtype_) &&
+        IsEqualGUID(target.subtype, interpolationTargetSubtype_)) {
+        return true;  // the same stream continues across the packet boundary
+    }
+    if (mode_ == Mode::kInteger) {
+        // Entering interpolation from integer decimation clears the integer
+        // history and remainder ONCE per transition (the pre-fix code reset
+        // per packet; the cross-format cold-start contract is what stays).
+        std::fill(history_.begin(), history_.end(), 0.0);
+        position_ = 0;
+        phase_ = 0;
+    }
+    mode_ = Mode::kInterpolation;
+    interpolationSourceSubtype_ = source.subtype;
+    interpolationTargetSubtype_ = target.subtype;
+    interpolationSourceRate_ = source.sampleRate;
+    interpolationTargetRate_ = target.sampleRate;
+    interpolationSourceChannels_ = source.channels;
+    interpolationTargetChannels_ = target.channels;
+    interpolationSourceBits_ = source.bitsPerSample;
+    interpolationTargetBits_ = target.bitsPerSample;
+    interpolationInputFrames_ = 0;
+    interpolationEmittedFrames_ = 0;
+    interpolationTotalFrames_ = 0;
+    interpolationEmittableFrames_ = 0;
+    interpolationHistoryBase_ = 0;
+    interpolationRetained_.clear();
+    return true;
+}
+
+void AudioDecimatorState::beginIntegerDecimation() {
+    if (mode_ == Mode::kInteger) {
+        return;
+    }
+    if (mode_ == Mode::kInterpolation) {
+        // Entering integer decimation from interpolation discards the
+        // interpolation history and starts the integer filter cold, preserving
+        // the cross-format reset contract the suite pins.
+        std::fill(history_.begin(), history_.end(), 0.0);
+        position_ = 0;
+        phase_ = 0;
+        interpolationFinalized_ = false;
+        interpolationOverflow_ = false;
+        interpolationInputFrames_ = 0;
+        interpolationEmittedFrames_ = 0;
+        interpolationTotalFrames_ = 0;
+        interpolationEmittableFrames_ = 0;
+        interpolationHistoryBase_ = 0;
+        interpolationRetained_.clear();
+        interpolationRetained_.shrink_to_fit();
+    }
+    mode_ = Mode::kInteger;
+}
+
+void AudioDecimatorState::appendInterpolationFrame(const double* mappedFrame, UINT32 channels) {
+    interpolationRetained_.insert(interpolationRetained_.end(), mappedFrame, mappedFrame + channels);
+    interpolationInputFrames_ += 1;
+    uint64_t quota = 0;
+    if (!interpolationQuota(quota, interpolationInputFrames_, interpolationSourceRate_, interpolationTargetRate_)) {
+        interpolationOverflow_ = true;
+        return;
+    }
+    interpolationTotalFrames_ = quota;
+    uint64_t emittable = 0;
+    if (!interpolationEmittableCount(
+            emittable, interpolationInputFrames_, quota, interpolationSourceRate_,
+            interpolationTargetRate_)) {
+        interpolationOverflow_ = true;
+        return;
+    }
+    interpolationEmittableFrames_ = emittable;
+}
+
+size_t AudioDecimatorState::interpolationRetainedFrames() const {
+    const UINT32 channels = interpolationTargetChannels_ == 0 ? 1 : interpolationTargetChannels_;
+    return interpolationRetained_.size() / channels;
+}
+
+double AudioDecimatorState::interpolationRetainedSample(uint64_t absoluteFrame, UINT32 channel) const {
+    if (absoluteFrame < interpolationHistoryBase_ || channel >= interpolationTargetChannels_) {
+        return 0.0;
+    }
+    const uint64_t offset =
+        (absoluteFrame - interpolationHistoryBase_) * interpolationTargetChannels_ + channel;
+    if (offset >= interpolationRetained_.size()) {
+        return 0.0;
+    }
+    return interpolationRetained_[static_cast<size_t>(offset)];
+}
+
+void AudioDecimatorState::noteInterpolationEmitted(uint64_t throughFrameCount) {
+    if (throughFrameCount > interpolationEmittedFrames_) {
+        interpolationEmittedFrames_ = throughFrameCount;
+    }
+}
+
+void AudioDecimatorState::trimInterpolationHistory() {
+    if (mode_ != Mode::kInterpolation || interpolationInputFrames_ == 0) {
+        return;
+    }
+    // The next output the stream owes is `interpolationEmittedFrames_`. The
+    // earliest source frame ANY future output can read is
+    // floor(next * S / T) (exact rational), minus one frame of allowance for
+    // the legacy double-precision index calculation; everything before that is
+    // dead. What remains after this trim is bounded by ceil(S/(2T)) + 2 frames
+    // (see the class comment) — never by stream length or packet count.
+    const uint64_t next = interpolationEmittedFrames_;
+    const uint64_t last = interpolationInputFrames_ - 1;
+    uint64_t floorPos = 0;
+    {
+        // floor(next*S/T) via the same decomposition as the quota: the only
+        // products formed are (next div T)*S and (next mod T)*S.
+        const uint64_t whole = next / interpolationTargetRate_;
+        const uint64_t rem = next % interpolationTargetRate_;
+        uint64_t wholeTimesSource = 0;
+        uint64_t remTimesSource = 0;
+        if (!mulChecked(wholeTimesSource, whole, interpolationSourceRate_) ||
+            !mulChecked(remTimesSource, rem, interpolationSourceRate_)) {
+            return;  // cannot bound safely; stay correct and retain instead
+        }
+        floorPos = wholeTimesSource + remTimesSource / interpolationTargetRate_;
+    }
+    if (floorPos > last) {
+        floorPos = last;
+    }
+    const uint64_t keepFrom = floorPos > 0 ? floorPos - 1 : 0;
+    if (keepFrom <= interpolationHistoryBase_) {
+        return;
+    }
+    const uint64_t drop = keepFrom - interpolationHistoryBase_;
+    const UINT32 channels = interpolationTargetChannels_;
+    interpolationRetained_.erase(
+        interpolationRetained_.begin(),
+        interpolationRetained_.begin() + static_cast<std::ptrdiff_t>(drop * channels));
+    interpolationHistoryBase_ = keepFrom;
+}
+
+void AudioDecimatorState::markInterpolationFinalized() {
+    interpolationFinalized_ = true;
+    interpolationRetained_.clear();
+    interpolationRetained_.shrink_to_fit();
+}
+
 void copyAudioWithGain(
     const BYTE* source,
     DWORD byteCount,
@@ -309,6 +611,9 @@ void convertAudioWithGain(
     AudioDecimatorState discardedDecimator;
     convertAudioWithGain(
         source, byteCount, sourceFormat, targetFormat, gain, destination, discardedDecimator);
+    // One-shot semantics: everything the stream owes, including the deferred
+    // tail, in the pre-fix endpoint-clamped order.
+    finalizeAudioConversion(targetFormat, gain, destination, discardedDecimator);
 }
 
 void convertAudioWithGain(
@@ -374,6 +679,9 @@ void convertAudioWithGain(
     if (sourceFormat.sampleRate > targetFormat.sampleRate &&
         sourceFormat.sampleRate % targetFormat.sampleRate == 0) {
         const UINT32 factor = sourceFormat.sampleRate / targetFormat.sampleRate;
+        // A state that was interpolating starts decimation cold exactly once
+        // per transition; a state already decimating keeps its history.
+        decimator.beginIntegerDecimation();
         decimator.prepare(factor, targetFormat.channels);
         const size_t maxTargetFrames = (packetFrames + decimator.pendingFrames()) / factor;
         destination.assign(maxTargetFrames * targetFormat.blockAlign, 0);
@@ -402,36 +710,128 @@ void convertAudioWithGain(
         return;
     }
 
-    // Same ownership rule as the pass-through above, but unlike that one this
-    // branch is hot. A 48 kHz microphone against a 48 kHz PCM16 target fails
-    // sameAudioFormatForMixing on subtype alone -- WASAPI hands out float32 --
-    // and `sourceRate > targetRate` is false, so on an ordinary machine every
-    // microphone packet lands here and resets a decimator it never used.
-    decimator.reset();
-    const size_t sourceFrames = packetFrames;
+    // Non-integer (and same-rate cross-subtype) conversion. This branch used
+    // to reset `decimator` and restart its phase at every packet, so its output
+    // depended on where the packet boundaries fell — 100-frame packets at
+    // 48 kHz -> 44.1 kHz turned a 14700-frame stream into 14720 frames, and
+    // every sample after the first packet sat at a drifting position (issue
+    // #920, item 24). The state now carries the stream: output frame j always
+    // uses the ABSOLUTE stream position j / rateRatio with the interpolation
+    // arithmetic below unchanged, frames whose window is incomplete are
+    // deferred (bounded by ceil(T/S + 1/2)), and finalizeAudioConversion()
+    // flushes the tail with the old whole-stream endpoint clamping.
+    //
+    // Same-rate (T == S) conversion — every ordinary microphone packet, WASAPI
+    // float32 against a PCM16 target — emits each frame immediately instead:
+    // frac == 0 makes the clamped window exact, so per-packet output counts
+    // stay identical to the pre-fix converter and nothing is held back. For
+    // every OTHER ratio the uniform deferral applies; an unfinalized tail of
+    // at most ceil(T/S + 1/2) frames is dropped by reset() — and therefore by a
+    // mixer resume or the end of a take — unless the stream is finalized.
+    if (!decimator.prepareInterpolation(sourceFormat, targetFormat)) {
+        // Either the active stream was finalized (it accepts no more input
+        // until reset() or a fresh state) or its counters overflowed checked
+        // arithmetic. Refuse rather than corrupt the stream geometry.
+        destination.clear();
+        return;
+    }
+    const UINT32 targetChannels = targetFormat.channels;
     const double rateRatio = static_cast<double>(targetFormat.sampleRate) /
         static_cast<double>(sourceFormat.sampleRate);
-    const size_t targetFrames = std::max<size_t>(1, static_cast<size_t>(std::llround(sourceFrames * rateRatio)));
-    destination.assign(targetFrames * targetFormat.blockAlign, 0);
-
-    for (size_t targetFrame = 0; targetFrame < targetFrames; ++targetFrame) {
+    std::vector<double> mapped(targetChannels, 0.0);
+    for (size_t sourceFrame = 0; sourceFrame < packetFrames; ++sourceFrame) {
+        for (UINT32 channel = 0; channel < targetChannels; ++channel) {
+            mapped[channel] = readMappedChannel(
+                source, sourceFormat, sourceFrame, channel, targetChannels);
+        }
+        decimator.appendInterpolationFrame(mapped.data(), targetChannels);
+    }
+    const uint64_t emittedBefore = decimator.interpolationEmittedFrames();
+    const uint64_t emittableNow = decimator.interpolationEmittableFrames();
+    if (emittableNow < emittedBefore ||
+        emittableNow - emittedBefore > static_cast<uint64_t>(SIZE_MAX) / targetFormat.blockAlign) {
+        destination.clear();
+        return;
+    }
+    const size_t newFrames = static_cast<size_t>(emittableNow - emittedBefore);
+    destination.assign(newFrames * targetFormat.blockAlign, 0);
+    // The old loop, verbatim except that j is the ABSOLUTE stream output index
+    // and a/b come from the state's retained (channel-mapped, unscaled) frames
+    // instead of a packet-local buffer.
+    const size_t lastSourceFrame = static_cast<size_t>(decimator.interpolationInputFrames() - 1);
+    for (uint64_t targetFrame = emittedBefore; targetFrame < emittableNow; ++targetFrame) {
         const double sourcePosition = static_cast<double>(targetFrame) / rateRatio;
-        const size_t sourceFrame = std::min(sourceFrames - 1, static_cast<size_t>(sourcePosition));
-        const size_t nextFrame = std::min(sourceFrames - 1, sourceFrame + 1);
+        const size_t sourceFrame = std::min(lastSourceFrame, static_cast<size_t>(sourcePosition));
+        const size_t nextFrame = std::min(lastSourceFrame, sourceFrame + 1);
         const double frac = sourcePosition - static_cast<double>(sourceFrame);
-        for (UINT32 channel = 0; channel < targetFormat.channels; ++channel) {
-            const double a = readMappedChannel(
-                source, sourceFormat, sourceFrame, channel, targetFormat.channels);
-            const double b = readMappedChannel(
-                source, sourceFormat, nextFrame, channel, targetFormat.channels);
+        for (UINT32 channel = 0; channel < targetChannels; ++channel) {
+            const double a = decimator.interpolationRetainedSample(sourceFrame, channel);
+            const double b = decimator.interpolationRetainedSample(nextFrame, channel);
             writeSampleFromDouble(
                 destination.data(),
                 targetFormat,
-                targetFrame,
+                static_cast<size_t>(targetFrame - emittedBefore),
                 channel,
                 (a + (b - a) * frac) * gain);
         }
     }
+    decimator.noteInterpolationEmitted(emittableNow);
+    decimator.trimInterpolationHistory();
+}
+
+void finalizeAudioConversion(
+    const AudioInputFormat& targetFormat,
+    double gain,
+    std::vector<BYTE>& destination,
+    AudioDecimatorState& decimator) {
+    // Only the non-integer interpolation stream has a deferred tail. Same-rate
+    // conversion emitted everything immediately and the integer/same-format
+    // paths keep their own accounting, so for those this is a no-op that must
+    // not touch their remainder/history behavior.
+    if (!decimator.interpolationActive() || decimator.interpolationFinalized()) {
+        return;
+    }
+    const uint64_t inputFrames = decimator.interpolationInputFrames();
+    const uint64_t totalFrames = decimator.interpolationTotalFrames();
+    const uint64_t emittedFrames = decimator.interpolationEmittedFrames();
+    if (inputFrames == 0 || totalFrames <= emittedFrames) {
+        // An empty stream (or one that owes nothing) finalizes to no bytes.
+        decimator.markInterpolationFinalized();
+        return;
+    }
+    if (targetFormat.blockAlign == 0 || targetFormat.channels == 0 ||
+        totalFrames - emittedFrames > static_cast<uint64_t>(SIZE_MAX) / targetFormat.blockAlign) {
+        decimator.markInterpolationFinalized();
+        return;
+    }
+    const size_t tailFrames = static_cast<size_t>(totalFrames - emittedFrames);
+    const size_t tailBytes = tailFrames * targetFormat.blockAlign;
+    const size_t existingBytes = destination.size();
+    const size_t existingFrames = existingBytes / targetFormat.blockAlign;
+    destination.resize(existingBytes + tailBytes, 0);
+    // The pre-fix whole-stream computation, verbatim: absolute j, endpoint
+    // clamp at the stream's last input frame, the same interpolation
+    // expression and operation order as the old one-shot conversion.
+    const size_t lastSourceFrame = static_cast<size_t>(inputFrames - 1);
+    const double rateRatio = decimator.interpolationRateRatio();
+    for (uint64_t targetFrame = emittedFrames; targetFrame < totalFrames; ++targetFrame) {
+        const double sourcePosition = static_cast<double>(targetFrame) / rateRatio;
+        const size_t sourceFrame = std::min(lastSourceFrame, static_cast<size_t>(sourcePosition));
+        const size_t nextFrame = std::min(lastSourceFrame, sourceFrame + 1);
+        const double frac = sourcePosition - static_cast<double>(sourceFrame);
+        for (UINT32 channel = 0; channel < targetFormat.channels; ++channel) {
+            const double a = decimator.interpolationRetainedSample(sourceFrame, channel);
+            const double b = decimator.interpolationRetainedSample(nextFrame, channel);
+            writeSampleFromDouble(
+                destination.data(),
+                targetFormat,
+                existingFrames + static_cast<size_t>(targetFrame - emittedFrames),
+                channel,
+                (a + (b - a) * frac) * gain);
+        }
+    }
+    decimator.noteInterpolationEmitted(totalFrames);
+    decimator.markInterpolationFinalized();
 }
 
 void mixAudioInPlace(
@@ -636,6 +1036,16 @@ void AudioMixer::append(
     AudioDecimatorState& decimator) {
     if (!data || byteCount == 0) {
         return;
+    }
+
+    // A starved source resuming is a real-time discontinuity: the starved
+    // branch below re-anchors its packet at now, after padding silence. The
+    // cross-packet interpolation stream must not complete deferred windows
+    // across the gap with retained pre-gap samples. Integer decimation and
+    // every non-interpolating state keep their pre-existing cross-gap
+    // behavior; abandonInterpolation() is a no-op there.
+    if (starved) {
+        decimator.abandonInterpolation();
     }
 
     convertAudioWithGain(data, byteCount, sourceFormat, format_, gain, gainBuffer_, decimator);

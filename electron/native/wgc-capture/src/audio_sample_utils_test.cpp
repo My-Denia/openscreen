@@ -20,6 +20,30 @@
 #include <utility>
 #include <vector>
 
+#ifndef OS920_PRISTINE_REGRESSION
+// Test-only line of sight into AudioMixer's queues, via the narrow friendship
+// declared in the fixed header (which names ::AudioMixerTestAccess, hence the
+// global scope). Defined only in this translation unit; no production API.
+struct AudioMixerTestAccess {
+    static const std::vector<BYTE>& systemQueue(const AudioMixer& mixer) {
+        return mixer.systemQueue_;
+    }
+    static const std::vector<BYTE>& microphoneQueue(const AudioMixer& mixer) {
+        return mixer.microphoneQueue_;
+    }
+    // P2 starvation-resume tests: put the mixer into exactly the state pop()
+    // leaves it in when a source queue runs dry in production, without
+    // driving the threaded mixLoop. Read path only for the queues; these
+    // setters are the one deliberate state injection.
+    static void setSystemStarved(AudioMixer& mixer, bool starved) {
+        mixer.systemStarved_ = starved;
+    }
+    static void setMicrophoneStarved(AudioMixer& mixer, bool starved) {
+        mixer.microphoneStarved_ = starved;
+    }
+};
+#endif  // !OS920_PRISTINE_REGRESSION
+
 namespace {
 
 int g_ran = 0;
@@ -213,9 +237,1352 @@ HRESULT trySetAacPcmRateWithVideo(UINT32 sampleRate) {
     return hr;
 }
 
+// --- issue #920, item 24: packet-boundary continuity of non-integer resampling
+//
+// The non-integer branch of convertAudioWithGain used to reset its state and
+// restart its phase at every packet, so the same signal produced different
+// output depending on where the packet boundaries fell (14720 vs 14700 frames
+// for a 16000-frame 48 kHz -> 44.1 kHz stream in 100-frame packets). These
+// tests pin the fixed contract:
+//
+//   * identical input prefixes produce identical output prefixes regardless
+//     of the partition, and a finalized stream equals the one-shot conversion
+//     byte for byte at the globally rounded frame count;
+//   * exact-multiple geometry (160/480-frame packets at 48 kHz -> 44.1 kHz)
+//     keeps its old bytes: packetized output equals both the one-shot
+//     conversion and a test-only reference that replicates the pre-fix
+//     whole-stream arithmetic;
+//   * the deferral ahead of finalization is bounded (<= 2 output frames for
+//     48 kHz <-> 44.1 kHz; the general bound is ceil(T/S + 1/2));
+//   * same-rate cross-subtype conversion (the production microphone shape)
+//     emits every frame immediately, so per-packet output counts match the old
+//     converter and nothing is held back;
+//   * the mixer keeps independent per-stream resampler state across
+//     pause/resume.
+//
+// Under OS920_PRISTINE_REGRESSION this file is compiled beside the PRISTINE
+// (pre-fix) header and implementation: everything that needs the fixed header
+// -- finalizeAudioConversion, the interpolation-state accessors and the
+// AudioMixerTestAccess mixer tests -- is compiled out, and what remains fails
+// the old code by assertion (build exit 0, test exit 1) while the exact-
+// multiple (B/C) and same-rate controls still pass on it.
+
+std::vector<BYTE> monoFloatSine(UINT32 rate, double freq, double amplitude, size_t frames) {
+    std::vector<BYTE> bytes(frames * 4, 0);
+    auto* samples = reinterpret_cast<float*>(bytes.data());
+    for (size_t i = 0; i < frames; i += 1) {
+        samples[i] = static_cast<float>(
+            amplitude * std::sin(2.0 * kTestPi * freq * static_cast<double>(i) / rate));
+    }
+    return bytes;
+}
+
+// A different frequency per channel, so a channel-mapping or gain-order
+// regression cannot hide behind identical channels.
+std::vector<BYTE> stereoFloatDualSine(
+    UINT32 rate, double leftHz, double rightHz, double amplitude, size_t frames) {
+    std::vector<BYTE> bytes(frames * 8, 0);
+    auto* samples = reinterpret_cast<float*>(bytes.data());
+    for (size_t i = 0; i < frames; i += 1) {
+        const double t = static_cast<double>(i) / rate;
+        samples[i * 2] = static_cast<float>(amplitude * std::sin(2.0 * kTestPi * leftHz * t));
+        samples[i * 2 + 1] = static_cast<float>(amplitude * std::sin(2.0 * kTestPi * rightHz * t));
+    }
+    return bytes;
+}
+
+// Abrupt level changes and zero stretches: a smooth sine lets a boundary
+// error hide inside interpolation error, an abrupt change cannot.
+std::vector<BYTE> monoFloatAbrupt(UINT32 rate, size_t frames) {
+    std::vector<BYTE> bytes(frames * 4, 0);
+    auto* samples = reinterpret_cast<float*>(bytes.data());
+    for (size_t i = 0; i < frames; i += 1) {
+        const size_t phase = i % 1000;
+        double v = 0.0;
+        if (phase < 250) {
+            v = 0.9;
+        } else if (phase < 500) {
+            v = 0.0;
+        } else if (phase < 750) {
+            v = -0.8;
+        } else {
+            v = 0.4 * std::sin(2.0 * kTestPi * 3000.0 * static_cast<double>(i) / rate);
+        }
+        samples[i] = static_cast<float>(v);
+    }
+    return bytes;
+}
+
+// Test-only reference: the PRE-FIX whole-stream (one-shot) conversion,
+// replicated here so expected bytes come from the documented old arithmetic --
+// per-stream llround frame count, endpoint clamp at the last source frame,
+// linear interpolation with the old operation order, the old PCM16/float
+// quantization and clamping -- and never from the converter under test.
+// Sources are float32 (mono or stereo); targets PCM16 or float32, mono or
+// stereo.
+namespace legacy {
+
+double readSample(const BYTE* src, const AudioInputFormat& f, size_t frame, UINT32 ch) {
+    const size_t offset = frame * f.blockAlign + ch * (f.bitsPerSample / 8);
+    return static_cast<double>(*reinterpret_cast<const float*>(src + offset));
+}
+
+double mappedChannel(
+    const BYTE* src, const AudioInputFormat& f, size_t frame, UINT32 targetCh, UINT32 targetChannels) {
+    if (f.channels == 0) {
+        return 0.0;
+    }
+    if (f.channels == targetChannels && targetCh < f.channels) {
+        return readSample(src, f, frame, targetCh);
+    }
+    if (f.channels == 1) {
+        return readSample(src, f, frame, 0);
+    }
+    if (targetChannels == 1) {
+        double sum = 0.0;
+        for (UINT32 ch = 0; ch < f.channels; ++ch) {
+            sum += readSample(src, f, frame, ch);
+        }
+        return sum / f.channels;
+    }
+    return readSample(src, f, frame, std::min(targetCh, f.channels - 1));
+}
+
+void writeSample(BYTE* dst, const AudioInputFormat& f, size_t frame, UINT32 ch, double value) {
+    const double clamped = std::clamp(value, -1.0, 1.0);
+    const size_t offset = frame * f.blockAlign + ch * (f.bitsPerSample / 8);
+    if (f.subtype == MFAudioFormat_Float && f.bitsPerSample == 32) {
+        *reinterpret_cast<float*>(dst + offset) = static_cast<float>(clamped);
+        return;
+    }
+    *reinterpret_cast<int16_t*>(dst + offset) = static_cast<int16_t>(
+        std::clamp(std::round(clamped * 32767.0), -32768.0, 32767.0));
+}
+
+std::vector<BYTE> oneShot(
+    const std::vector<BYTE>& input,
+    const AudioInputFormat& src,
+    const AudioInputFormat& dst,
+    double gain) {
+    const size_t sourceFrames = input.size() / src.blockAlign;
+    if (sourceFrames == 0) {
+        return {};
+    }
+    const double rateRatio = static_cast<double>(dst.sampleRate) / static_cast<double>(src.sampleRate);
+    const size_t targetFrames = std::max<size_t>(
+        1, static_cast<size_t>(std::llround(static_cast<double>(sourceFrames) * rateRatio)));
+    std::vector<BYTE> out(targetFrames * dst.blockAlign, 0);
+    for (size_t j = 0; j < targetFrames; ++j) {
+        const double sourcePosition = static_cast<double>(j) / rateRatio;
+        const size_t sourceFrame = std::min(sourceFrames - 1, static_cast<size_t>(sourcePosition));
+        const size_t nextFrame = std::min(sourceFrames - 1, sourceFrame + 1);
+        const double frac = sourcePosition - static_cast<double>(sourceFrame);
+        for (UINT32 ch = 0; ch < dst.channels; ++ch) {
+            const double a = mappedChannel(input.data(), src, sourceFrame, ch, dst.channels);
+            const double b = mappedChannel(input.data(), src, nextFrame, ch, dst.channels);
+            writeSample(out.data(), dst, j, ch, (a + (b - a) * frac) * gain);
+        }
+    }
+    return out;
+}
+
+}  // namespace legacy
+
+// Expected global counts, computed test-side with plain 64-bit integer
+// arithmetic (fixture magnitudes sit far below any overflow):
+// K(N) = max(1, round_half_up(N*T/S)) and C(N) = min(K(N), ceil((N-1)*T/S)),
+// with C(N) = K(N) when the rates are equal (immediate emission). These are
+// the documented quota definitions, applied independently of the converter.
+uint64_t ratioRoundHalfUp(uint64_t n, uint64_t t, uint64_t s) {
+    return (2 * n * t + s) / (2 * s);
+}
+
+uint64_t ratioCeil(uint64_t m, uint64_t t, uint64_t s) {
+    return (m * t + s - 1) / s;
+}
+
+uint64_t expectedQuota(uint64_t inputFrames, UINT32 sourceRate, UINT32 targetRate) {
+    const uint64_t k = ratioRoundHalfUp(inputFrames, targetRate, sourceRate);
+    return k < 1 ? 1 : k;
+}
+
+uint64_t expectedEmittable(uint64_t inputFrames, UINT32 sourceRate, UINT32 targetRate) {
+    const uint64_t k = expectedQuota(inputFrames, sourceRate, targetRate);
+    if (sourceRate == targetRate) {
+        return k;
+    }
+    const uint64_t c = ratioCeil(inputFrames - 1, targetRate, sourceRate);
+    return c < k ? c : k;
+}
+
+// ceil(T/S + 1/2): the general deferral bound for a rate pair.
+size_t pendingBoundFor(UINT32 sourceRate, UINT32 targetRate) {
+    return static_cast<size_t>((2 * uint64_t(targetRate) + sourceRate + 2 * uint64_t(sourceRate) - 1) /
+        (2 * uint64_t(sourceRate)));
+}
+
+// ceil(S/(2T)) + 2: the conservative retained-history bound once a packet's
+// emission has settled (one frame of the allowance is for the legacy
+// double-precision index calculation).
+size_t retainedBoundFor(UINT32 sourceRate, UINT32 targetRate) {
+    return static_cast<size_t>((uint64_t(sourceRate) + 2 * targetRate - 1) / (2 * uint64_t(targetRate))) + 2;
+}
+
+struct PartitionRun {
+    std::vector<BYTE> output;
+    std::vector<size_t> perPacketFrames;
+};
+
+// Feeds `input` through the STATEFUL converter in packets whose sizes cycle
+// through `sizes` (the last packet may be partial). With finalizeAtEnd the
+// deferred tail is flushed through finalizeAudioConversion (fixed builds
+// only; the pristine build has no finalizer and its packetized output is
+// already its full output).
+PartitionRun runPartitioned(
+    const std::vector<BYTE>& input,
+    const AudioInputFormat& src,
+    const AudioInputFormat& dst,
+    double gain,
+    const std::vector<size_t>& sizes,
+    size_t totalFrames,
+    bool finalizeAtEnd) {
+    PartitionRun run;
+    AudioDecimatorState state;
+    std::vector<BYTE> piece;
+    size_t cursor = 0;
+    size_t index = 0;
+    while (cursor < totalFrames) {
+        const size_t frames = std::min(sizes[index % sizes.size()], totalFrames - cursor);
+        index += 1;
+        convertAudioWithGain(
+            input.data() + cursor * src.blockAlign,
+            static_cast<DWORD>(frames * src.blockAlign),
+            src,
+            dst,
+            gain,
+            piece,
+            state);
+        run.perPacketFrames.push_back(dst.blockAlign == 0 ? 0 : piece.size() / dst.blockAlign);
+        run.output.insert(run.output.end(), piece.begin(), piece.end());
+        cursor += frames;
+    }
+#ifndef OS920_PRISTINE_REGRESSION
+    if (finalizeAtEnd) {
+        piece.clear();
+        finalizeAudioConversion(dst, gain, piece, state);
+        if (!piece.empty()) {
+            run.perPacketFrames.back() += dst.blockAlign == 0 ? 0 : piece.size() / dst.blockAlign;
+            run.output.insert(run.output.end(), piece.begin(), piece.end());
+        }
+    }
+#else
+    (void)finalizeAtEnd;
+#endif
+    return run;
+}
+
+bool isBytePrefix(const std::vector<BYTE>& prefix, const std::vector<BYTE>& whole) {
+    return prefix.size() <= whole.size() &&
+        std::equal(prefix.begin(), prefix.end(), whole.begin());
+}
+
+std::string frameCountOf(const std::vector<BYTE>& bytes, const AudioInputFormat& f) {
+    return std::to_string(f.blockAlign == 0 ? 0 : bytes.size() / f.blockAlign);
+}
+
+void runResampleContinuityCoreTests() {
+    const AudioInputFormat src48f = makeFormat(MFAudioFormat_Float, 48000, 1, 32);
+    const AudioInputFormat dst44p = makeFormat(MFAudioFormat_PCM, 44100, 1, 16);
+    const AudioInputFormat src44f = makeFormat(MFAudioFormat_Float, 44100, 1, 32);
+    const AudioInputFormat dst48p = makeFormat(MFAudioFormat_PCM, 48000, 1, 16);
+    const std::vector<size_t> raggedSizes = {1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 100, 159, 160, 480};
+
+    const std::vector<BYTE> signalA = monoFloatSine(48000, 997.0, 0.5, 16000);
+    const std::vector<BYTE> signalD = monoFloatSine(44100, 997.0, 0.5, 14700);
+    std::vector<BYTE> oneA;
+    convertAudioWithGain(
+        signalA.data(), static_cast<DWORD>(signalA.size()), src48f, dst44p, 1.0, oneA);
+    std::vector<BYTE> oneD;
+    convertAudioWithGain(
+        signalD.data(), static_cast<DWORD>(signalD.size()), src44f, dst48p, 1.0, oneD);
+
+    // The one-shot conversions must keep their old bytes, checked against the
+    // test-only legacy reference -- never against a packetized path.
+    expect(
+        "os920-a-one-shot-matches-legacy-reference",
+        oneA == legacy::oneShot(signalA, src48f, dst44p, 1.0),
+        "frames=" + frameCountOf(oneA, dst44p));
+    expect(
+        "os920-d-one-shot-matches-legacy-reference",
+        oneD == legacy::oneShot(signalD, src44f, dst48p, 1.0),
+        "frames=" + frameCountOf(oneD, dst48p));
+
+    // A: 48 kHz -> 44.1 kHz in 100-frame packets (91.875 expected frames per
+    // packet; the old per-packet llround made 92, +0.125 frames/packet).
+    {
+        const PartitionRun run = runPartitioned(signalA, src48f, dst44p, 1.0, {100}, 16000, false);
+        expect(
+            "os920-a-packetized-prefix-matches-one-shot",
+            isBytePrefix(run.output, oneA),
+            "frames=" + frameCountOf(run.output, dst44p) + " of " + frameCountOf(oneA, dst44p));
+        expect(
+            "os920-a-packetized-frame-count",
+            run.output.size() / dst44p.blockAlign == 14700,
+            "frames=" + frameCountOf(run.output, dst44p));
+    }
+
+    // Controls B/C: exact-multiple geometry keeps the old bytes, packetized
+    // equal to one-shot AND to the legacy reference.
+    {
+        const PartitionRun b = runPartitioned(signalA, src48f, dst44p, 1.0, {160}, 16000, false);
+        expect(
+            "os920-b-160-frame-packets-equal-one-shot",
+            b.output == oneA,
+            "frames=" + frameCountOf(b.output, dst44p));
+        expect(
+            "os920-b-160-frame-packets-match-legacy-reference",
+            b.output == legacy::oneShot(signalA, src48f, dst44p, 1.0),
+            "frames=" + frameCountOf(b.output, dst44p));
+        const PartitionRun c = runPartitioned(signalA, src48f, dst44p, 1.0, {480}, 16000, false);
+        expect(
+            "os920-c-480-frame-packets-equal-one-shot",
+            c.output == oneA,
+            "frames=" + frameCountOf(c.output, dst44p));
+        expect(
+            "os920-c-480-frame-packets-match-legacy-reference",
+            c.output == legacy::oneShot(signalA, src48f, dst44p, 1.0),
+            "frames=" + frameCountOf(c.output, dst44p));
+    }
+
+    // D: 44.1 kHz -> 48 kHz upsample in 100-frame packets (108.844 expected
+    // frames per packet; the old rounding error here is ~0.1565 frames/packet,
+    // a different geometry from A's).
+    {
+        const PartitionRun d = runPartitioned(signalD, src44f, dst48p, 1.0, {100}, 14700, false);
+        expect(
+            "os920-d-packetized-prefix-matches-one-shot",
+            isBytePrefix(d.output, oneD),
+            "frames=" + frameCountOf(d.output, dst48p) + " of " + frameCountOf(oneD, dst48p));
+    }
+
+    // Ragged streams in both directions over a deliberately non-ratio-aligned
+    // total, with abrupt changes and zero stretches so boundary errors cannot
+    // hide in a smooth sine.
+    {
+        const std::vector<BYTE> rag48 = monoFloatAbrupt(48000, 7777);
+        const std::vector<BYTE> rag44 = monoFloatAbrupt(44100, 7777);
+        std::vector<BYTE> oneR48;
+        convertAudioWithGain(
+            rag48.data(), static_cast<DWORD>(rag48.size()), src48f, dst44p, 1.0, oneR48);
+        std::vector<BYTE> oneR44;
+        convertAudioWithGain(
+            rag44.data(), static_cast<DWORD>(rag44.size()), src44f, dst48p, 1.0, oneR44);
+        const PartitionRun r1 = runPartitioned(rag48, src48f, dst44p, 1.0, raggedSizes, 7777, false);
+        expect(
+            "os920-ragged-48-to-44-prefix-matches-one-shot",
+            isBytePrefix(r1.output, oneR48),
+            "frames=" + frameCountOf(r1.output, dst44p) + " of " + frameCountOf(oneR48, dst44p));
+        const PartitionRun r2 = runPartitioned(rag44, src44f, dst48p, 1.0, raggedSizes, 7777, false);
+        expect(
+            "os920-ragged-44-to-48-prefix-matches-one-shot",
+            isBytePrefix(r2.output, oneR44),
+            "frames=" + frameCountOf(r2.output, dst48p) + " of " + frameCountOf(oneR44, dst48p));
+    }
+
+    // Rounding and endpoint totals: one-frame packets across totals that
+    // bracket the rounding boundaries. The old per-packet minimum of one frame
+    // accumulated (80 one-frame packets at 48 kHz -> 44.1 kHz produced 80
+    // frames for a 74-frame stream); the fixed converter owes only the global
+    // quota, and every emitted frame must sit at its absolute stream position.
+    {
+        const size_t totals[] = {1, 2, 3, 79, 80, 81, 99, 100, 101, 159, 160, 161};
+        const std::vector<BYTE> master48 = monoFloatSine(48000, 997.0, 0.5, 161);
+        const std::vector<BYTE> master44 = monoFloatSine(44100, 997.0, 0.5, 161);
+        bool ok48 = true;
+        bool ok44 = true;
+        std::string detail48;
+        std::string detail44;
+        for (size_t n : totals) {
+            std::vector<BYTE> in48(
+                master48.begin(), master48.begin() + static_cast<std::ptrdiff_t>(n) * src48f.blockAlign);
+            std::vector<BYTE> one;
+            convertAudioWithGain(
+                in48.data(), static_cast<DWORD>(in48.size()), src48f, dst44p, 1.0, one);
+            const PartitionRun run = runPartitioned(in48, src48f, dst44p, 1.0, {1}, n, false);
+            if (!isBytePrefix(run.output, one)) {
+                ok48 = false;
+                detail48 += "n" + std::to_string(n) + ":" + frameCountOf(run.output, dst44p) +
+                    "/" + frameCountOf(one, dst44p) + " ";
+            }
+            std::vector<BYTE> in44(
+                master44.begin(), master44.begin() + static_cast<std::ptrdiff_t>(n) * src44f.blockAlign);
+            std::vector<BYTE> oneUp;
+            convertAudioWithGain(
+                in44.data(), static_cast<DWORD>(in44.size()), src44f, dst48p, 1.0, oneUp);
+            const PartitionRun runUp = runPartitioned(in44, src44f, dst48p, 1.0, {1}, n, false);
+            if (!isBytePrefix(runUp.output, oneUp)) {
+                ok44 = false;
+                detail44 += "n" + std::to_string(n) + ":" + frameCountOf(runUp.output, dst48p) +
+                    "/" + frameCountOf(oneUp, dst48p) + " ";
+            }
+        }
+        expect("os920-rounding-totals-1-frame-packets-prefix-48-to-44", ok48, detail48);
+        expect("os920-rounding-totals-1-frame-packets-prefix-44-to-48", ok44, detail44);
+    }
+
+    // Formats and gain: distinct-channel float32 input, PCM16 and float32
+    // targets, fixed gains 1.0 and 0.5, stereo->stereo, stereo->mono downmix
+    // and mono->stereo upmix, all through ragged packets of a non-integer
+    // ratio. Partition equality must hold without altered mapping, gain order
+    // or clipping.
+    {
+        const AudioInputFormat src44stereo = makeFormat(MFAudioFormat_Float, 44100, 2, 32);
+        const std::vector<BYTE> stereo = stereoFloatDualSine(44100, 997.0, 501.0, 0.5, 3000);
+        struct FormatCase {
+            const char* name;
+            AudioInputFormat dst;
+            double gain;
+        };
+        const FormatCase cases[] = {
+            {"pcm16-stereo", makeFormat(MFAudioFormat_PCM, 48000, 2, 16), 1.0},
+            {"pcm16-stereo-half-gain", makeFormat(MFAudioFormat_PCM, 48000, 2, 16), 0.5},
+            {"float32-stereo", makeFormat(MFAudioFormat_Float, 48000, 2, 32), 1.0},
+            {"pcm16-mono-downmix", makeFormat(MFAudioFormat_PCM, 48000, 1, 16), 1.0},
+            {"pcm16-mono-downmix-half-gain", makeFormat(MFAudioFormat_PCM, 48000, 1, 16), 0.5},
+        };
+        bool allPrefix = true;
+        bool allRef = true;
+        std::string detail;
+        for (const FormatCase& c : cases) {
+            std::vector<BYTE> one;
+            convertAudioWithGain(
+                stereo.data(), static_cast<DWORD>(stereo.size()), src44stereo, c.dst, c.gain, one);
+            const PartitionRun run =
+                runPartitioned(stereo, src44stereo, c.dst, c.gain, raggedSizes, 3000, false);
+            if (!isBytePrefix(run.output, one)) {
+                allPrefix = false;
+                detail += std::string(c.name) + ":" + frameCountOf(run.output, c.dst) + "/" +
+                    frameCountOf(one, c.dst) + " ";
+            }
+            if (one != legacy::oneShot(stereo, src44stereo, c.dst, c.gain)) {
+                allRef = false;
+                detail += std::string(c.name) + ":ref ";
+            }
+        }
+        expect("os920-formats-gain-ragged-prefix-matches-one-shot", allPrefix, detail);
+        expect("os920-formats-gain-one-shot-matches-legacy-reference", allRef, detail);
+
+        const std::vector<BYTE> mono = monoFloatSine(44100, 777.0, 0.5, 2500);
+        const AudioInputFormat dstStereoUp = makeFormat(MFAudioFormat_PCM, 48000, 2, 16);
+        std::vector<BYTE> oneUp;
+        convertAudioWithGain(
+            mono.data(), static_cast<DWORD>(mono.size()), src44f, dstStereoUp, 1.0, oneUp);
+        const PartitionRun runUp =
+            runPartitioned(mono, src44f, dstStereoUp, 1.0, raggedSizes, 2500, false);
+        expect(
+            "os920-mono-to-stereo-ragged-prefix-matches-one-shot",
+            isBytePrefix(runUp.output, oneUp),
+            "frames=" + frameCountOf(runUp.output, dstStereoUp) + " of " +
+                frameCountOf(oneUp, dstStereoUp));
+        expect(
+            "os920-mono-to-stereo-one-shot-matches-legacy-reference",
+            oneUp == legacy::oneShot(mono, src44f, dstStereoUp, 1.0),
+            "frames=" + frameCountOf(oneUp, dstStereoUp));
+    }
+
+    // Same-rate cross-subtype conversion (the production microphone shape:
+    // WASAPI float32 against a PCM16 target fails sameAudioFormatForMixing on
+    // subtype alone). The packetized stream equals the one-shot conversion
+    // byte for byte -- on the fixed build because same-rate frames emit
+    // immediately, and on the old build because each packet's local phase
+    // restart is exact here (frac == 0). Per-packet counts must equal the old
+    // converter's own (480 frames out per 480 in, on both builds).
+    {
+        const AudioInputFormat src48stereo = makeFormat(MFAudioFormat_Float, 48000, 2, 32);
+        const AudioInputFormat dst48pcm = makeFormat(MFAudioFormat_PCM, 48000, 2, 16);
+        const std::vector<BYTE> mic = stereoFloatDualSine(48000, 997.0, 503.0, 0.5, 5000);
+        std::vector<BYTE> one;
+        convertAudioWithGain(
+            mic.data(), static_cast<DWORD>(mic.size()), src48stereo, dst48pcm, 1.0, one);
+        const PartitionRun rag =
+            runPartitioned(mic, src48stereo, dst48pcm, 1.0, raggedSizes, 5000, false);
+        expect(
+            "os920-same-rate-packetized-equals-one-shot",
+            rag.output == one,
+            "frames=" + frameCountOf(rag.output, dst48pcm));
+        expect(
+            "os920-same-rate-one-shot-matches-legacy-reference",
+            one == legacy::oneShot(mic, src48stereo, dst48pcm, 1.0),
+            "frames=" + frameCountOf(one, dst48pcm));
+        const PartitionRun p480 = runPartitioned(mic, src48stereo, dst48pcm, 1.0, {480}, 5000, false);
+        bool countsOk = p480.perPacketFrames.size() == 11;
+        for (size_t i = 0; countsOk && i < p480.perPacketFrames.size(); i += 1) {
+            countsOk = p480.perPacketFrames[i] == (i < 10 ? 480 : 200);
+        }
+        expect(
+            "os920-same-rate-per-packet-counts-match-old-converter",
+            countsOk,
+            "packets=" + std::to_string(p480.perPacketFrames.size()));
+    }
+}
+
+#ifndef OS920_PRISTINE_REGRESSION
+void runResampleContinuityFixedTests() {
+    const AudioInputFormat src48f = makeFormat(MFAudioFormat_Float, 48000, 1, 32);
+    const AudioInputFormat dst44p = makeFormat(MFAudioFormat_PCM, 44100, 1, 16);
+    const AudioInputFormat src44f = makeFormat(MFAudioFormat_Float, 44100, 1, 32);
+    const AudioInputFormat dst48p = makeFormat(MFAudioFormat_PCM, 48000, 1, 16);
+    const std::vector<size_t> raggedSizes = {1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 100, 159, 160, 480};
+
+    const std::vector<BYTE> signalA = monoFloatSine(48000, 997.0, 0.5, 16000);
+    const std::vector<BYTE> signalD = monoFloatSine(44100, 997.0, 0.5, 14700);
+    std::vector<BYTE> oneA;
+    convertAudioWithGain(
+        signalA.data(), static_cast<DWORD>(signalA.size()), src48f, dst44p, 1.0, oneA);
+    std::vector<BYTE> oneD;
+    convertAudioWithGain(
+        signalD.data(), static_cast<DWORD>(signalD.size()), src44f, dst48p, 1.0, oneD);
+
+    // A: intermediate-prefix accounting and the bounds after EVERY packet, not
+    // just at stream end; then byte equality with the one-shot conversion
+    // (case A has no tail: C(16000) == K(16000) == 14700).
+    {
+        const UINT32 S = 48000;
+        const UINT32 T = 44100;
+        const size_t pendingBound = pendingBoundFor(S, T);
+        const size_t retainedBound = retainedBoundFor(S, T);
+        AudioDecimatorState state;
+        std::vector<BYTE> piece;
+        std::vector<BYTE> all;
+        size_t cumulative = 0;
+        bool okCounts = true;
+        bool okPending = true;
+        bool okRetained = true;
+        uint64_t worstPending = 0;
+        std::string detail;
+        for (size_t packet = 0; packet < 160; packet += 1) {
+            convertAudioWithGain(
+                signalA.data() + packet * 100 * src48f.blockAlign,
+                static_cast<DWORD>(100 * src48f.blockAlign),
+                src48f,
+                dst44p,
+                1.0,
+                piece,
+                state);
+            cumulative += piece.size() / dst44p.blockAlign;
+            all.insert(all.end(), piece.begin(), piece.end());
+            const uint64_t n = static_cast<uint64_t>(packet + 1) * 100;
+            const uint64_t wantC = expectedEmittable(n, S, T);
+            if (cumulative != wantC) {
+                okCounts = false;
+                detail += "n" + std::to_string(n) + " got " + std::to_string(cumulative) + " want " +
+                    std::to_string(wantC) + " ";
+            }
+            worstPending = std::max(worstPending, state.interpolationPendingFrames());
+            okPending = okPending && state.interpolationPendingFrames() <= pendingBound;
+            okRetained = okRetained && state.interpolationRetainedFrames() <= retainedBound;
+        }
+        detail += "worstPending=" + std::to_string(worstPending);
+        expect("os920-a-intermediate-prefix-accounting", okCounts, detail);
+        expect("os920-a-pending-output-bound", okPending, detail);
+        expect("os920-a-retained-history-bound", okRetained, detail);
+        std::vector<BYTE> tail;
+        finalizeAudioConversion(dst44p, 1.0, tail, state);
+        all.insert(all.end(), tail.begin(), tail.end());
+        expect(
+            "os920-a-unfinalized-14700-and-finalize-empty-equals-one-shot",
+            cumulative == 14700 && tail.empty() && all == oneA,
+            "cumulative=" + std::to_string(cumulative) + " tail=" + std::to_string(tail.size()));
+    }
+
+    // D: the same walk; the documented 15999-frame unfinalized prefix and the
+    // 16000-frame finalized equality, plus the finalization lifecycle.
+    {
+        const UINT32 S = 44100;
+        const UINT32 T = 48000;
+        const size_t pendingBound = pendingBoundFor(S, T);
+        const size_t retainedBound = retainedBoundFor(S, T);
+        AudioDecimatorState state;
+        std::vector<BYTE> piece;
+        std::vector<BYTE> all;
+        size_t cumulative = 0;
+        bool okCounts = true;
+        bool okPending = true;
+        bool okRetained = true;
+        std::string detail;
+        for (size_t packet = 0; packet < 147; packet += 1) {
+            convertAudioWithGain(
+                signalD.data() + packet * 100 * src44f.blockAlign,
+                static_cast<DWORD>(100 * src44f.blockAlign),
+                src44f,
+                dst48p,
+                1.0,
+                piece,
+                state);
+            cumulative += piece.size() / dst48p.blockAlign;
+            all.insert(all.end(), piece.begin(), piece.end());
+            const uint64_t n = static_cast<uint64_t>(packet + 1) * 100;
+            const uint64_t wantC = expectedEmittable(n, S, T);
+            if (cumulative != wantC) {
+                okCounts = false;
+                detail += "n" + std::to_string(n) + " got " + std::to_string(cumulative) + " want " +
+                    std::to_string(wantC) + " ";
+            }
+            okPending = okPending && state.interpolationPendingFrames() <= pendingBound;
+            okRetained = okRetained && state.interpolationRetainedFrames() <= retainedBound;
+        }
+        expect("os920-d-intermediate-prefix-accounting", okCounts, detail);
+        expect("os920-d-pending-output-bound", okPending, detail);
+        expect("os920-d-retained-history-bound", okRetained, detail);
+        expect(
+            "os920-d-unfinalized-prefix-is-15999",
+            cumulative == 15999,
+            "cumulative=" + std::to_string(cumulative));
+        piece.clear();
+        finalizeAudioConversion(dst48p, 1.0, piece, state);
+        all.insert(all.end(), piece.begin(), piece.end());
+        expect(
+            "os920-d-finalized-equals-one-shot-16000",
+            piece.size() / dst48p.blockAlign == 1 && all.size() / dst48p.blockAlign == 16000 &&
+                all == oneD,
+            "tail=" + std::to_string(piece.size() / dst48p.blockAlign) + " total=" +
+                std::to_string(all.size() / dst48p.blockAlign));
+        // Repeated finalization returns no additional bytes.
+        std::vector<BYTE> again;
+        finalizeAudioConversion(dst48p, 1.0, again, state);
+        expect("os920-d-repeat-finalize-is-empty", again.empty(), "bytes=" + std::to_string(again.size()));
+        // A finalized stream refuses more input until reset() (or a fresh state).
+        std::vector<BYTE> more;
+        convertAudioWithGain(
+            signalD.data(), static_cast<DWORD>(300 * src44f.blockAlign), src44f, dst48p, 1.0, more,
+            state);
+        expect(
+            "os920-d-finalized-refuses-input",
+            more.empty(),
+            "bytes=" + std::to_string(more.size()));
+        // reset() re-enables a fresh stream, equal to a cold state's conversion
+        // of the same packets.
+        state.reset();
+        std::vector<BYTE> afterReset;
+        size_t cursor = 0;
+        for (int i = 0; i < 3; i += 1) {
+            convertAudioWithGain(
+                signalD.data() + cursor * src44f.blockAlign,
+                static_cast<DWORD>(100 * src44f.blockAlign),
+                src44f,
+                dst48p,
+                1.0,
+                piece,
+                state);
+            afterReset.insert(afterReset.end(), piece.begin(), piece.end());
+            cursor += 100;
+        }
+        AudioDecimatorState cold;
+        std::vector<BYTE> fromCold;
+        cursor = 0;
+        for (int i = 0; i < 3; i += 1) {
+            convertAudioWithGain(
+                signalD.data() + cursor * src44f.blockAlign,
+                static_cast<DWORD>(100 * src44f.blockAlign),
+                src44f,
+                dst48p,
+                1.0,
+                piece,
+                cold);
+            fromCold.insert(fromCold.end(), piece.begin(), piece.end());
+            cursor += 100;
+        }
+        expect(
+            "os920-d-reset-enables-fresh-stream",
+            afterReset == fromCold && !afterReset.empty(),
+            "reset=" + std::to_string(afterReset.size()) + " cold=" + std::to_string(fromCold.size()));
+    }
+
+    // Finalized equality across the remaining matrix: ragged streams in both
+    // directions, all rounding totals with one-frame packets, and every
+    // formats/gain case.
+    {
+        const std::vector<BYTE> rag48 = monoFloatAbrupt(48000, 7777);
+        const std::vector<BYTE> rag44 = monoFloatAbrupt(44100, 7777);
+        std::vector<BYTE> oneR48;
+        convertAudioWithGain(
+            rag48.data(), static_cast<DWORD>(rag48.size()), src48f, dst44p, 1.0, oneR48);
+        std::vector<BYTE> oneR44;
+        convertAudioWithGain(
+            rag44.data(), static_cast<DWORD>(rag44.size()), src44f, dst48p, 1.0, oneR44);
+        const PartitionRun r1 = runPartitioned(rag48, src48f, dst44p, 1.0, raggedSizes, 7777, true);
+        expect(
+            "os920-ragged-48-to-44-finalized-equals-one-shot",
+            r1.output == oneR48 &&
+                r1.output.size() / dst44p.blockAlign == expectedQuota(7777, 48000, 44100),
+            "frames=" + frameCountOf(r1.output, dst44p));
+        const PartitionRun r2 = runPartitioned(rag44, src44f, dst48p, 1.0, raggedSizes, 7777, true);
+        expect(
+            "os920-ragged-44-to-48-finalized-equals-one-shot",
+            r2.output == oneR44 &&
+                r2.output.size() / dst48p.blockAlign == expectedQuota(7777, 44100, 48000),
+            "frames=" + frameCountOf(r2.output, dst48p));
+
+        const size_t totals[] = {1, 2, 3, 79, 80, 81, 99, 100, 101, 159, 160, 161};
+        const std::vector<BYTE> master48 = monoFloatSine(48000, 997.0, 0.5, 161);
+        const std::vector<BYTE> master44 = monoFloatSine(44100, 997.0, 0.5, 161);
+        bool ok48 = true;
+        bool ok44 = true;
+        std::string detail;
+        for (size_t n : totals) {
+            std::vector<BYTE> in48(
+                master48.begin(), master48.begin() + static_cast<std::ptrdiff_t>(n) * src48f.blockAlign);
+            std::vector<BYTE> one;
+            convertAudioWithGain(
+                in48.data(), static_cast<DWORD>(in48.size()), src48f, dst44p, 1.0, one);
+            const PartitionRun run = runPartitioned(in48, src48f, dst44p, 1.0, {1}, n, true);
+            if (run.output != one || run.output.size() / dst44p.blockAlign != expectedQuota(n, 48000, 44100)) {
+                ok48 = false;
+                detail += "n" + std::to_string(n) + ":" + frameCountOf(run.output, dst44p) + "/" +
+                    frameCountOf(one, dst44p) + " ";
+            }
+            std::vector<BYTE> in44(
+                master44.begin(), master44.begin() + static_cast<std::ptrdiff_t>(n) * src44f.blockAlign);
+            std::vector<BYTE> oneUp;
+            convertAudioWithGain(
+                in44.data(), static_cast<DWORD>(in44.size()), src44f, dst48p, 1.0, oneUp);
+            const PartitionRun runUp = runPartitioned(in44, src44f, dst48p, 1.0, {1}, n, true);
+            if (runUp.output != oneUp || runUp.output.size() / dst48p.blockAlign != expectedQuota(n, 44100, 48000)) {
+                ok44 = false;
+                detail += "n" + std::to_string(n) + ":" + frameCountOf(runUp.output, dst48p) + "/" +
+                    frameCountOf(oneUp, dst48p) + " ";
+            }
+        }
+        expect("os920-rounding-totals-finalized-equal-one-shot-48-to-44", ok48, detail);
+        expect("os920-rounding-totals-finalized-equal-one-shot-44-to-48", ok44, detail);
+
+        const AudioInputFormat src44stereo = makeFormat(MFAudioFormat_Float, 44100, 2, 32);
+        const std::vector<BYTE> stereo = stereoFloatDualSine(44100, 997.0, 501.0, 0.5, 3000);
+        struct FormatCase {
+            const char* name;
+            AudioInputFormat dst;
+            double gain;
+        };
+        const FormatCase cases[] = {
+            {"pcm16-stereo", makeFormat(MFAudioFormat_PCM, 48000, 2, 16), 1.0},
+            {"pcm16-stereo-half-gain", makeFormat(MFAudioFormat_PCM, 48000, 2, 16), 0.5},
+            {"float32-stereo", makeFormat(MFAudioFormat_Float, 48000, 2, 32), 1.0},
+            {"pcm16-mono-downmix", makeFormat(MFAudioFormat_PCM, 48000, 1, 16), 1.0},
+            {"pcm16-mono-downmix-half-gain", makeFormat(MFAudioFormat_PCM, 48000, 1, 16), 0.5},
+        };
+        bool allFinal = true;
+        std::string fmtDetail;
+        for (const FormatCase& c : cases) {
+            std::vector<BYTE> one;
+            convertAudioWithGain(
+                stereo.data(), static_cast<DWORD>(stereo.size()), src44stereo, c.dst, c.gain, one);
+            const PartitionRun run =
+                runPartitioned(stereo, src44stereo, c.dst, c.gain, raggedSizes, 3000, true);
+            if (run.output != one) {
+                allFinal = false;
+                fmtDetail += std::string(c.name) + " ";
+            }
+        }
+        expect("os920-formats-gain-finalized-equals-one-shot", allFinal, fmtDetail);
+    }
+
+    // Generic deferral bound at a higher upsampling ratio (8 kHz -> 44.1 kHz):
+    // the bound is rate-geometric -- ceil(T/S + 1/2) = 7 here -- NOT a
+    // universal two frames. One-frame packets and ragged packets both.
+    {
+        const AudioInputFormat src8k = makeFormat(MFAudioFormat_Float, 8000, 1, 32);
+        const AudioInputFormat dst44k = makeFormat(MFAudioFormat_PCM, 44100, 1, 16);
+        const std::vector<BYTE> sig = monoFloatSine(8000, 997.0, 0.5, 4000);
+        const UINT32 S = 8000;
+        const UINT32 T = 44100;
+        const size_t pendingBound = pendingBoundFor(S, T);
+        const size_t retainedBound = retainedBoundFor(S, T);
+        bool okPending = pendingBound == 7;
+        bool okRetained = true;
+        std::string detail = "bound=" + std::to_string(pendingBound);
+        bool okFinal = true;
+        std::vector<BYTE> one8k;
+        convertAudioWithGain(
+            sig.data(), static_cast<DWORD>(sig.size()), src8k, dst44k, 1.0, one8k);
+        for (const std::vector<size_t>& sizes : std::vector<std::vector<size_t>>{{size_t{1}}, raggedSizes}) {
+            AudioDecimatorState state;
+            std::vector<BYTE> piece;
+            std::vector<BYTE> all;
+            size_t cursor = 0;
+            size_t index = 0;
+            while (cursor < 4000) {
+                const size_t frames = std::min(sizes[index % sizes.size()], 4000 - cursor);
+                index += 1;
+                convertAudioWithGain(
+                    sig.data() + cursor * src8k.blockAlign,
+                    static_cast<DWORD>(frames * src8k.blockAlign),
+                    src8k,
+                    dst44k,
+                    1.0,
+                    piece,
+                    state);
+                all.insert(all.end(), piece.begin(), piece.end());
+                cursor += frames;
+                okPending = okPending && state.interpolationPendingFrames() <= pendingBound;
+                okRetained = okRetained && state.interpolationRetainedFrames() <= retainedBound;
+            }
+            piece.clear();
+            finalizeAudioConversion(dst44k, 1.0, piece, state);
+            all.insert(all.end(), piece.begin(), piece.end());
+            okFinal = okFinal && all == one8k &&
+                all.size() / dst44k.blockAlign == expectedQuota(4000, 8000, 44100);
+        }
+        expect("os920-generic-8k-to-44k-pending-bound-7", okPending, detail);
+        expect("os920-generic-8k-to-44k-retained-bound", okRetained, detail);
+        expect(
+            "os920-generic-8k-to-44k-finalized-equals-one-shot",
+            okFinal,
+            "frames=" + std::to_string(one8k.size() / dst44k.blockAlign));
+    }
+
+    // Same-rate (T == S) pin: same-rate
+    // cross-subtype conversion emits every frame immediately -- frac == 0
+    // makes the clamped window exact -- so the held count is 0 (never above
+    // the <= 1 a uniform deferral would give), per-packet emission counts
+    // equal the old converter's, and finalization adds nothing. The held
+    // frame is NOT dropped at reset/resume/end-of-take because there is none.
+    {
+        const AudioInputFormat src48stereo = makeFormat(MFAudioFormat_Float, 48000, 2, 32);
+        const AudioInputFormat dst48pcm = makeFormat(MFAudioFormat_PCM, 48000, 2, 16);
+        const std::vector<BYTE> mic = stereoFloatDualSine(48000, 997.0, 503.0, 0.5, 5000);
+        std::vector<BYTE> one;
+        convertAudioWithGain(
+            mic.data(), static_cast<DWORD>(mic.size()), src48stereo, dst48pcm, 1.0, one);
+        const std::vector<size_t> sizes = {479, 480, 1, 160, 3};
+        AudioDecimatorState state;
+        std::vector<BYTE> piece;
+        std::vector<BYTE> all;
+        bool heldOk = true;
+        bool countsOk = true;
+        size_t cursor = 0;
+        size_t index = 0;
+        while (cursor < 5000) {
+            const size_t frames = std::min(sizes[index % sizes.size()], 5000 - cursor);
+            index += 1;
+            convertAudioWithGain(
+                mic.data() + cursor * src48stereo.blockAlign,
+                static_cast<DWORD>(frames * src48stereo.blockAlign),
+                src48stereo,
+                dst48pcm,
+                1.0,
+                piece,
+                state);
+            countsOk = countsOk && piece.size() / dst48pcm.blockAlign == frames;
+            all.insert(all.end(), piece.begin(), piece.end());
+            cursor += frames;
+            heldOk = heldOk && state.interpolationPendingFrames() == 0;
+        }
+        std::string detail =
+            "lastPacket=" + std::to_string(piece.size() / dst48pcm.blockAlign);
+        expect(
+            "os920-same-rate-held-count-never-exceeds-one",
+            heldOk,
+            detail + " (0 held: immediate emission; bound is <= 1)");
+        expect("os920-same-rate-per-packet-emission-immediate", countsOk, detail);
+        piece.clear();
+        finalizeAudioConversion(dst48pcm, 1.0, piece, state);
+        expect(
+            "os920-same-rate-finalize-adds-nothing",
+            piece.empty() && all == one,
+            "tail=" + std::to_string(piece.size()) + " frames=" +
+                std::to_string(all.size() / dst48pcm.blockAlign));
+    }
+
+    // Lifecycle: reset equals a cold start on the interpolation stream itself.
+    {
+        const std::vector<BYTE> warm = monoFloatAbrupt(48000, 777);
+        const std::vector<BYTE> tail = monoFloatAbrupt(48000, 1723);
+        AudioDecimatorState used;
+        std::vector<BYTE> scratch;
+        size_t cursor = 0;
+        size_t index = 0;
+        while (cursor < 777) {
+            const size_t frames = std::min(raggedSizes[index % raggedSizes.size()], 777 - cursor);
+            index += 1;
+            convertAudioWithGain(
+                warm.data() + cursor * src48f.blockAlign,
+                static_cast<DWORD>(frames * src48f.blockAlign),
+                src48f,
+                dst44p,
+                1.0,
+                scratch,
+                used);
+            cursor += frames;
+        }
+        used.reset();
+        std::vector<BYTE> afterReset;
+        cursor = 0;
+        index = 0;
+        while (cursor < 1723) {
+            const size_t frames = std::min(raggedSizes[index % raggedSizes.size()], 1723 - cursor);
+            index += 1;
+            convertAudioWithGain(
+                tail.data() + cursor * src48f.blockAlign,
+                static_cast<DWORD>(frames * src48f.blockAlign),
+                src48f,
+                dst44p,
+                1.0,
+                scratch,
+                used);
+            afterReset.insert(afterReset.end(), scratch.begin(), scratch.end());
+            cursor += frames;
+        }
+        AudioDecimatorState fresh;
+        std::vector<BYTE> fromCold;
+        cursor = 0;
+        index = 0;
+        while (cursor < 1723) {
+            const size_t frames = std::min(raggedSizes[index % raggedSizes.size()], 1723 - cursor);
+            index += 1;
+            convertAudioWithGain(
+                tail.data() + cursor * src48f.blockAlign,
+                static_cast<DWORD>(frames * src48f.blockAlign),
+                src48f,
+                dst44p,
+                1.0,
+                scratch,
+                fresh);
+            fromCold.insert(fromCold.end(), scratch.begin(), scratch.end());
+            cursor += frames;
+        }
+        expect(
+            "os920-interp-reset-equals-cold-start",
+            afterReset == fromCold && !afterReset.empty(),
+            "reset=" + std::to_string(afterReset.size()) + " cold=" +
+                std::to_string(fromCold.size()));
+    }
+
+    // interpolation -> same-rate -> interpolation on ONE state: the cross-format
+    // contract keeps pendingFrames() at zero through the same-rate hop, and the
+    // interpolation stream restarts cold (equal to a fresh state).
+    {
+        const AudioInputFormat src48stereo = makeFormat(MFAudioFormat_Float, 48000, 2, 32);
+        const AudioInputFormat dst48pcm = makeFormat(MFAudioFormat_PCM, 48000, 2, 16);
+        const std::vector<BYTE> interpPart = monoFloatAbrupt(48000, 200);
+        const std::vector<BYTE> sameRatePart = stereoFloatDualSine(48000, 800.0, 300.0, 0.5, 100);
+        AudioDecimatorState reused;
+        std::vector<BYTE> scratch;
+        convertAudioWithGain(
+            interpPart.data(), static_cast<DWORD>(interpPart.size()), src48f, dst44p, 1.0, scratch,
+            reused);
+        const bool pendingBefore = reused.pendingFrames() == 0;
+        convertAudioWithGain(
+            sameRatePart.data(), static_cast<DWORD>(sameRatePart.size()), src48stereo, dst48pcm,
+            1.0, scratch, reused);
+        const bool pendingAfterSameRate = reused.pendingFrames() == 0;
+        std::vector<BYTE> afterReturn;
+        convertAudioWithGain(
+            interpPart.data(), static_cast<DWORD>(interpPart.size()), src48f, dst44p, 1.0,
+            afterReturn, reused);
+        AudioDecimatorState fresh;
+        std::vector<BYTE> fromCold;
+        convertAudioWithGain(
+            interpPart.data(), static_cast<DWORD>(interpPart.size()), src48f, dst44p, 1.0,
+            fromCold, fresh);
+        expect(
+            "os920-interp-via-same-rate-restarts-cold",
+            pendingBefore && pendingAfterSameRate && afterReturn == fromCold && !afterReturn.empty(),
+            "before=" + std::to_string(pendingBefore) + " sameRate=" +
+                std::to_string(pendingAfterSameRate) + " match=" +
+                std::to_string(afterReturn == fromCold));
+    }
+
+    // interpolation -> integer: the integer filter starts cold and its
+    // remainder/history contract is intact after the transition.
+    {
+        const AudioInputFormat src96k = makeFormat(MFAudioFormat_PCM, 96000, 2, 16);
+        const AudioInputFormat dst48k = makeAacCompatibleAudioFormat(src96k);
+        const size_t integerFrames = 501;  // odd: leaves exactly one frame pending
+        std::vector<BYTE> integerPacket(integerFrames * src96k.blockAlign, 0);
+        auto* samples = reinterpret_cast<int16_t*>(integerPacket.data());
+        for (size_t i = 0; i < integerFrames; i += 1) {
+            const double phase =
+                2.0 * kTestPi * 4000.0 * static_cast<double>(i) / src96k.sampleRate;
+            const auto v = static_cast<int16_t>(std::lround(7000.0 * std::sin(phase)));
+            samples[i * 2] = v;
+            samples[i * 2 + 1] = v;
+        }
+        AudioDecimatorState reused;
+        std::vector<BYTE> scratch;
+        convertAudioWithGain(
+            signalD.data(), static_cast<DWORD>(93 * src44f.blockAlign), src44f, dst48p, 1.0,
+            scratch, reused);
+        std::vector<BYTE> afterInterp;
+        convertAudioWithGain(
+            integerPacket.data(), static_cast<DWORD>(integerPacket.size()), src96k, dst48k, 1.0,
+            afterInterp, reused);
+        AudioDecimatorState fresh;
+        std::vector<BYTE> fromCold;
+        convertAudioWithGain(
+            integerPacket.data(), static_cast<DWORD>(integerPacket.size()), src96k, dst48k, 1.0,
+            fromCold, fresh);
+        expect(
+            "os920-interp-to-integer-starts-cold",
+            afterInterp == fromCold && !afterInterp.empty() &&
+                reused.pendingFrames() == fresh.pendingFrames(),
+            "match=" + std::to_string(afterInterp == fromCold) + " pending=" +
+                std::to_string(reused.pendingFrames()));
+    }
+
+    // Finalizing an empty stream returns no bytes (and touches nothing else).
+    {
+        AudioDecimatorState fresh;
+        std::vector<BYTE> dest(7, 0xAB);
+        finalizeAudioConversion(dst44p, 1.0, dest, fresh);
+        expect(
+            "os920-finalize-empty-stream-no-bytes",
+            dest.size() == 7 && dest[0] == 0xAB,
+            "bytes=" + std::to_string(dest.size()));
+    }
+
+    // finalizeAudioConversion appends after the last WHOLE frame of the
+    // target format; the documented precondition is an empty or
+    // frame-aligned `destination` (header contract). The PCM writers store
+    // through typed pointers, so the append point is frame-aligned by
+    // construction and a caller-supplied trailing partial frame is outside
+    // the contract. This pins the supported case: a frame-aligned prefill
+    // stays byte-identical, the tail lands strictly after it, sized exactly
+    // to the pending-frame count, in whole frames.
+    {
+        const AudioInputFormat finSrc = makeFormat(MFAudioFormat_Float, 48000, 2, 32);
+        std::vector<BYTE> finSignal(200 * finSrc.blockAlign, 0);
+        auto* finSamples = reinterpret_cast<float*>(finSignal.data());
+        for (size_t i = 0; i < 400; i += 1) {
+            finSamples[i] = 0.25f;
+        }
+        AudioDecimatorState finState;
+        std::vector<BYTE> streamed;
+        convertAudioWithGain(
+            finSignal.data(), static_cast<DWORD>(finSignal.size()), finSrc, dst44p, 1.0,
+            streamed, finState);
+        const uint64_t pending = finState.interpolationPendingFrames();
+        const uint64_t emittedBefore = finState.interpolationEmittedFrames();
+        std::vector<BYTE> dest(dst44p.blockAlign * 3, 0x5A);
+        const std::vector<BYTE> prefill = dest;
+        const size_t before = dest.size();
+        finalizeAudioConversion(dst44p, 1.0, dest, finState);
+        expect(
+            "os920-finalize-appends-after-whole-frames",
+            pending > 0 &&
+                dest.size() == before + static_cast<size_t>(pending) * dst44p.blockAlign &&
+                dest.size() % dst44p.blockAlign == 0 &&
+                std::equal(prefill.begin(), prefill.end(), dest.begin()) &&
+                finState.interpolationFinalized() &&
+                finState.interpolationEmittedFrames() == emittedBefore + pending,
+            "pending=" + std::to_string(pending) + " bytes=" +
+                std::to_string(dest.size()) + " want=" +
+                std::to_string(before + static_cast<size_t>(pending) * dst44p.blockAlign));
+    }
+
+    // Deterministic mixer coverage, at queue level: the mixer is constructed
+    // but its thread is never started and its timeline never begun, so pushes
+    // are plain sequential calls and the pause handshake resolves at once
+    // (pauseFlushed_ is true while the timeline has not started). The threaded
+    // tests above remain responsible for the live cushion flush and resume
+    // synchronization.
+    {
+        const AudioInputFormat mixFmt = makeFormat(MFAudioFormat_PCM, 48000, 2, 16);
+        const AudioInputFormat sysFmt = makeFormat(MFAudioFormat_Float, 44100, 2, 32);
+        const AudioInputFormat micFmt = makeFormat(MFAudioFormat_Float, 48000, 2, 32);
+        AudioMixer mixer(
+            mixFmt, sysFmt, micFmt, true, true, 1.0,
+            [](const BYTE*, DWORD, int64_t, int64_t) { return true; });
+
+        const std::vector<BYTE> sysSignal = stereoFloatDualSine(44100, 997.0, 501.0, 0.5, 4321);
+        const std::vector<BYTE> micSignal = stereoFloatDualSine(48000, 701.0, 303.0, 0.5, 4800);
+        const std::vector<size_t> sysSizes = {160, 1, 480, 7, 99};
+        const std::vector<size_t> micSizes = {480, 3, 479, 1, 100};
+        AudioDecimatorState sysDirect;
+        AudioDecimatorState micDirect;
+        std::vector<BYTE> sysExpect;
+        std::vector<BYTE> micExpect;
+        std::vector<BYTE> piece;
+        size_t sysCursor = 0;
+        size_t micCursor = 0;
+        size_t step = 0;
+        while (sysCursor < 4321) {
+            const size_t frames = std::min(sysSizes[step % sysSizes.size()], 4321 - sysCursor);
+            mixer.pushSystem(
+                sysSignal.data() + sysCursor * sysFmt.blockAlign,
+                static_cast<DWORD>(frames * sysFmt.blockAlign));
+            convertAudioWithGain(
+                sysSignal.data() + sysCursor * sysFmt.blockAlign,
+                static_cast<DWORD>(frames * sysFmt.blockAlign),
+                sysFmt,
+                mixFmt,
+                1.0,
+                piece,
+                sysDirect);
+            sysExpect.insert(sysExpect.end(), piece.begin(), piece.end());
+            sysCursor += frames;
+            const size_t micFrames = std::min(micSizes[step % micSizes.size()], 4800 - micCursor);
+            if (micFrames > 0) {
+                mixer.pushMicrophone(
+                    micSignal.data() + micCursor * micFmt.blockAlign,
+                    static_cast<DWORD>(micFrames * micFmt.blockAlign));
+                convertAudioWithGain(
+                    micSignal.data() + micCursor * micFmt.blockAlign,
+                    static_cast<DWORD>(micFrames * micFmt.blockAlign),
+                    micFmt,
+                    mixFmt,
+                    1.0,
+                    piece,
+                    micDirect);
+                micExpect.insert(micExpect.end(), piece.begin(), piece.end());
+                micCursor += micFrames;
+            }
+            step += 1;
+        }
+        while (micCursor < 4800) {
+            const size_t micFrames = std::min(micSizes[step % micSizes.size()], 4800 - micCursor);
+            mixer.pushMicrophone(
+                micSignal.data() + micCursor * micFmt.blockAlign,
+                static_cast<DWORD>(micFrames * micFmt.blockAlign));
+            convertAudioWithGain(
+                micSignal.data() + micCursor * micFmt.blockAlign,
+                static_cast<DWORD>(micFrames * micFmt.blockAlign),
+                micFmt,
+                mixFmt,
+                1.0,
+                piece,
+                micDirect);
+            micExpect.insert(micExpect.end(), piece.begin(), piece.end());
+            micCursor += micFrames;
+            step += 1;
+        }
+        expect(
+            "os920-mixer-streams-keep-independent-resampler-state",
+            AudioMixerTestAccess::systemQueue(mixer) == sysExpect &&
+                AudioMixerTestAccess::microphoneQueue(mixer) == micExpect,
+            "sys=" + std::to_string(AudioMixerTestAccess::systemQueue(mixer).size()) + " want " +
+                std::to_string(sysExpect.size()) + " mic=" +
+                std::to_string(AudioMixerTestAccess::microphoneQueue(mixer).size()) + " want " +
+                std::to_string(micExpect.size()));
+
+        // setPaused(true) preserves both queues and ignores pushes.
+        mixer.setPaused(true);
+        const std::vector<BYTE> sysBefore = AudioMixerTestAccess::systemQueue(mixer);
+        const std::vector<BYTE> micBefore = AudioMixerTestAccess::microphoneQueue(mixer);
+        std::vector<BYTE> distinctive(100 * micFmt.blockAlign, 0);
+        auto* distinctiveSamples = reinterpret_cast<float*>(distinctive.data());
+        for (size_t i = 0; i < 200; i += 1) {
+            distinctiveSamples[i] = 0.75f;
+        }
+        mixer.pushSystem(distinctive.data(), static_cast<DWORD>(distinctive.size()));
+        mixer.pushMicrophone(distinctive.data(), static_cast<DWORD>(distinctive.size()));
+        expect(
+            "os920-mixer-paused-pushes-ignored",
+            AudioMixerTestAccess::systemQueue(mixer) == sysBefore &&
+                AudioMixerTestAccess::microphoneQueue(mixer) == micBefore,
+            "sys=" + std::to_string(AudioMixerTestAccess::systemQueue(mixer).size()) + " mic=" +
+                std::to_string(AudioMixerTestAccess::microphoneQueue(mixer).size()));
+
+        // The resume clears both queues (and cold-resets both states).
+        mixer.setPaused(false);
+        expect(
+            "os920-mixer-resume-clears-queues",
+            AudioMixerTestAccess::systemQueue(mixer).empty() &&
+                AudioMixerTestAccess::microphoneQueue(mixer).empty(),
+            "sys=" + std::to_string(AudioMixerTestAccess::systemQueue(mixer).size()) + " mic=" +
+                std::to_string(AudioMixerTestAccess::microphoneQueue(mixer).size()));
+
+        // Post-resume pushes convert as a cold start: no pre-pause sample or
+        // phase contamination. (This also pins the accepted behavior change:
+        // the resume drops the bounded unfinalized tail of the pre-pause
+        // streams along with the queued bytes.)
+        const std::vector<BYTE> sysPost = stereoFloatDualSine(44100, 1234.0, 432.0, 0.4, 1234);
+        const std::vector<BYTE> micPost = stereoFloatDualSine(48000, 888.0, 222.0, 0.4, 960);
+        AudioDecimatorState sysCold;
+        AudioDecimatorState micCold;
+        std::vector<BYTE> sysColdExpect;
+        std::vector<BYTE> micColdExpect;
+        sysCursor = 0;
+        micCursor = 0;
+        step = 0;
+        while (sysCursor < 1234 || micCursor < 960) {
+            if (sysCursor < 1234) {
+                const size_t frames = std::min(sysSizes[step % sysSizes.size()], 1234 - sysCursor);
+                mixer.pushSystem(
+                    sysPost.data() + sysCursor * sysFmt.blockAlign,
+                    static_cast<DWORD>(frames * sysFmt.blockAlign));
+                convertAudioWithGain(
+                    sysPost.data() + sysCursor * sysFmt.blockAlign,
+                    static_cast<DWORD>(frames * sysFmt.blockAlign),
+                    sysFmt,
+                    mixFmt,
+                    1.0,
+                    piece,
+                    sysCold);
+                sysColdExpect.insert(sysColdExpect.end(), piece.begin(), piece.end());
+                sysCursor += frames;
+            }
+            if (micCursor < 960) {
+                const size_t frames = std::min(micSizes[step % micSizes.size()], 960 - micCursor);
+                mixer.pushMicrophone(
+                    micPost.data() + micCursor * micFmt.blockAlign,
+                    static_cast<DWORD>(frames * micFmt.blockAlign));
+                convertAudioWithGain(
+                    micPost.data() + micCursor * micFmt.blockAlign,
+                    static_cast<DWORD>(frames * micFmt.blockAlign),
+                    micFmt,
+                    mixFmt,
+                    1.0,
+                    piece,
+                    micCold);
+                micColdExpect.insert(micColdExpect.end(), piece.begin(), piece.end());
+                micCursor += frames;
+            }
+            step += 1;
+        }
+        expect(
+            "os920-mixer-resume-cold-resets-resampler-state",
+            AudioMixerTestAccess::systemQueue(mixer) == sysColdExpect &&
+                AudioMixerTestAccess::microphoneQueue(mixer) == micColdExpect,
+            "sys=" + std::to_string(AudioMixerTestAccess::systemQueue(mixer).size()) + " want " +
+                std::to_string(sysColdExpect.size()) + " mic=" +
+                std::to_string(AudioMixerTestAccess::microphoneQueue(mixer).size()) + " want " +
+                std::to_string(micColdExpect.size()));
+    }
+
+    // Starvation resume: a source that ran dry
+    // and came back is a real-time discontinuity — the starved branch pads
+    // silence and re-anchors the packet at now. The resumed packet must
+    // convert as a COLD stream: no pre-gap sample may reach the resumed
+    // output. The pre-fix stateless converter never interpolated across a
+    // gap either, because it held no state at all. The starved branch's
+    // queue.assign replaces whatever the queue held (lag is zero while the
+    // timeline is not anchored, as in an unstarted mixer), so the queue after
+    // the resumed push is EXACTLY the resumed conversion — pinned byte for
+    // byte, frame count for frame count, against a fresh-state conversion.
+    // On the unfixed tree this fails twice over: the continued stream emits
+    // one extra frame (92 vs 91) and its first frame blends the pre-gap
+    // constant into the resumed segment (-12594 vs +16384 at 48k->44.1k).
+    {
+        const AudioInputFormat mixFmt = makeFormat(MFAudioFormat_PCM, 44100, 2, 16);
+        const AudioInputFormat sysFmt = makeFormat(MFAudioFormat_Float, 48000, 2, 32);
+        AudioMixer mixer(
+            mixFmt, sysFmt, sysFmt, true, false, 1.0,
+            [](const BYTE*, DWORD, int64_t, int64_t) { return true; });
+
+        std::vector<BYTE> preGap(150 * sysFmt.blockAlign, 0);
+        auto* preSamples = reinterpret_cast<float*>(preGap.data());
+        for (size_t i = 0; i < 300; i += 1) {
+            preSamples[i] = -0.5f;
+        }
+        for (size_t off = 0; off < 150; off += 50) {
+            mixer.pushSystem(
+                preGap.data() + off * sysFmt.blockAlign,
+                static_cast<DWORD>(50 * sysFmt.blockAlign));
+        }
+        std::vector<BYTE> resumed(100 * sysFmt.blockAlign, 0);
+        auto* resumedSamples = reinterpret_cast<float*>(resumed.data());
+        for (size_t i = 0; i < 200; i += 1) {
+            resumedSamples[i] = 0.5f;
+        }
+        AudioMixerTestAccess::setSystemStarved(mixer, true);
+        mixer.pushSystem(resumed.data(), static_cast<DWORD>(resumed.size()));
+
+        std::vector<BYTE> coldExpect;
+        AudioDecimatorState coldState;
+        convertAudioWithGain(
+            resumed.data(), static_cast<DWORD>(resumed.size()), sysFmt, mixFmt, 1.0,
+            coldExpect, coldState);
+        const std::vector<BYTE>& starveQueue = AudioMixerTestAccess::systemQueue(mixer);
+        expect(
+            "os920-mixer-starvation-resume-no-cross-gap-blend",
+            starveQueue == coldExpect,
+            "queue=" + std::to_string(starveQueue.size()) + " cold=" +
+                std::to_string(coldExpect.size()) + " q0=" +
+                std::to_string(starveQueue.size() >= 2
+                    ? *reinterpret_cast<const short*>(starveQueue.data())
+                    : 0));
+
+        // Control: integer decimation keeps its pre-existing cross-gap
+        // behavior — the fix must not reset it. A resumed 96k->48k packet
+        // converts on the CONTINUING integer state, byte-identical to a
+        // direct conversion that never saw the abandonment hook.
+        const AudioInputFormat intMixFmt = makeFormat(MFAudioFormat_PCM, 48000, 2, 16);
+        const AudioInputFormat intSrcFmt = makeFormat(MFAudioFormat_Float, 96000, 2, 32);
+        AudioMixer intMixer(
+            intMixFmt, intSrcFmt, intSrcFmt, true, false, 1.0,
+            [](const BYTE*, DWORD, int64_t, int64_t) { return true; });
+        AudioDecimatorState intContinuing;
+        std::vector<BYTE> intPiece;
+        for (size_t off = 0; off < 150; off += 50) {
+            intMixer.pushSystem(
+                preGap.data() + off * intSrcFmt.blockAlign,
+                static_cast<DWORD>(50 * intSrcFmt.blockAlign));
+            convertAudioWithGain(
+                preGap.data() + off * intSrcFmt.blockAlign,
+                static_cast<DWORD>(50 * intSrcFmt.blockAlign), intSrcFmt, intMixFmt, 1.0,
+                intPiece, intContinuing);
+        }
+        AudioMixerTestAccess::setSystemStarved(intMixer, true);
+        intMixer.pushSystem(resumed.data(), static_cast<DWORD>(resumed.size()));
+        std::vector<BYTE> intResumedExpect;
+        convertAudioWithGain(
+            resumed.data(), static_cast<DWORD>(resumed.size()), intSrcFmt, intMixFmt, 1.0,
+            intResumedExpect, intContinuing);
+        const std::vector<BYTE>& intQueue = AudioMixerTestAccess::systemQueue(intMixer);
+        expect(
+            "os920-mixer-starvation-resume-integer-continues",
+            intQueue == intResumedExpect,
+            "queue=" + std::to_string(intQueue.size()) + " expect=" +
+                std::to_string(intResumedExpect.size()));
+
+        // Control: same-rate (T==S) resume output is identical cold or
+        // continued — nothing is deferred or retained on that path, before
+        // and after the fix alike.
+        const AudioInputFormat sameMixFmt = makeFormat(MFAudioFormat_PCM, 48000, 2, 16);
+        const AudioInputFormat sameSrcFmt = makeFormat(MFAudioFormat_Float, 48000, 2, 32);
+        AudioMixer sameMixer(
+            sameMixFmt, sameSrcFmt, sameSrcFmt, true, false, 1.0,
+            [](const BYTE*, DWORD, int64_t, int64_t) { return true; });
+        sameMixer.pushSystem(preGap.data(), static_cast<DWORD>(preGap.size()));
+        AudioMixerTestAccess::setSystemStarved(sameMixer, true);
+        sameMixer.pushSystem(resumed.data(), static_cast<DWORD>(resumed.size()));
+        std::vector<BYTE> sameColdExpect;
+        AudioDecimatorState sameCold;
+        convertAudioWithGain(
+            resumed.data(), static_cast<DWORD>(resumed.size()), sameSrcFmt, sameMixFmt, 1.0,
+            sameColdExpect, sameCold);
+        const std::vector<BYTE>& sameQueue = AudioMixerTestAccess::systemQueue(sameMixer);
+        expect(
+            "os920-mixer-starvation-resume-same-rate-identical",
+            sameQueue == sameColdExpect,
+            "queue=" + std::to_string(sameQueue.size()) + " cold=" +
+                std::to_string(sameColdExpect.size()));
+    }
+}
+#endif  // !OS920_PRISTINE_REGRESSION
+
+void runResampleContinuityTests() {
+    runResampleContinuityCoreTests();
+#ifndef OS920_PRISTINE_REGRESSION
+    runResampleContinuityFixedTests();
+#endif
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    const bool continuityOnly =
+        argc > 1 && argv[1] == std::string("--resample-continuity-only");
+    if (continuityOnly) {
+        runResampleContinuityTests();
+        std::cout << "ran " << g_ran << " tests\n";
+        if (g_failed != 0) {
+            std::cout << g_failed << " failed\n";
+            return 1;
+        }
+        return 0;
+    }
+
     // --- Timer resolution (getopenscreen/openscreen#921) ----------------------
     //
     // First, before anything in this process could have raised it: a 5 ms sleep
@@ -247,6 +1614,9 @@ int main() {
         std::cout << "TIMER_RAW " << detail << std::endl;
         expect("timer-5ms-sleep-lasts-about-5ms", after < 8.0, detail);
     }
+
+    // --- issue #920, item 24: non-integer resampling continuity --------------
+    runResampleContinuityTests();
 
     const AudioInputFormat diagnostic = makeFormat(MFAudioFormat_Float, 96000, 8, 32);
     const AudioInputFormat snapped = makeAacCompatibleAudioFormat(diagnostic);
@@ -609,9 +1979,12 @@ int main() {
                 std::to_string(out.size()));
     }
 
-    // reset() has to mean cold, not nearly cold. start(), beginTimeline() and
-    // setPaused(true) all call it, so anything it left behind would be audible
-    // in the first frames after a pause.
+    // reset() has to mean cold, not nearly cold. start() and beginTimeline()
+    // call it, and a resume reaches it through resetSources(); setPaused(true)
+    // deliberately does NOT -- it preserves the queued audio and both
+    // resampler states so the cushion flush can write them (the resume clears
+    // both). Anything reset() left behind would be audible in the first
+    // frames after a pause.
     {
         const size_t warmFrames = 512;
         const size_t tailFrames = 2048;
