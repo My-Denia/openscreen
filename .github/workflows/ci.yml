@@ -12,7 +12,10 @@ on:
   pull_request:
     branches: [main, feat/ai-edition, "release/**"]
   push:
-    branches: [main, feat/ai-edition, "release/**"]
+    # os920 delivery branch: fork-only addition so CI runs on the fix branch's
+    # own pushes (push events read the workflow from the pushed ref's tree).
+    # Never part of any upstream candidate.
+    branches: [main, feat/ai-edition, "release/**", fix/os920-resample-continuity]
 
 jobs:
   lint:
