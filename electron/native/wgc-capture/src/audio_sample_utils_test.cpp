@@ -31,6 +31,16 @@ struct AudioMixerTestAccess {
     static const std::vector<BYTE>& microphoneQueue(const AudioMixer& mixer) {
         return mixer.microphoneQueue_;
     }
+    // P2 starvation-resume tests: put the mixer into exactly the state pop()
+    // leaves it in when a source queue runs dry in production, without
+    // driving the threaded mixLoop. Read path only for the queues; these
+    // setters are the one deliberate state injection.
+    static void setSystemStarved(AudioMixer& mixer, bool starved) {
+        mixer.systemStarved_ = starved;
+    }
+    static void setMicrophoneStarved(AudioMixer& mixer, bool starved) {
+        mixer.microphoneStarved_ = starved;
+    }
 };
 #endif  // !OS920_PRISTINE_REGRESSION
 
@@ -1398,6 +1408,116 @@ void runResampleContinuityFixedTests() {
                 std::to_string(sysColdExpect.size()) + " mic=" +
                 std::to_string(AudioMixerTestAccess::microphoneQueue(mixer).size()) + " want " +
                 std::to_string(micColdExpect.size()));
+    }
+
+    // Starvation resume (P2, owner ruling 2026-10-11): a source that ran dry
+    // and came back is a real-time discontinuity — the starved branch pads
+    // silence and re-anchors the packet at now. The resumed packet must
+    // convert as a COLD stream: no pre-gap sample may reach the resumed
+    // output. The pre-fix stateless converter never interpolated across a
+    // gap either, because it held no state at all. The starved branch's
+    // queue.assign replaces whatever the queue held (lag is zero while the
+    // timeline is not anchored, as in an unstarted mixer), so the queue after
+    // the resumed push is EXACTLY the resumed conversion — pinned byte for
+    // byte, frame count for frame count, against a fresh-state conversion.
+    // On the unfixed tree this fails twice over: the continued stream emits
+    // one extra frame (92 vs 91) and its first frame blends the pre-gap
+    // constant into the resumed segment (-12594 vs +16384 at 48k->44.1k).
+    {
+        const AudioInputFormat mixFmt = makeFormat(MFAudioFormat_PCM, 44100, 2, 16);
+        const AudioInputFormat sysFmt = makeFormat(MFAudioFormat_Float, 48000, 2, 32);
+        AudioMixer mixer(
+            mixFmt, sysFmt, sysFmt, true, false, 1.0,
+            [](const BYTE*, DWORD, int64_t, int64_t) { return true; });
+
+        std::vector<BYTE> preGap(150 * sysFmt.blockAlign, 0);
+        auto* preSamples = reinterpret_cast<float*>(preGap.data());
+        for (size_t i = 0; i < 300; i += 1) {
+            preSamples[i] = -0.5f;
+        }
+        for (size_t off = 0; off < 150; off += 50) {
+            mixer.pushSystem(
+                preGap.data() + off * sysFmt.blockAlign,
+                static_cast<DWORD>(50 * sysFmt.blockAlign));
+        }
+        std::vector<BYTE> resumed(100 * sysFmt.blockAlign, 0);
+        auto* resumedSamples = reinterpret_cast<float*>(resumed.data());
+        for (size_t i = 0; i < 200; i += 1) {
+            resumedSamples[i] = 0.5f;
+        }
+        AudioMixerTestAccess::setSystemStarved(mixer, true);
+        mixer.pushSystem(resumed.data(), static_cast<DWORD>(resumed.size()));
+
+        std::vector<BYTE> coldExpect;
+        AudioDecimatorState coldState;
+        convertAudioWithGain(
+            resumed.data(), static_cast<DWORD>(resumed.size()), sysFmt, mixFmt, 1.0,
+            coldExpect, coldState);
+        const std::vector<BYTE>& starveQueue = AudioMixerTestAccess::systemQueue(mixer);
+        expect(
+            "os920-mixer-starvation-resume-no-cross-gap-blend",
+            starveQueue == coldExpect,
+            "queue=" + std::to_string(starveQueue.size()) + " cold=" +
+                std::to_string(coldExpect.size()) + " q0=" +
+                std::to_string(starveQueue.size() >= 2
+                    ? *reinterpret_cast<const short*>(starveQueue.data())
+                    : 0));
+
+        // Control: integer decimation keeps its pre-existing cross-gap
+        // behavior — the fix must not reset it. A resumed 96k->48k packet
+        // converts on the CONTINUING integer state, byte-identical to a
+        // direct conversion that never saw the abandonment hook.
+        const AudioInputFormat intMixFmt = makeFormat(MFAudioFormat_PCM, 48000, 2, 16);
+        const AudioInputFormat intSrcFmt = makeFormat(MFAudioFormat_Float, 96000, 2, 32);
+        AudioMixer intMixer(
+            intMixFmt, intSrcFmt, intSrcFmt, true, false, 1.0,
+            [](const BYTE*, DWORD, int64_t, int64_t) { return true; });
+        AudioDecimatorState intContinuing;
+        std::vector<BYTE> intPiece;
+        for (size_t off = 0; off < 150; off += 50) {
+            intMixer.pushSystem(
+                preGap.data() + off * intSrcFmt.blockAlign,
+                static_cast<DWORD>(50 * intSrcFmt.blockAlign));
+            convertAudioWithGain(
+                preGap.data() + off * intSrcFmt.blockAlign,
+                static_cast<DWORD>(50 * intSrcFmt.blockAlign), intSrcFmt, intMixFmt, 1.0,
+                intPiece, intContinuing);
+        }
+        AudioMixerTestAccess::setSystemStarved(intMixer, true);
+        intMixer.pushSystem(resumed.data(), static_cast<DWORD>(resumed.size()));
+        std::vector<BYTE> intResumedExpect;
+        convertAudioWithGain(
+            resumed.data(), static_cast<DWORD>(resumed.size()), intSrcFmt, intMixFmt, 1.0,
+            intResumedExpect, intContinuing);
+        const std::vector<BYTE>& intQueue = AudioMixerTestAccess::systemQueue(intMixer);
+        expect(
+            "os920-mixer-starvation-resume-integer-continues",
+            intQueue == intResumedExpect,
+            "queue=" + std::to_string(intQueue.size()) + " expect=" +
+                std::to_string(intResumedExpect.size()));
+
+        // Control: same-rate (T==S) resume output is identical cold or
+        // continued — nothing is deferred or retained on that path, before
+        // and after the fix alike.
+        const AudioInputFormat sameMixFmt = makeFormat(MFAudioFormat_PCM, 48000, 2, 16);
+        const AudioInputFormat sameSrcFmt = makeFormat(MFAudioFormat_Float, 48000, 2, 32);
+        AudioMixer sameMixer(
+            sameMixFmt, sameSrcFmt, sameSrcFmt, true, false, 1.0,
+            [](const BYTE*, DWORD, int64_t, int64_t) { return true; });
+        sameMixer.pushSystem(preGap.data(), static_cast<DWORD>(preGap.size()));
+        AudioMixerTestAccess::setSystemStarved(sameMixer, true);
+        sameMixer.pushSystem(resumed.data(), static_cast<DWORD>(resumed.size()));
+        std::vector<BYTE> sameColdExpect;
+        AudioDecimatorState sameCold;
+        convertAudioWithGain(
+            resumed.data(), static_cast<DWORD>(resumed.size()), sameSrcFmt, sameMixFmt, 1.0,
+            sameColdExpect, sameCold);
+        const std::vector<BYTE>& sameQueue = AudioMixerTestAccess::systemQueue(sameMixer);
+        expect(
+            "os920-mixer-starvation-resume-same-rate-identical",
+            sameQueue == sameColdExpect,
+            "queue=" + std::to_string(sameQueue.size()) + " cold=" +
+                std::to_string(sameColdExpect.size()));
     }
 }
 #endif  // !OS920_PRISTINE_REGRESSION

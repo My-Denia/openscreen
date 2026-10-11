@@ -301,6 +301,35 @@ void AudioDecimatorState::reset() {
     interpolationRetained_.shrink_to_fit();
 }
 
+void AudioDecimatorState::abandonInterpolation() {
+    // A starvation resume is a real-time discontinuity: drop exactly the
+    // interpolation component reset() drops (see its comment for the bounded
+    // tail this discards) and nothing else — the integer decimation fields
+    // (taps_/history_/position_/phase_/factor_/channels_) keep their
+    // pre-existing cross-gap behavior, matching the pre-fix mixer.
+    if (mode_ != Mode::kInterpolation) {
+        return;
+    }
+    mode_ = Mode::kNone;
+    interpolationFinalized_ = false;
+    interpolationOverflow_ = false;
+    interpolationSourceSubtype_ = {};
+    interpolationTargetSubtype_ = {};
+    interpolationSourceRate_ = 0;
+    interpolationTargetRate_ = 0;
+    interpolationSourceChannels_ = 0;
+    interpolationTargetChannels_ = 0;
+    interpolationSourceBits_ = 0;
+    interpolationTargetBits_ = 0;
+    interpolationInputFrames_ = 0;
+    interpolationEmittedFrames_ = 0;
+    interpolationTotalFrames_ = 0;
+    interpolationEmittableFrames_ = 0;
+    interpolationHistoryBase_ = 0;
+    interpolationRetained_.clear();
+    interpolationRetained_.shrink_to_fit();
+}
+
 void AudioDecimatorState::prepare(UINT32 factor, UINT32 channels) {
     if (factor_ == factor && channels_ == channels && !taps_.empty()) {
         return;
@@ -1007,6 +1036,16 @@ void AudioMixer::append(
     AudioDecimatorState& decimator) {
     if (!data || byteCount == 0) {
         return;
+    }
+
+    // A starved source resuming is a real-time discontinuity: the starved
+    // branch below re-anchors its packet at now, after padding silence. The
+    // cross-packet interpolation stream must not complete deferred windows
+    // across the gap with retained pre-gap samples. Integer decimation and
+    // every non-interpolating state keep their pre-existing cross-gap
+    // behavior; abandonInterpolation() is a no-op there.
+    if (starved) {
+        decimator.abandonInterpolation();
     }
 
     convertAudioWithGain(data, byteCount, sourceFormat, format_, gain, gainBuffer_, decimator);

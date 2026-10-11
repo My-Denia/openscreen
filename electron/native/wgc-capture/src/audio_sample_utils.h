@@ -121,6 +121,17 @@ public:
     void noteInterpolationEmitted(uint64_t throughFrameCount);
     void trimInterpolationHistory();
     void markInterpolationFinalized();
+    // Mixer-boundary discontinuity hook (a starved source resuming): abandons
+    // ONLY the cross-packet interpolation stream — retained history, quotas,
+    // flags and recorded formats — so no later output frame can interpolate
+    // across the real-time gap. Integer decimation state and every
+    // non-interpolating state are untouched (no-op); the next conversion
+    // cold-starts the stream, exactly as a fresh state would. That cold start
+    // is deliberate even for a finalized or overflow-parked stream: the
+    // discontinuity revives it fresh (production mixers never finalize, and
+    // counter overflow is unreachable in practice, so this only matters to
+    // state-machine completeness).
+    void abandonInterpolation();
 
 private:
     enum class Mode {
