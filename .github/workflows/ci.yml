@@ -9,6 +9,7 @@ name: CI
 # every one of those jobs skipped, because a release branch matched neither
 # pattern. A release branch is the LAST place to run a build unguarded.
 on:
+  workflow_dispatch:
   pull_request:
     branches: [main, feat/ai-edition, "release/**"]
   push:
