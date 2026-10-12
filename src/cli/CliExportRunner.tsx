@@ -80,7 +80,9 @@ function replaceExtension(filePath: string, newExtension: string): string {
 /** Mirrors ExportDialog.buildNativeClipList: trim-narrowed visible clips mapped
  * onto the native multiclip contract. Kept in lock-step with
  * buildSceneDescription so export and scene agree on the clip stream. */
-function buildNativeClipList(axcutDocument: AxcutDocument): CompositorClipInput[] {
+/** @internal Exported for the focused clip-audio policy test. */
+export function buildNativeClipList(axcutDocument: AxcutDocument): CompositorClipInput[] {
+	const recordingAudioMuted = getEditorSettings(axcutDocument).recordingAudioMuted;
 	const assetById = new Map(axcutDocument.assets.map((asset) => [asset.id, asset]));
 	return resolveVisibleClips(axcutDocument).flatMap((clip) => {
 		const asset = assetById.get(clip.assetId);
@@ -96,7 +98,7 @@ function buildNativeClipList(axcutDocument: AxcutDocument): CompositorClipInput[
 				sourceStartSec: clip.sourceStartSec,
 				sourceEndSec,
 				webcamOffsetSec: camera.offsetSec,
-				hasAudio: true,
+				hasAudio: !recordingAudioMuted,
 			},
 		];
 	});

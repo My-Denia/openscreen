@@ -3462,6 +3462,24 @@ export function AudioPane() {
 					onCommit={() => void commit()}
 				/>
 			</div>
+			<div
+				style={{
+					display: "flex",
+					alignItems: "center",
+					justifyContent: "space-between",
+					gap: 12,
+					marginTop: 12,
+				}}
+			>
+				<span>{ts("audio.muteRecording")}</span>
+				<Toggle
+					checked={settings.recordingAudioMuted}
+					disabled={!hasDocument}
+					ariaLabel={ts("audio.muteRecording")}
+					tooltip={ts("audio.muteRecordingHelp")}
+					onChange={(checked) => void set({ recordingAudioMuted: checked })}
+				/>
+			</div>
 			<button
 				type="button"
 				className={styles.secondaryBtn}
