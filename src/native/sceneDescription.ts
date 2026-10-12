@@ -960,17 +960,13 @@ export function buildSceneDescription(
 		return entries;
 	});
 	const visibleClips = resolveVisibleClips(document);
+	const recordingAudioMuted = getEditorSettings(document).recordingAudioMuted;
 	const clips: CompositorClipInput[] = visibleClips.flatMap((clip) => {
 		const asset = assetById.get(clip.assetId);
 		if (!asset?.originalPath) return [];
 		const camera = assetCameraSource(asset);
-		// ponytail: `asset.audio` exists in the schema but the probe pipeline never
-		// populates it, so there is no per-asset "is there a track?" signal to read
-		// yet. Every consumer downstream degrades on a stream-less file (audio.rs
-		// returns Ok(None)), so this stays optimistic. NOT "recordings always carry
-		// audio" — a capture made with no mic and no system audio has no audio
-		// stream at all (issue #348). Swap to `Boolean(asset.audio)` the day the
-		// probe fills it in.
+		// `asset.audio` is not populated by the probe yet, so keep the current
+		// optimistic default unless the project explicitly mutes its recording audio.
 		return [
 			{
 				screenPath: asset.originalPath,
@@ -978,7 +974,7 @@ export function buildSceneDescription(
 				sourceStartSec: clip.sourceStartSec,
 				sourceEndSec: resolveClipSourceEndSec(clip, asset),
 				webcamOffsetSec: camera.offsetSec,
-				hasAudio: true,
+				hasAudio: !recordingAudioMuted,
 				// A held segment has an empty source window and exists only for the frames it
 				// holds; every other clip holds nothing.
 			},
