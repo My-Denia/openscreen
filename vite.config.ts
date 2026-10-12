@@ -29,7 +29,13 @@ export default defineConfig({
 					}
 					const env = { ...process.env };
 					delete env.ELECTRON_RUN_AS_NODE;
-					return startup(["."], { env });
+					// A disposable profile keeps dev launches working when the host's default
+					// %APPDATA%\openscreen directory is unavailable (for example, in a sandbox).
+					const devUserDataDir = process.env.OPENSCREEN_DEV_USER_DATA_DIR?.trim();
+					const args = devUserDataDir
+						? [`--user-data-dir=${path.resolve(devUserDataDir)}`, "."]
+						: ["."];
+					return startup(args, { env });
 				},
 				vite: {
 					build: {},
