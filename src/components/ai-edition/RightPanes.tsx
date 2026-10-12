@@ -3484,7 +3484,7 @@ export function AudioPane() {
 				type="button"
 				className={styles.secondaryBtn}
 				disabled={!hasDocument}
-				onClick={() => void set({ audioGainDb: 0 })}
+				onClick={() => void set({ audioGainDb: 0, recordingAudioMuted: false })}
 			>
 				{ts("audio.reset")}
 			</button>
