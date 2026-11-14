@@ -184,3 +184,16 @@ The one rule to know before you merge anything: **there is one release branch pe
 - **Website i18n** is separate: 8 locales under `website/i18n/`. After changing an English doc, page or `<Translate>` string in `website/`, follow `website/i18n/TRANSLATING.md` ("Keeping translations up to date"); `npm run i18n:check` in `website/` lists what is behind.
 - **Build pipeline**: `npm run build` is full electron-builder. For iterating on renderer only, use `npm run build-vite` (Vite + tsc, no packaging).
 - **Product constraints**: the project is free forever and explicitly "not production-grade". Don't add paywalls, premium tiers, or logic that gates a feature on who the user is, and don't add upsell language to the README or UI copy. This is a hard constraint, not a judgement call. (A flag that hides an unfinished capture backend is fine — it gates on readiness, not on the user.)
+
+## Owner fork workflow
+
+For work done for the owner of the fork `My-Denia/openscreen` (remote `origin`; `upstream` is `getopenscreen/openscreen`). The owner is a collaborator on upstream, not the maintainer.
+
+- Open PRs on the fork first. A PR on upstream needs the owner's explicit go-ahead for that PR; "finish the fix" is not one.
+- Before starting an issue, read its comments and linked PRs. If someone else has claimed it, stop and ask the owner. Check the fork's history for earlier work and review comments on the same issue.
+- The owner decides whether a PR meets the bar. Run review and verification first, then show the result and let the owner call it ready.
+- After the upstream PR merges: close the fork PR, delete its branches, update fork `main` straight to upstream `main`, and delete everything local for that task, evidence included.
+- Review comments and PR bodies are written for maintainers and authors. Before drafting one, read the HEAD's raw CI logs (do not assume what CI covers) and every unresolved review thread, and take a position on each thread. A subagent's code-read conclusion goes in only after you check the decisive line yourself. A measured number states exactly what was timed. Keep internal process terms (fork CI gates, evidence tiers, "READY") out of it.
+- The owner is the Windows collaborator. A Windows defect is stated only with a real-machine reproduction. Code-read findings that can be tested here are tested first. What is untested or cannot be tested here (other OSes, hardware, displays) is written as a request for the PR author to verify, with the exact trigger.
+- Mechanical work on a contributor's PR (rebase, dropping a merge commit, trivial conflicts) is done on their branch when "maintainers can modify" is on; a review asks the author only for what we cannot do: their hardware, their platform, design decisions.
+- Do not open a review of a maintainer's own PR (e.g. EtienneLescot) with "Thanks". Start with what was tested, then Pass / Not covered lists that name the test method. Thanks-first is for outside contributors' PRs.
